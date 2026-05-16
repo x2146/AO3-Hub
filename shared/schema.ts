@@ -141,6 +141,8 @@ export type ReaderConfig = z.infer<typeof ReaderConfig>;
 
 export const DEFAULT_UPDATE_MANIFEST_URL =
   "https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json";
+export const DEFAULT_DEV_UPDATE_MANIFEST_URL =
+  "https://github.com/x2146/AO3-Hub/releases/download/dev/manifest.json";
 
 export const UpdateConfig = z.object({
   manifestURL: z.string().default(DEFAULT_UPDATE_MANIFEST_URL),
@@ -159,6 +161,7 @@ export type Config = z.infer<typeof Config>;
 
 export const Manifest = z.object({
   version: z.string(),
+  channel: z.string().optional(),
   notes: z.string().optional(),
   publishedAt: z.string().optional(),
   assets: z.array(
@@ -181,6 +184,7 @@ export const VersionInfo = z.object({
   latest: z
     .object({
       version: z.string(),
+      channel: z.string().optional(),
       notes: z.string().optional(),
       publishedAt: z.string().optional(),
       hasUpdate: z.boolean(),
@@ -233,3 +237,56 @@ export type StreamEvent =
   | { type: "block-error"; chapterIndex: number; blockId: string; message: string }
   | { type: "chapter-done"; chapterIndex: number }
   | { type: "phase"; phase: ProgressPhase; message?: string };
+
+export const Role = z.enum(["admin", "user"]);
+export type Role = z.infer<typeof Role>;
+
+export const USERNAME_RE = /^[a-zA-Z0-9_-]{3,32}$/;
+export const PASSWORD_MIN = 6;
+
+const usernameSchema = z
+  .string()
+  .min(3, "用户名至少 3 个字符")
+  .max(32, "用户名最多 32 个字符")
+  .regex(USERNAME_RE, "用户名只允许字母、数字、下划线、短横线");
+const passwordSchema = z.string().min(PASSWORD_MIN, `密码至少 ${PASSWORD_MIN} 个字符`).max(200);
+
+export const PublicUser = z.object({
+  id: z.string(),
+  username: z.string(),
+  role: Role,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type PublicUser = z.infer<typeof PublicUser>;
+
+export const LoginRequest = z.object({
+  username: usernameSchema,
+  password: passwordSchema,
+});
+export type LoginRequest = z.infer<typeof LoginRequest>;
+
+export const SetupRequest = z.object({
+  username: usernameSchema,
+  password: passwordSchema,
+});
+export type SetupRequest = z.infer<typeof SetupRequest>;
+
+export const CreateUserRequest = z.object({
+  username: usernameSchema,
+  password: passwordSchema,
+  role: Role.default("user"),
+});
+export type CreateUserRequest = z.infer<typeof CreateUserRequest>;
+
+export const UpdateUserRequest = z.object({
+  password: passwordSchema.optional(),
+  role: Role.optional(),
+});
+export type UpdateUserRequest = z.infer<typeof UpdateUserRequest>;
+
+export const AuthMe = z.object({
+  user: PublicUser.nullable(),
+  needsSetup: z.boolean(),
+});
+export type AuthMe = z.infer<typeof AuthMe>;

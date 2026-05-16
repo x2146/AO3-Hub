@@ -1,17 +1,30 @@
 import type {
+  AuthMe,
   ChapterView,
   Config,
+  CreateUserRequest,
   IndexEntry,
   Meta,
   Progress,
+  PublicUser,
+  Role,
   StreamEvent,
   VersionInfo,
 } from "@ao3hub/shared";
 
 const base = "/api";
 
+export class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(base + path, {
+    credentials: "same-origin",
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
     ...init,
   });
@@ -23,7 +36,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       msg = await res.text();
     }
-    throw new Error(msg || `${res.status}`);
+    throw new HttpError(res.status, msg || `${res.status}`);
   }
   return (await res.json()) as T;
 }
@@ -48,7 +61,11 @@ export const api = {
     } else {
       form.append("file", file);
     }
-    const res = await fetch(base + "/stories/upload", { method: "POST", body: form });
+    const res = await fetch(base + "/stories/upload", {
+      method: "POST",
+      credentials: "same-origin",
+      body: form,
+    });
     if (!res.ok) {
       let msg: string;
       try {
@@ -57,7 +74,7 @@ export const api = {
       } catch {
         msg = await res.text();
       }
-      throw new Error(msg || `${res.status}`);
+      throw new HttpError(res.status, msg || `${res.status}`);
     }
     return (await res.json()) as { id: string; status: string };
   },
@@ -85,6 +102,33 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ force }),
     }),
+
+  me: () => http<AuthMe>("/auth/me"),
+  login: (username: string, password: string) =>
+    http<{ user: PublicUser }>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => http<{ ok: true }>("/auth/logout", { method: "POST" }),
+  setup: (username: string, password: string) =>
+    http<{ user: PublicUser }>("/auth/setup", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+
+  listUsers: () => http<{ users: PublicUser[] }>("/users"),
+  createUser: (body: CreateUserRequest) =>
+    http<{ user: PublicUser }>("/users", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateUser: (id: string, body: { password?: string; role?: Role }) =>
+    http<{ user: PublicUser }>(`/users/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteUser: (id: string) =>
+    http<{ ok: true }>(`/users/${id}`, { method: "DELETE" }),
 };
 
 export function subscribeStream(

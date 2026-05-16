@@ -5,7 +5,8 @@ import {
   RetryRequest,
   type ChapterView,
 } from "@ao3hub/shared";
-import { loadIndex, story } from "../db";
+import { loadIndex, story, type UserRecord } from "../db";
+import { requireAuth } from "../auth/middleware";
 import {
   createFromHtml,
   createFromUrl,
@@ -13,14 +14,14 @@ import {
   retryStory,
 } from "../service";
 
-const r = new Hono();
+const r = new Hono<{ Variables: { user: UserRecord | null } }>();
 
 r.get("/", async (c) => {
   const idx = await loadIndex();
   return c.json(idx);
 });
 
-r.post("/", async (c) => {
+r.post("/", requireAuth, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const parsed = CreateStoryRequest.safeParse(body);
   if (!parsed.success) return c.json({ error: "invalid url", details: parsed.error.flatten() }, 400);
@@ -32,7 +33,7 @@ r.post("/", async (c) => {
   }
 });
 
-r.post("/upload", async (c) => {
+r.post("/upload", requireAuth, async (c) => {
   let html: string | null = null;
   const ct = c.req.header("content-type") ?? "";
   if (ct.startsWith("multipart/form-data")) {
@@ -108,7 +109,7 @@ r.get("/:id/chapters/:n", async (c) => {
   return c.json(safe.success ? safe.data : view);
 });
 
-r.post("/:id/retry", async (c) => {
+r.post("/:id/retry", requireAuth, async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json().catch(() => ({}));
   const parsed = RetryRequest.safeParse(body);
@@ -121,7 +122,7 @@ r.post("/:id/retry", async (c) => {
   }
 });
 
-r.delete("/:id", async (c) => {
+r.delete("/:id", requireAuth, async (c) => {
   const id = c.req.param("id");
   await deleteStory(id);
   return c.json({ ok: true });

@@ -1,17 +1,19 @@
 import { Hono } from "hono";
 import { applyUpdate, scheduleExit, versionInfo } from "../update";
+import { requireAdmin } from "../auth/middleware";
+import type { UserRecord } from "../db";
 
-const r = new Hono();
+const r = new Hono<{ Variables: { user: UserRecord | null } }>();
 
 r.get("/version", async (c) => {
   return c.json(await versionInfo());
 });
 
-r.post("/check", async (c) => {
+r.post("/check", requireAdmin, async (c) => {
   return c.json(await versionInfo());
 });
 
-r.post("/apply", async (c) => {
+r.post("/apply", requireAdmin, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const result = await applyUpdate({ force: !!body.force });
   if (result.ok && result.restart) {

@@ -4,10 +4,12 @@ import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { StatusPill } from "../components/StatusPill";
 
 export function Library() {
   const qc = useQueryClient();
+  const { user } = useAuth();
   const { data, isLoading, error } = useQuery({
     queryKey: ["stories"],
     queryFn: () => api.listStories(),
@@ -61,9 +63,15 @@ export function Library() {
       {stories.length === 0 ? (
         <div className="py-20 text-center">
           <p className="text-muted-foreground">书架是空的。</p>
-          <Button variant="default" size="lg" asChild className="mt-5">
-            <Link to="/import">添加第一篇</Link>
-          </Button>
+          {user ? (
+            <Button variant="default" size="lg" asChild className="mt-5">
+              <Link to="/import">添加第一篇</Link>
+            </Button>
+          ) : (
+            <Button variant="outline" size="lg" asChild className="mt-5">
+              <Link to="/login" search={{ redirect: undefined }}>登录后导入</Link>
+            </Button>
+          )}
         </div>
       ) : (
         <ul>
@@ -92,17 +100,19 @@ export function Library() {
                     {s.chapterCount} ch · {s.wordCount.toLocaleString()} w
                   </span>
                   <StatusPill status={s.status} />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="opacity-0 transition-opacity group-hover:opacity-100"
-                    onClick={() => {
-                      if (confirm(`删除「${s.title}」？`)) del.mutate(s.id);
-                    }}
-                    aria-label="删除"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </Button>
+                  {user && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="opacity-0 transition-opacity group-hover:opacity-100"
+                      onClick={() => {
+                        if (confirm(`删除「${s.title}」？`)) del.mutate(s.id);
+                      }}
+                      aria-label="删除"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
             </li>

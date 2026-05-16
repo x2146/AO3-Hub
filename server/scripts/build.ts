@@ -105,6 +105,8 @@ async function writeEmptyEmbedded(): Promise<void> {
 }
 
 async function getVersion(): Promise<string> {
+  const fromEnv = process.env.AO3HUB_VERSION?.trim();
+  if (fromEnv) return fromEnv;
   const pkg = await Bun.file(path.join(ROOT, "package.json")).json();
   return pkg.version ?? "0.0.0";
 }

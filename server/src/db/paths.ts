@@ -8,6 +8,8 @@ export function storyDir(id: string): string {
 export const paths = {
   config: () => path.join(DATA_DIR, "config.json"),
   index: () => path.join(DATA_DIR, "index.json"),
+  users: () => path.join(DATA_DIR, "users.json"),
+  sessions: () => path.join(DATA_DIR, "sessions.json"),
   story: (id: string) => storyDir(id),
   meta: (id: string) => path.join(storyDir(id), "meta.json"),
   source: (id: string) => path.join(storyDir(id), "source.html"),

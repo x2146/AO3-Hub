@@ -1,4 +1,10 @@
-import { Manifest, type VersionInfo } from "@ao3hub/shared";
+import {
+  DEFAULT_DEV_UPDATE_MANIFEST_URL,
+  DEFAULT_UPDATE_MANIFEST_URL,
+  Manifest,
+  type Config,
+  type VersionInfo,
+} from "@ao3hub/shared";
 import { rename, chmod, unlink } from "node:fs/promises";
 import path from "node:path";
 import { ARCH, BUILT_AT, PLATFORM, VERSION } from "./env";
@@ -15,13 +21,41 @@ function compareSemver(a: string, b: string): number {
   return 0;
 }
 
+function isDevVersion(version: string): boolean {
+  return version.startsWith("dev-");
+}
+
+function compareVersions(a: string, b: string): number {
+  if (a === b) return 0;
+  if (isDevVersion(a) || isDevVersion(b)) return 1;
+  return compareSemver(a, b);
+}
+
 function platformMatch(asset: { platform: string; arch: string }): boolean {
   return asset.platform === PLATFORM && asset.arch === ARCH;
 }
 
+function manifestUrlForChannel(channel: string): string {
+  return channel.trim().toLowerCase() === "dev"
+    ? DEFAULT_DEV_UPDATE_MANIFEST_URL
+    : DEFAULT_UPDATE_MANIFEST_URL;
+}
+
+function resolveManifestURL(cfg: Config): string {
+  const url = cfg.update.manifestURL.trim();
+  if (
+    !url ||
+    url === DEFAULT_UPDATE_MANIFEST_URL ||
+    url === DEFAULT_DEV_UPDATE_MANIFEST_URL
+  ) {
+    return manifestUrlForChannel(cfg.update.channel);
+  }
+  return url;
+}
+
 export async function fetchManifest(): Promise<{ manifest: Manifest | null; error?: string }> {
   const cfg = await loadConfig();
-  const url = cfg.update.manifestURL.trim();
+  const url = resolveManifestURL(cfg);
   if (!url) return { manifest: null, error: "未配置 manifest URL" };
   try {
     const res = await fetch(url, { headers: { "cache-control": "no-cache" } });
@@ -45,11 +79,12 @@ export async function versionInfo(): Promise<VersionInfo> {
   const { manifest } = await fetchManifest();
   if (!manifest) return base;
   const asset = manifest.assets.find(platformMatch);
-  const hasUpdate = compareSemver(manifest.version, VERSION) > 0;
+  const hasUpdate = compareVersions(manifest.version, VERSION) > 0;
   return {
     ...base,
     latest: {
       version: manifest.version,
+      channel: manifest.channel,
       notes: manifest.notes,
       publishedAt: manifest.publishedAt,
       hasUpdate,
@@ -76,7 +111,7 @@ export type ApplyResult = {
 export async function applyUpdate(opts: { force?: boolean } = {}): Promise<ApplyResult> {
   const { manifest, error } = await fetchManifest();
   if (!manifest) return { ok: false, message: error ?? "无法获取 manifest" };
-  if (!opts.force && compareSemver(manifest.version, VERSION) <= 0) {
+  if (!opts.force && compareVersions(manifest.version, VERSION) <= 0) {
     return { ok: false, message: `当前 ${VERSION} 已是最新（remote ${manifest.version}）` };
   }
   const asset = manifest.assets.find(platformMatch);

@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { DEFAULT_UPDATE_MANIFEST_URL } from "@ao3hub/shared";
+import {
+  DEFAULT_DEV_UPDATE_MANIFEST_URL,
+  DEFAULT_UPDATE_MANIFEST_URL,
+} from "@ao3hub/shared";
 import { Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +32,16 @@ type LocalConfig = {
     autoCheck: boolean;
   };
 };
+
+const defaultManifestURLForChannel = (channel: string) =>
+  channel.trim().toLowerCase() === "dev"
+    ? DEFAULT_DEV_UPDATE_MANIFEST_URL
+    : DEFAULT_UPDATE_MANIFEST_URL;
+
+const DEFAULT_MANIFEST_URLS = new Set([
+  DEFAULT_UPDATE_MANIFEST_URL,
+  DEFAULT_DEV_UPDATE_MANIFEST_URL,
+]);
 
 export function Settings() {
   const qc = useQueryClient();
@@ -90,6 +103,25 @@ export function Settings() {
     if (!apiKeyDirty) delete body.llm.apiKey;
     if (!cookieDirty) delete body.ao3.cookie;
     save.mutate(body);
+  };
+
+  const setUpdateChannel = (channel: string) => {
+    setForm((current) => {
+      if (!current) return current;
+      const manifestURL = current.update.manifestURL.trim();
+      const nextURL =
+        !manifestURL || DEFAULT_MANIFEST_URLS.has(manifestURL)
+          ? defaultManifestURLForChannel(channel)
+          : current.update.manifestURL;
+      return {
+        ...current,
+        update: {
+          ...current.update,
+          channel,
+          manifestURL: nextURL,
+        },
+      };
+    });
   };
 
   return (
@@ -248,7 +280,7 @@ export function Settings() {
         <Field id="ota-manifest" label="Manifest URL">
           <Input
             id="ota-manifest"
-            placeholder={DEFAULT_UPDATE_MANIFEST_URL}
+            placeholder={defaultManifestURLForChannel(form.update.channel)}
             value={form.update.manifestURL}
             onChange={(e) =>
               setForm({
@@ -260,16 +292,19 @@ export function Settings() {
         </Field>
         <div className="grid grid-cols-2 gap-4">
           <Field id="ota-channel" label="Channel">
-            <Input
-              id="ota-channel"
-              value={form.update.channel}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  update: { ...form.update, channel: e.target.value },
-                })
-              }
-            />
+            <div id="ota-channel" className="flex gap-2">
+              {["stable", "dev"].map((channel) => (
+                <Button
+                  key={channel}
+                  type="button"
+                  variant={form.update.channel === channel ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setUpdateChannel(channel)}
+                >
+                  {channel}
+                </Button>
+              ))}
+            </div>
           </Field>
           <div className="flex items-end gap-3 pb-2">
             <Switch

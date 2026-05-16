@@ -1,5 +1,6 @@
 {
   "version": "0.1.1",
+  "channel": "stable",
   "notes": "Example manifest. The release workflow generates this file automatically.",
   "publishedAt": "2026-05-16",
   "assets": [

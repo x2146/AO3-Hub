@@ -7,13 +7,19 @@ import stories from "./routes/stories";
 import config from "./routes/config";
 import stream from "./routes/stream";
 import update from "./routes/update";
+import auth from "./routes/auth";
+import usersRoute from "./routes/users";
+import { attachUser } from "./auth/middleware";
 import { assets } from "./embedded";
 import { initWorker, resumeOnStartup } from "./service";
 
 const app = new Hono();
 app.use(logger());
 app.use("/api/*", cors());
+app.use("/api/*", attachUser);
 
+app.route("/api/auth", auth);
+app.route("/api/users", usersRoute);
 app.route("/api/stories", stories);
 app.route("/api/stories", stream);
 app.route("/api/config", config);

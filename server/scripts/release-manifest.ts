@@ -14,6 +14,7 @@ type Options = {
   tag: string;
   out: string;
   baseUrl: string;
+  channel?: string;
   version?: string;
   notes?: string;
   publishedAt?: string;
@@ -31,6 +32,7 @@ function usage(): never {
       "  --tag vX.Y.Z             GitHub release tag",
       "  --out file               Manifest output path",
       "  --base-url url           GitHub base URL, defaults to https://github.com",
+      "  --channel name           Manifest channel, defaults to stable",
       "  --version X.Y.Z          Manifest version, defaults to package.json version",
       "  --notes text             Manifest notes",
       "  --published-at date      Manifest publishedAt, defaults to current ISO time",
@@ -59,6 +61,7 @@ function parseArgs(argv: string[]): Options {
     else if (arg === "--tag" || arg.startsWith("--tag=")) opts.tag = readValue("--tag");
     else if (arg === "--out" || arg.startsWith("--out=")) opts.out = readValue("--out");
     else if (arg === "--base-url" || arg.startsWith("--base-url=")) opts.baseUrl = readValue("--base-url");
+    else if (arg === "--channel" || arg.startsWith("--channel=")) opts.channel = readValue("--channel");
     else if (arg === "--version" || arg.startsWith("--version=")) opts.version = readValue("--version");
     else if (arg === "--notes" || arg.startsWith("--notes=")) opts.notes = readValue("--notes");
     else if (arg === "--published-at" || arg.startsWith("--published-at=")) opts.publishedAt = readValue("--published-at");
@@ -123,6 +126,7 @@ async function main() {
 
   const manifest = {
     version,
+    channel: opts.channel ?? "stable",
     notes: opts.notes ?? `GitHub release ${opts.tag}`,
     publishedAt: opts.publishedAt ?? new Date().toISOString(),
     assets,

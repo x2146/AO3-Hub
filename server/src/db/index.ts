@@ -1,5 +1,4 @@
-import { mkdir, rename, rm, stat } from "node:fs/promises";
-import path from "node:path";
+import { rm, stat } from "node:fs/promises";
 import {
   Config,
   Index,
@@ -9,38 +8,13 @@ import {
   type Progress,
 } from "@ao3hub/shared";
 import { paths, storyDir } from "./paths";
+import { readJson, writeJson, readText, writeText } from "./io";
 
-async function ensureDir(p: string): Promise<void> {
-  await mkdir(path.dirname(p), { recursive: true });
-}
-
-export async function readJson<T>(file: string): Promise<T | null> {
-  const f = Bun.file(file);
-  if (!(await f.exists())) return null;
-  try {
-    return (await f.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-export async function writeJson(file: string, data: unknown): Promise<void> {
-  await ensureDir(file);
-  const tmp = file + ".tmp";
-  await Bun.write(tmp, JSON.stringify(data, null, 2));
-  await rename(tmp, file);
-}
-
-export async function writeText(file: string, data: string): Promise<void> {
-  await ensureDir(file);
-  await Bun.write(file, data);
-}
-
-export async function readText(file: string): Promise<string | null> {
-  const f = Bun.file(file);
-  if (!(await f.exists())) return null;
-  return await f.text();
-}
+export { readJson, writeJson, readText, writeText };
+export { users } from "./users";
+export type { UserRecord } from "./users";
+export { sessions } from "./sessions";
+export type { SessionRecord } from "./sessions";
 
 const DEFAULT_CONFIG = Config.parse({
   llm: {},

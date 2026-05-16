@@ -1,9 +1,12 @@
 import { Hono } from "hono";
 import { Config as ConfigSchema } from "@ao3hub/shared";
-import { loadConfig, saveConfig } from "../db";
+import { loadConfig, saveConfig, type UserRecord } from "../db";
 import { chat } from "../translate/provider";
+import { requireAdmin } from "../auth/middleware";
 
-const r = new Hono();
+const r = new Hono<{ Variables: { user: UserRecord | null } }>();
+
+r.use("*", requireAdmin);
 
 function mask(key: string): string {
   if (!key) return "";

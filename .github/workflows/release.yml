@@ -2,16 +2,89 @@ name: Release
 
 on:
   push:
+    branches:
+      - "**"
     tags:
       - "v*.*.*"
 
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.ref_type == 'tag' && format('release-{0}', github.ref_name) || 'release-dev' }}
+  cancel-in-progress: false
+
 jobs:
-  release:
-    name: Build binaries and publish OTA manifest
+  meta:
+    name: Resolve release metadata
     runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.meta.outputs.channel }}
+      notes: ${{ steps.meta.outputs.notes }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      title: ${{ steps.meta.outputs.title }}
+      version: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve metadata
+        id: meta
+        run: |
+          PKG_VERSION="$(node -p 'require("./package.json").version')"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          BUILD_DATE="$(date -u +%Y%m%d%H%M%S)"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "${TAG_VERSION}" != "${PKG_VERSION}" ]; then
+              echo "Tag ${GITHUB_REF_NAME} does not match package version ${PKG_VERSION}" >&2
+              exit 1
+            fi
+            VERSION="${PKG_VERSION}"
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+            CHANNEL="stable"
+            TITLE="${GITHUB_REF_NAME}"
+            PRERELEASE="false"
+            NOTES="Release ${GITHUB_REF_NAME}"
+          else
+            VERSION="dev-${GITHUB_RUN_ID}-${BUILD_DATE}-${SHORT_SHA}"
+            RELEASE_TAG="dev"
+            CHANNEL="dev"
+            TITLE="dev ${VERSION}"
+            PRERELEASE="true"
+            NOTES="Rolling dev build ${VERSION} from ${GITHUB_REF_NAME} (${SHORT_SHA})."
+          fi
+
+          {
+            echo "channel=${CHANNEL}"
+            echo "prerelease=${PRERELEASE}"
+            echo "release_tag=${RELEASE_TAG}"
+            echo "title=${TITLE}"
+            echo "version=${VERSION}"
+            echo "notes<<EOF"
+            echo "${NOTES}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build ${{ matrix.asset }}
+    needs: meta
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-darwin-arm64
+            asset: ao3-hub-darwin-arm64
+          - target: bun-darwin-x64
+            asset: ao3-hub-darwin-x64
+          - target: bun-linux-arm64
+            asset: ao3-hub-linux-arm64
+          - target: bun-linux-x64
+            asset: ao3-hub-linux-x64
 
     steps:
       - name: Checkout
@@ -25,49 +98,95 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Verify tag matches package version
+      - name: Build binary
         run: |
-          VERSION="$(bun -e 'const pkg = await Bun.file("package.json").json(); console.log(pkg.version)')"
-          if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ] && [ "${GITHUB_REF_NAME}" != "${VERSION}" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match package version ${VERSION}" >&2
-            exit 1
-          fi
+          AO3HUB_TARGET="${{ matrix.target }}" \
+          AO3HUB_OUT="${{ matrix.asset }}" \
+          AO3HUB_VERSION="${{ needs.meta.outputs.version }}" \
+          bun run build
 
-      - name: Build release binaries
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: server/build/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish ${{ needs.meta.outputs.channel }} OTA release
+    needs:
+      - meta
+      - build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: server/build/release
+          merge-multiple: true
+
+      - name: Prepare release assets
         run: |
-          mkdir -p server/build/release
-          targets=(
-            "bun-darwin-arm64 ao3-hub-darwin-arm64"
-            "bun-darwin-x64 ao3-hub-darwin-x64"
-            "bun-linux-arm64 ao3-hub-linux-arm64"
-            "bun-linux-x64 ao3-hub-linux-x64"
-          )
-          for item in "${targets[@]}"; do
-            target="${item%% *}"
-            name="${item##* }"
-            AO3HUB_TARGET="${target}" AO3HUB_OUT="${name}" bun run build
-            mv "server/build/${name}" "server/build/release/${name}"
-          done
           cp server/scripts/launcher.sh server/build/release/launcher.sh
-
-      - name: Generate OTA manifest
-        run: |
+          chmod +x server/build/release/ao3-hub-* server/build/release/launcher.sh
           bun run ota:manifest -- \
             --repo "${GITHUB_REPOSITORY}" \
-            --tag "${GITHUB_REF_NAME}" \
+            --tag "${{ needs.meta.outputs.release_tag }}" \
+            --version "${{ needs.meta.outputs.version }}" \
+            --channel "${{ needs.meta.outputs.channel }}" \
+            --notes "${{ needs.meta.outputs.notes }}" \
             --out server/build/release/manifest.json \
             server/build/release/ao3-hub-*
           (cd server/build/release && sha256sum ao3-hub-* manifest.json launcher.sh > SHA256SUMS)
 
-      - name: Publish GitHub release
+      - name: Move dev tag
+        if: needs.meta.outputs.channel == 'dev'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "${{ needs.meta.outputs.release_tag }}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${{ needs.meta.outputs.release_tag }}" --force
+
+      - name: Publish stable release
+        if: needs.meta.outputs.channel == 'stable'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" server/build/release/* --clobber
+          TAG="${{ needs.meta.outputs.release_tag }}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" server/build/release/* --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" server/build/release/* \
-              --title "${GITHUB_REF_NAME}" \
+            gh release create "${TAG}" server/build/release/* \
+              --title "${{ needs.meta.outputs.title }}" \
               --generate-notes \
+              --verify-tag
+          fi
+
+      - name: Publish dev release
+        if: needs.meta.outputs.channel == 'dev'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ needs.meta.outputs.release_tag }}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" \
+              --title "${{ needs.meta.outputs.title }}" \
+              --notes "${{ needs.meta.outputs.notes }}" \
+              --prerelease
+            gh release upload "${TAG}" server/build/release/* --clobber
+          else
+            gh release create "${TAG}" server/build/release/* \
+              --title "${{ needs.meta.outputs.title }}" \
+              --notes "${{ needs.meta.outputs.notes }}" \
+              --prerelease \
               --verify-tag
           fi

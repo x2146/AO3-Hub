@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { api, subscribeStream } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import {
   applyReaderSettings,
   loadReaderSettings,
@@ -29,6 +30,7 @@ export function Reader() {
   const chapterIndex = Number(chapter);
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { user } = useAuth();
 
   const [settings, setSettings] = useState<ReaderSettings>(() => loadReaderSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -190,6 +192,7 @@ export function Reader() {
               key={p.id}
               pair={p}
               showEn={showAllEn}
+              canRetry={!!user}
               onRetry={async (blockId) => {
                 await api.retry(id, { blockIds: [blockId], chapterIndex });
                 refetch();
@@ -545,10 +548,12 @@ function ProgressBar({ progress }: { progress: ChapterView["progress"] }) {
 function Pair({
   pair,
   showEn,
+  canRetry,
   onRetry,
 }: {
   pair: ChapterView["chapter"]["pairs"][number];
   showEn: boolean;
+  canRetry: boolean;
   onRetry: (blockId: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -587,15 +592,17 @@ function Pair({
         <div className="mt-1.5 flex items-center gap-2 text-[13px] text-destructive">
           <X className="size-3.5" />
           <span title={pair.error ?? ""}>翻译失败</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 gap-1 px-2 text-[11px]"
-            onClick={() => onRetry(pair.id)}
-          >
-            <RotateCcw className="size-3" />
-            重试
-          </Button>
+          {canRetry && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 gap-1 px-2 text-[11px]"
+              onClick={() => onRetry(pair.id)}
+            >
+              <RotateCcw className="size-3" />
+              重试
+            </Button>
+          )}
         </div>
       )}
     </div>
