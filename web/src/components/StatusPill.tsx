@@ -1,4 +1,5 @@
 import type { StoryStatus } from "@ao3hub/shared";
+import { Badge } from "@/components/ui/badge";
 
 const LABEL: Record<StoryStatus, string> = {
   queued: "排队中",
@@ -9,17 +10,26 @@ const LABEL: Record<StoryStatus, string> = {
   error: "出错",
 };
 
+const VARIANT: Record<StoryStatus, "default" | "accent" | "success" | "destructive"> = {
+  queued: "default",
+  fetching: "default",
+  parsing: "default",
+  translating: "default",
+  ready: "success",
+  error: "destructive",
+};
+
 export function StatusPill({ status }: { status: StoryStatus }) {
-  const cls =
-    status === "ready"
-      ? "chip-accent"
-      : status === "error"
-        ? "chip-error"
-        : "";
+  const inFlight = status !== "ready" && status !== "error";
   return (
-    <span className={`chip ${cls}`}>
-      <span className="dot" aria-hidden />
+    <Badge variant={VARIANT[status]} className="gap-1.5 normal-case tracking-[0.04em]">
+      <span
+        className={`inline-block size-1.5 rounded-full bg-current ${
+          inFlight ? "animate-pulse" : ""
+        }`}
+        aria-hidden
+      />
       {LABEL[status]}
-    </span>
+    </Badge>
   );
 }

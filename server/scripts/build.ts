@@ -127,7 +127,7 @@ async function main() {
   await writeEmbedded(files, version, builtAt);
 
   console.log(`[build] compiling -> ${OUT_PATH}  (v${version})`);
-  await mkdir(OUT_DIR, { recursive: true });
+  await mkdir(path.dirname(OUT_PATH), { recursive: true });
 
   const target = process.env.AO3HUB_TARGET;
   const targetFlag = target ? [`--target=${target}`] : [];

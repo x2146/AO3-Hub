@@ -75,6 +75,27 @@ AO3HUB_TARGET=bun-linux-arm64 bun run build
 AO3HUB_TARGET=bun-darwin-arm64 bun run build
 ```
 
+## CI / Release
+
+GitHub Actions 已配置两条流水线：
+
+- `CI`：push 到 `main` 或 PR 时执行 `bun install --frozen-lockfile`、类型检查和单文件构建。
+- `Release`：push 形如 `v0.1.1` 的 tag 时构建 `darwin/linux` 的 `x64/arm64` 四个二进制，生成 `manifest.json` 和 `SHA256SUMS`，并发布到 GitHub Release。
+
+发版流程：
+
+```bash
+# 先把 package.json 里的 version 改到目标版本，例如 0.1.1
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+tag 必须匹配 `package.json` 的 version（允许 `v` 前缀）。Release 完成后，OTA manifest 会在：
+
+```text
+https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json
+```
+
 ## Run（生产）
 
 直接跑：
@@ -104,7 +125,13 @@ Restart=on-failure
 
 ## OTA
 
-发布一个 `manifest.json`（参考 `manifest.example.json`）到任意 URL：
+默认 manifest URL 指向 GitHub Release latest：
+
+```text
+https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json
+```
+
+Release workflow 会自动生成并上传 `manifest.json`。也可以手动发布一个兼容 manifest（参考 `manifest.example.json`）到任意 URL：
 
 ```json
 {
@@ -116,7 +143,7 @@ Restart=on-failure
 }
 ```
 
-在 Settings 里填 `Manifest URL`，然后到 `/version` 页面看是否有新版，点「下载并安装」：
+在 Settings 里确认 `Manifest URL`，然后到 `/version` 页面看是否有新版，点「下载并安装」：
 
 1. server 拉对应平台的二进制
 2. 校验 sha256（如果有）
@@ -145,7 +172,11 @@ Restart=on-failure
     "userAgent": "Mozilla/5.0 …"
   },
   "reader": { "defaultMeasure": 760, "defaultFont": 17 },
-  "update": { "manifestURL": "", "channel": "stable", "autoCheck": false }
+  "update": {
+    "manifestURL": "https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json",
+    "channel": "stable",
+    "autoCheck": false
+  }
 }
 ```
 

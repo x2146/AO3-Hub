@@ -139,8 +139,11 @@ export const ReaderConfig = z.object({
 });
 export type ReaderConfig = z.infer<typeof ReaderConfig>;
 
+export const DEFAULT_UPDATE_MANIFEST_URL =
+  "https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json";
+
 export const UpdateConfig = z.object({
-  manifestURL: z.string().default(""),
+  manifestURL: z.string().default(DEFAULT_UPDATE_MANIFEST_URL),
   channel: z.string().default("stable"),
   autoCheck: z.boolean().default(false),
 });

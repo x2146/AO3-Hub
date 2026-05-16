@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build binaries and publish OTA manifest
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify tag matches package version
+        run: |
+          VERSION="$(bun -e 'const pkg = await Bun.file("package.json").json(); console.log(pkg.version)')"
+          if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ] && [ "${GITHUB_REF_NAME}" != "${VERSION}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Build release binaries
+        run: |
+          mkdir -p server/build/release
+          targets=(
+            "bun-darwin-arm64 ao3-hub-darwin-arm64"
+            "bun-darwin-x64 ao3-hub-darwin-x64"
+            "bun-linux-arm64 ao3-hub-linux-arm64"
+            "bun-linux-x64 ao3-hub-linux-x64"
+          )
+          for item in "${targets[@]}"; do
+            target="${item%% *}"
+            name="${item##* }"
+            AO3HUB_TARGET="${target}" AO3HUB_OUT="${name}" bun run build
+            mv "server/build/${name}" "server/build/release/${name}"
+          done
+          cp server/scripts/launcher.sh server/build/release/launcher.sh
+
+      - name: Generate OTA manifest
+        run: |
+          bun run ota:manifest -- \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tag "${GITHUB_REF_NAME}" \
+            --out server/build/release/manifest.json \
+            server/build/release/ao3-hub-*
+          (cd server/build/release && sha256sum ao3-hub-* manifest.json launcher.sh > SHA256SUMS)
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" server/build/release/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" server/build/release/* \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes \
+              --verify-tag
+          fi

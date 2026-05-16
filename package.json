@@ -9,12 +9,15 @@
     "web"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,magenta \"bun --cwd server run dev\" \"bun --cwd web run dev\"",
-    "dev:server": "bun --cwd server run dev",
-    "dev:web": "bun --cwd web run dev",
-    "build:web": "bun --cwd web run build",
-    "build": "bun --cwd server run build",
-    "start": "bun --cwd server run start"
+    "dev": "concurrently -n server,web -c blue,magenta \"bun run --cwd server dev\" \"bun run --cwd web dev\"",
+    "dev:server": "bun run --cwd server dev",
+    "dev:web": "bun run --cwd web dev",
+    "typecheck": "bun run --cwd server typecheck && bun run --cwd web typecheck",
+    "build:web": "bun run --cwd web build",
+    "build": "bun run --cwd server build",
+    "ci": "bun run typecheck && bun run build",
+    "ota:manifest": "bun run server/scripts/release-manifest.ts",
+    "start": "bun run --cwd server start"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ListOrdered,
+  RotateCcw,
+  Settings as SettingsIcon,
+  X,
+} from "lucide-react";
 import type { ChapterView } from "@ao3hub/shared";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 import { api, subscribeStream } from "../lib/api";
 import {
   applyReaderSettings,
@@ -72,17 +85,19 @@ export function Reader() {
   if (isLoading) {
     return (
       <div className="py-32 text-center">
-        <p className="text-muted">载入章节…</p>
+        <p className="text-muted-foreground">载入章节…</p>
       </div>
     );
   }
   if (error || !data) {
     return (
       <div className="py-32 text-center space-y-3">
-        <p className="text-red-500">载入失败：{(error as Error)?.message ?? "unknown"}</p>
-        <Link to="/" className="btn btn-ghost">
-          返回书架
-        </Link>
+        <p className="text-destructive">
+          载入失败：{(error as Error)?.message ?? "unknown"}
+        </p>
+        <Button variant="outline" asChild>
+          <Link to="/">返回书架</Link>
+        </Button>
       </div>
     );
   }
@@ -119,9 +134,15 @@ export function Reader() {
             : undefined
         }
         settingsOpen={settingsOpen}
-        onToggleSettings={() => setSettingsOpen((v) => !v)}
+        onToggleSettings={() => {
+          setSettingsOpen((v) => !v);
+          setTocOpen(false);
+        }}
         tocOpen={tocOpen}
-        onToggleToc={() => setTocOpen((v) => !v)}
+        onToggleToc={() => {
+          setTocOpen((v) => !v);
+          setSettingsOpen(false);
+        }}
       />
 
       {settingsOpen && (
@@ -146,19 +167,18 @@ export function Reader() {
         className="mx-auto pt-[120px] pb-32"
         style={{ width: "min(var(--reader-measure), calc(100vw - 32px))" }}
       >
-        <header className="mb-12 border-b rule pb-8">
+        <header className="mb-12 border-b border-border pb-8">
           <h1 className="text-[clamp(2rem,6vw,3.6rem)] font-semibold leading-[0.98] tracking-tight">
             {titleEn}
           </h1>
           {chineseTitle && (
-            <p className="text-muted mt-4 text-[16px]">
+            <p className="text-muted-foreground mt-4 text-[16px]">
               {chineseTitle}
             </p>
           )}
           {data.chapter.titleEn && data.nav.total > 1 && (
-            <p className="text-muted mt-2 text-[13px] font-mono">
-              CH {chapterIndex + 1}/{data.nav.total} ·{" "}
-              {data.chapter.titleEn}
+            <p className="text-muted-foreground mt-2 text-[13px] font-mono">
+              CH {chapterIndex + 1}/{data.nav.total} · {data.chapter.titleEn}
             </p>
           )}
           <ProgressBar progress={data.progress} />
@@ -183,7 +203,7 @@ export function Reader() {
 
       <div className="fixed top-0 left-0 right-0 z-50 h-[3px] pointer-events-none">
         <div
-          className="h-full bg-[rgb(var(--accent))] transition-[width] duration-100"
+          className="h-full bg-accent transition-[width] duration-100"
           style={{ width: `${progress * 100}%` }}
         />
       </div>
@@ -206,63 +226,74 @@ function ReaderTopbar(props: {
   onToggleToc: () => void;
 }) {
   return (
-    <div className="fixed left-1/2 top-3 z-40 flex w-[min(820px,calc(100vw-24px))] -translate-x-1/2 items-center gap-3 rounded-full surface rule border px-3 py-1.5 shadow-[0_18px_44px_rgba(17,24,39,0.12)]">
-      <Link to="/" className="btn btn-ghost text-[12px]">
-        ← 目录
-      </Link>
-      <div className="min-w-0 flex-1">
+    <div className="fixed left-1/2 top-3 z-40 flex w-[min(820px,calc(100vw-24px))] -translate-x-1/2 items-center gap-2 rounded-full border border-border surface px-2 py-1.5 shadow-[0_18px_44px_rgba(17,24,39,0.12)]">
+      <Button variant="ghost" size="sm" asChild className="gap-1">
+        <Link to="/">
+          <ChevronLeft className="size-3.5" />
+          目录
+        </Link>
+      </Button>
+      <div className="min-w-0 flex-1 px-1">
         <p className="truncate text-[13px] font-semibold leading-tight">
           {props.title}
         </p>
         {props.subtitle && (
-          <p className="text-muted truncate text-[11px] leading-tight">
+          <p className="text-muted-foreground truncate text-[11px] leading-tight">
             {props.subtitle}
           </p>
         )}
       </div>
-      <div className="flex items-center gap-1 text-[12px] font-mono text-muted">
-        <button
-          type="button"
-          className="btn btn-ghost px-2"
+      <div className="flex items-center gap-0.5 text-[12px] font-mono text-muted-foreground">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-7"
           onClick={props.onPrev}
           disabled={!props.onPrev}
           aria-label="上一章"
         >
-          ‹
-        </button>
+          <ChevronLeft className="size-3.5" />
+        </Button>
         <span className="tabular-nums">
           {String(props.chapterIndex + 1).padStart(props.totalDigits, "0")}/
           {props.total}
         </span>
-        <button
-          type="button"
-          className="btn btn-ghost px-2"
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-7"
           onClick={props.onNext}
           disabled={!props.onNext}
           aria-label="下一章"
         >
-          ›
-        </button>
+          <ChevronRight className="size-3.5" />
+        </Button>
       </div>
-      <span className="text-muted tabular-nums text-[11px] font-mono">
+      <span className="text-muted-foreground tabular-nums text-[11px] font-mono px-1">
         {Math.round(props.progress * 100)}%
       </span>
       {props.total > 1 && (
-        <button
-          type="button"
-          className={`btn btn-ghost text-[12px] ${props.tocOpen ? "bg-[rgb(var(--ink)/0.08)]" : ""}`}
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn("gap-1", props.tocOpen && "bg-secondary")}
           onClick={props.onToggleToc}
+          aria-label="章节目录"
         >
+          <ListOrdered className="size-3.5" />
           章节
-        </button>
+        </Button>
       )}
-      <button
-        type="button"
-        className={`btn btn-ghost text-[12px] ${props.settingsOpen ? "bg-[rgb(var(--ink)/0.08)]" : ""}`}
+      <Button
+        variant="ghost"
+        size="sm"
+        className={cn("gap-1", props.settingsOpen && "bg-secondary")}
         onClick={props.onToggleSettings}
+        aria-label="阅读设置"
       >
+        <SettingsIcon className="size-3.5" />
         设置
-      </button>
+      </Button>
     </div>
   );
 }
@@ -283,91 +314,105 @@ function SettingsDrawer({
   return (
     <div
       role="dialog"
-      className="fixed top-[64px] left-1/2 z-40 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-3xl surface rule border p-5 shadow-[0_28px_60px_rgba(17,24,39,0.18)]"
+      aria-label="阅读设置"
+      className="fixed top-[64px] left-1/2 z-40 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-3xl border border-border bg-card p-5 shadow-[0_28px_60px_rgba(17,24,39,0.18)] surface"
     >
       <div className="flex items-center justify-between">
-        <p className="text-[13px] font-semibold tracking-wider uppercase text-muted">
+        <p className="text-[13px] font-semibold tracking-wider uppercase text-muted-foreground">
           阅读设置
         </p>
-        <button type="button" className="btn btn-ghost text-[12px]" onClick={onClose}>
-          关闭
-        </button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={onClose}
+          aria-label="关闭"
+        >
+          <X className="size-3.5" />
+        </Button>
       </div>
-      <div className="mt-4 grid gap-3">
-        <Slider
+      <div className="mt-4 grid gap-4">
+        <ReaderSlider
           label="字号"
           value={settings.font}
-          unit="px"
           min={READER_LIMITS.font.min}
           max={READER_LIMITS.font.max}
           step={READER_LIMITS.font.step}
+          format={(v) => `${v}px`}
           onChange={(v) => setSettings({ ...settings, font: v })}
         />
-        <Slider
+        <ReaderSlider
           label="中文比例"
           value={settings.zh}
-          unit=""
-          formatter={(v) => `${Math.round(v * 100)}%`}
           min={READER_LIMITS.zh.min}
           max={READER_LIMITS.zh.max}
           step={READER_LIMITS.zh.step}
+          format={(v) => `${Math.round(v * 100)}%`}
           onChange={(v) => setSettings({ ...settings, zh: Number(v.toFixed(2)) })}
         />
-        <Slider
+        <ReaderSlider
           label="栏宽"
           value={settings.measure}
-          unit="px"
           min={READER_LIMITS.measure.min}
           max={READER_LIMITS.measure.max}
           step={READER_LIMITS.measure.step}
+          format={(v) => `${v}px`}
           onChange={(v) => setSettings({ ...settings, measure: v })}
         />
+        <Separator />
         <label className="flex items-center justify-between text-[13px]">
           <span>显示原文</span>
-          <input
-            type="checkbox"
+          <Switch
             checked={showAllEn}
-            onChange={(e) => setShowAllEn(e.target.checked)}
+            onCheckedChange={setShowAllEn}
+            aria-label="显示原文"
           />
         </label>
-        <button
-          type="button"
-          className="btn btn-ghost text-[12px] mt-1"
-          onClick={() =>
-            setSettings({ font: 17, zh: 0.96, measure: 760 })
-          }
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5 self-start"
+          onClick={() => setSettings({ font: 17, zh: 0.96, measure: 760 })}
         >
+          <RotateCcw className="size-3.5" />
           恢复默认
-        </button>
+        </Button>
       </div>
     </div>
   );
 }
 
-function Slider(props: {
+function ReaderSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  format,
+  onChange,
+}: {
   label: string;
   value: number;
-  unit: string;
-  formatter?: (v: number) => string;
   min: number;
   max: number;
   step: number;
+  format: (v: number) => string;
   onChange: (v: number) => void;
 }) {
-  const display = props.formatter ? props.formatter(props.value) : `${props.value}${props.unit}`;
   return (
     <div className="flex items-center gap-4">
-      <span className="text-muted w-[80px] text-[12px]">{props.label}</span>
-      <input
-        type="range"
-        min={props.min}
-        max={props.max}
-        step={props.step}
-        value={props.value}
-        onChange={(e) => props.onChange(Number(e.target.value))}
-        className="flex-1 accent-[rgb(var(--accent))]"
+      <span className="text-muted-foreground w-[80px] text-[12px]">{label}</span>
+      <Slider
+        value={[value]}
+        min={min}
+        max={max}
+        step={step}
+        onValueChange={(arr) => arr[0] !== undefined && onChange(arr[0])}
+        className="flex-1"
       />
-      <span className="text-muted w-[64px] text-right font-mono text-[12px]">{display}</span>
+      <span className="text-muted-foreground w-[64px] text-right font-mono text-[12px] tabular-nums">
+        {format(value)}
+      </span>
     </div>
   );
 }
@@ -385,15 +430,22 @@ function TocDrawer({
   return (
     <div
       role="dialog"
-      className="fixed top-[64px] left-1/2 z-40 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-3xl surface rule border p-3 shadow-[0_28px_60px_rgba(17,24,39,0.18)] max-h-[60vh] overflow-y-auto"
+      aria-label="章节目录"
+      className="fixed top-[64px] left-1/2 z-40 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-3xl border border-border bg-card p-3 shadow-[0_28px_60px_rgba(17,24,39,0.18)] surface max-h-[60vh] overflow-y-auto"
     >
       <div className="flex items-center justify-between px-2 py-1">
-        <p className="text-[13px] font-semibold tracking-wider uppercase text-muted">
+        <p className="text-[13px] font-semibold tracking-wider uppercase text-muted-foreground">
           章节目录
         </p>
-        <button type="button" className="btn btn-ghost text-[12px]" onClick={onClose}>
-          关闭
-        </button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={onClose}
+          aria-label="关闭"
+        >
+          <X className="size-3.5" />
+        </Button>
       </div>
       <ul className="mt-2">
         {items.map((i) => (
@@ -402,16 +454,15 @@ function TocDrawer({
               to="/r/$id/$chapter"
               params={{ id: data.meta.id, chapter: String(i) }}
               onClick={onClose}
-              className={`flex items-center justify-between rounded-xl px-3 py-2 text-[13px] hover:bg-[rgb(var(--ink)/0.05)] ${
-                i === chapterIndex ? "bg-[rgb(var(--accent)/0.1)]" : ""
-              }`}
+              className={cn(
+                "flex items-center justify-between rounded-xl px-3 py-2 text-[13px] transition-colors hover:bg-secondary",
+                i === chapterIndex && "bg-accent/10",
+              )}
             >
-              <span className="font-mono text-muted">
+              <span className="font-mono text-muted-foreground">
                 {String(i + 1).padStart(2, "0")}
               </span>
-              <span className="ml-3 flex-1 truncate">
-                Chapter {i + 1}
-              </span>
+              <span className="ml-3 flex-1 truncate">Chapter {i + 1}</span>
             </Link>
           </li>
         ))}
@@ -430,15 +481,14 @@ function ChapterNav({
   chapterIndex: number;
 }) {
   return (
-    <nav className="mt-20 flex items-center justify-between border-t rule pt-8 text-[13px] text-muted">
+    <nav className="mt-20 flex items-center justify-between border-t border-border pt-8 text-[13px] text-muted-foreground">
       {data.nav.prev !== undefined ? (
-        <Link
-          to="/r/$id/$chapter"
-          params={{ id, chapter: String(data.nav.prev) }}
-          className="btn btn-ghost"
-        >
-          ← 上一章
-        </Link>
+        <Button variant="ghost" asChild className="gap-1.5">
+          <Link to="/r/$id/$chapter" params={{ id, chapter: String(data.nav.prev) }}>
+            <ChevronLeft className="size-3.5" />
+            上一章
+          </Link>
+        </Button>
       ) : (
         <span />
       )}
@@ -446,13 +496,12 @@ function ChapterNav({
         {chapterIndex + 1}/{data.nav.total}
       </span>
       {data.nav.next !== undefined ? (
-        <Link
-          to="/r/$id/$chapter"
-          params={{ id, chapter: String(data.nav.next) }}
-          className="btn btn-ghost"
-        >
-          下一章 →
-        </Link>
+        <Button variant="ghost" asChild className="gap-1.5">
+          <Link to="/r/$id/$chapter" params={{ id, chapter: String(data.nav.next) }}>
+            下一章
+            <ChevronRight className="size-3.5" />
+          </Link>
+        </Button>
       ) : (
         <span />
       )}
@@ -466,9 +515,9 @@ function ProgressBar({ progress }: { progress: ChapterView["progress"] }) {
     ? Math.round((progress.doneBlocks / progress.totalBlocks) * 100)
     : 0;
   return (
-    <div className="mt-6 rounded-xl border rule p-3">
+    <div className="mt-6 rounded-xl border border-border p-3">
       <div className="flex items-center justify-between text-[12px]">
-        <span className="text-muted">
+        <span className="text-muted-foreground">
           {progress.phase === "translating"
             ? "翻译中"
             : progress.phase === "fetching"
@@ -483,9 +532,9 @@ function ProgressBar({ progress }: { progress: ChapterView["progress"] }) {
           {progress.doneBlocks}/{progress.totalBlocks} · {pct}%
         </span>
       </div>
-      <div className="mt-2 h-1 overflow-hidden rounded-full bg-[rgb(var(--ink)/0.08)]">
+      <div className="mt-2 h-1 overflow-hidden rounded-full bg-secondary">
         <div
-          className="h-full bg-[rgb(var(--accent))] transition-[width] duration-300"
+          className="h-full bg-accent transition-[width] duration-300"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -502,16 +551,18 @@ function Pair({
   showEn: boolean;
   onRetry: (blockId: string) => void;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
   const Tag = pair.type === "h2" ? "h2" : pair.type === "h3" ? "h3" : "div";
   const heading = pair.type === "h2" || pair.type === "h3";
-  if (pair.type === "hr") return <hr className="my-8 rule border-t" />;
+  if (pair.type === "hr")
+    return <hr className="my-8 border-t border-border" />;
 
   return (
     <div
-      ref={useRef<HTMLDivElement>(null)}
+      ref={ref}
       data-block-id={pair.id}
       data-status={pair.status}
-      className={`group ${heading ? "mt-12 mb-6" : ""}`}
+      className={cn("group", heading && "mt-12 mb-6")}
     >
       {showEn && (
         <Tag
@@ -525,7 +576,7 @@ function Pair({
       )}
       {pair.status === "done" && pair.zh && (
         <div
-          className={`${showEn ? "mt-1.5" : ""} zh-shadow`}
+          className={cn("zh-shadow", showEn && "mt-1.5")}
           dangerouslySetInnerHTML={{ __html: pair.zh }}
         />
       )}
@@ -533,15 +584,18 @@ function Pair({
         <div className="zh-shadow mt-1.5 italic opacity-50">翻译中…</div>
       )}
       {pair.status === "error" && (
-        <div className="mt-1.5 flex items-center gap-2 text-[13px] text-red-500">
-          <span title={pair.error ?? ""}>× 翻译失败</span>
-          <button
-            type="button"
-            className="btn btn-ghost text-[11px] py-0.5"
+        <div className="mt-1.5 flex items-center gap-2 text-[13px] text-destructive">
+          <X className="size-3.5" />
+          <span title={pair.error ?? ""}>翻译失败</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 gap-1 px-2 text-[11px]"
             onClick={() => onRetry(pair.id)}
           >
+            <RotateCcw className="size-3" />
             重试
-          </button>
+          </Button>
         </div>
       )}
     </div>

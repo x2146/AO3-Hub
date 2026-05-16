@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { DEFAULT_UPDATE_MANIFEST_URL } from "@ao3hub/shared";
+import { Check, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
 import { api } from "../lib/api";
 
 type LocalConfig = {
@@ -32,7 +40,7 @@ export function Settings() {
   const [form, setForm] = useState<LocalConfig | null>(null);
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
   const [cookieDirty, setCookieDirty] = useState(false);
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     if (!data) return;
@@ -63,12 +71,15 @@ export function Settings() {
     mutationFn: () => api.testConfig(),
     onSuccess: (r) => {
       setTestResult(
-        r.ok ? `✓ 通过：${(r.content ?? "").slice(0, 80)}` : `× ${r.error ?? "失败"}`,
+        r.ok
+          ? { ok: true, msg: `通过：${(r.content ?? "").slice(0, 80)}` }
+          : { ok: false, msg: r.error ?? "失败" },
       );
     },
   });
 
-  if (isLoading || !form) return <p className="text-muted">载入配置…</p>;
+  if (isLoading || !form)
+    return <p className="text-muted-foreground">载入配置…</p>;
 
   const onSave = () => {
     const body: any = {
@@ -87,28 +98,31 @@ export function Settings() {
         <h1 className="text-[clamp(2rem,5vw,3rem)] font-semibold tracking-tight">
           Settings
         </h1>
-        <p className="text-muted mt-3 text-[14px]">
+        <p className="text-muted-foreground mt-3 text-[14px]">
           配置 LLM provider、AO3 cookie、OTA manifest。所有数据存在服务端 data/config.json。
         </p>
       </header>
 
       <section className="space-y-5">
-        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted">
+        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
           LLM Provider
         </h2>
-        <Field label="Base URL">
-          <input
-            className="input"
+        <Field id="llm-baseurl" label="Base URL">
+          <Input
+            id="llm-baseurl"
             value={form.llm.baseURL}
             onChange={(e) =>
               setForm({ ...form, llm: { ...form.llm, baseURL: e.target.value } })
             }
           />
         </Field>
-        <Field label={`API Key${data?.llm.hasApiKey ? "（已配置，留空保留）" : ""}`}>
-          <input
+        <Field
+          id="llm-apikey"
+          label={`API Key${data?.llm.hasApiKey ? "（已配置，留空保留）" : ""}`}
+        >
+          <Input
+            id="llm-apikey"
             type="password"
-            className="input"
             placeholder={data?.llm.hasApiKey ? "已存在 — 输入新值替换" : "sk-…"}
             value={apiKeyDirty ? form.llm.apiKey : ""}
             onChange={(e) => {
@@ -117,9 +131,9 @@ export function Settings() {
             }}
           />
         </Field>
-        <Field label="Model">
-          <input
-            className="input"
+        <Field id="llm-model" label="Model">
+          <Input
+            id="llm-model"
             value={form.llm.model}
             onChange={(e) =>
               setForm({ ...form, llm: { ...form.llm, model: e.target.value } })
@@ -127,11 +141,11 @@ export function Settings() {
           />
         </Field>
         <div className="grid grid-cols-3 gap-4">
-          <Field label="Temperature">
-            <input
+          <Field id="llm-temp" label="Temperature">
+            <Input
+              id="llm-temp"
               type="number"
               step="0.1"
-              className="input"
               value={form.llm.temperature}
               onChange={(e) =>
                 setForm({
@@ -141,11 +155,11 @@ export function Settings() {
               }
             />
           </Field>
-          <Field label="Concurrency">
-            <input
+          <Field id="llm-conc" label="Concurrency">
+            <Input
+              id="llm-conc"
               type="number"
               min="1"
-              className="input"
               value={form.llm.concurrency}
               onChange={(e) =>
                 setForm({
@@ -155,11 +169,11 @@ export function Settings() {
               }
             />
           </Field>
-          <Field label="Blocks / request">
-            <input
+          <Field id="llm-blocks" label="Blocks / request">
+            <Input
+              id="llm-blocks"
               type="number"
               min="1"
-              className="input"
               value={form.llm.blocksPerRequest}
               onChange={(e) =>
                 setForm({
@@ -171,35 +185,44 @@ export function Settings() {
           </Field>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            className="btn btn-ghost"
+          <Button
+            variant="outline"
             onClick={() => test.mutate()}
             disabled={test.isPending}
           >
             {test.isPending ? "测试中…" : "测试连通"}
-          </button>
+          </Button>
           {testResult && (
             <span
-              className={`text-[12px] ${
-                testResult.startsWith("✓") ? "text-emerald-500" : "text-red-500"
+              className={`inline-flex items-center gap-1 text-[12px] ${
+                testResult.ok ? "text-success" : "text-destructive"
               }`}
             >
-              {testResult}
+              {testResult.ok ? (
+                <Check className="size-3.5" />
+              ) : (
+                <X className="size-3.5" />
+              )}
+              {testResult.msg}
             </span>
           )}
         </div>
       </section>
 
       <section className="space-y-5">
-        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted">
+        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
           AO3
         </h2>
-        <Field label={`Cookie${data?.ao3.hasCookie ? "（已配置，留空保留）" : ""}`}>
-          <textarea
+        <Field
+          id="ao3-cookie"
+          label={`Cookie${data?.ao3.hasCookie ? "（已配置，留空保留）" : ""}`}
+        >
+          <Textarea
+            id="ao3-cookie"
             rows={3}
-            className="input"
-            placeholder={data?.ao3.hasCookie ? "已存在 — 输入新值替换" : "_otwarchive_session=…"}
+            placeholder={
+              data?.ao3.hasCookie ? "已存在 — 输入新值替换" : "_otwarchive_session=…"
+            }
             value={cookieDirty ? form.ao3.cookie : ""}
             onChange={(e) => {
               setCookieDirty(true);
@@ -207,9 +230,9 @@ export function Settings() {
             }}
           />
         </Field>
-        <Field label="User Agent">
-          <input
-            className="input"
+        <Field id="ao3-ua" label="User Agent">
+          <Input
+            id="ao3-ua"
             value={form.ao3.userAgent}
             onChange={(e) =>
               setForm({ ...form, ao3: { ...form.ao3, userAgent: e.target.value } })
@@ -219,76 +242,88 @@ export function Settings() {
       </section>
 
       <section className="space-y-5">
-        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted">
+        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
           OTA Update
         </h2>
-        <Field label="Manifest URL">
-          <input
-            className="input"
-            placeholder="https://example.com/ao3-hub/manifest.json"
+        <Field id="ota-manifest" label="Manifest URL">
+          <Input
+            id="ota-manifest"
+            placeholder={DEFAULT_UPDATE_MANIFEST_URL}
             value={form.update.manifestURL}
             onChange={(e) =>
-              setForm({ ...form, update: { ...form.update, manifestURL: e.target.value } })
+              setForm({
+                ...form,
+                update: { ...form.update, manifestURL: e.target.value },
+              })
             }
           />
         </Field>
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Channel">
-            <input
-              className="input"
+          <Field id="ota-channel" label="Channel">
+            <Input
+              id="ota-channel"
               value={form.update.channel}
-              onChange={(e) =>
-                setForm({ ...form, update: { ...form.update, channel: e.target.value } })
-              }
-            />
-          </Field>
-          <label className="flex items-end gap-2 text-[13px]">
-            <input
-              type="checkbox"
-              checked={form.update.autoCheck}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  update: { ...form.update, autoCheck: e.target.checked },
+                  update: { ...form.update, channel: e.target.value },
                 })
               }
             />
-            <span>启动时自动检查更新</span>
-          </label>
+          </Field>
+          <div className="flex items-end gap-3 pb-2">
+            <Switch
+              id="ota-auto"
+              checked={form.update.autoCheck}
+              onCheckedChange={(v) =>
+                setForm({
+                  ...form,
+                  update: { ...form.update, autoCheck: v },
+                })
+              }
+            />
+            <label htmlFor="ota-auto" className="text-[13px] leading-none">
+              启动时自动检查更新
+            </label>
+          </div>
         </div>
       </section>
 
-      <div className="flex items-center gap-3 border-t rule pt-6">
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={onSave}
-          disabled={save.isPending}
-        >
+      <Separator />
+
+      <div className="flex items-center gap-3">
+        <Button variant="default" onClick={onSave} disabled={save.isPending}>
           {save.isPending ? "保存中…" : "保存"}
-        </button>
+        </Button>
         {save.isError && (
-          <span className="text-red-500 text-[12px]">
+          <span className="text-destructive text-[12px]">
             {(save.error as Error).message}
           </span>
         )}
-        {save.isSuccess && <span className="text-emerald-500 text-[12px]">已保存</span>}
+        {save.isSuccess && (
+          <span className="inline-flex items-center gap-1 text-success text-[12px]">
+            <Check className="size-3.5" />
+            已保存
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
 function Field({
+  id,
   label,
   children,
 }: {
+  id: string;
   label: string;
   children: React.ReactNode;
 }) {
   return (
-    <label className="block">
-      <span className="text-muted text-[11px] tracking-wider uppercase">{label}</span>
-      <div className="mt-1.5">{children}</div>
-    </label>
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      {children}
+    </div>
   );
 }
