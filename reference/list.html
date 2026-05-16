@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>x2146-fic.reader</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --accent: #018eee;
+      --bg: #f8fbfc;
+      --text: #13202a;
+      --muted: #64727d;
+      --rule: rgba(19, 32, 42, 0.12);
+      --soft: rgba(1, 142, 238, 0.1);
+      --surface: rgba(255, 255, 255, 0.72);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b0f12;
+        --text: #edf4f8;
+        --muted: #98aab6;
+        --rule: rgba(237, 244, 248, 0.14);
+        --soft: rgba(1, 142, 238, 0.18);
+        --surface: rgba(18, 24, 29, 0.74);
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+      background: var(--bg);
+    }
+
+    body {
+      margin: 0;
+      min-height: 100svh;
+      background:
+        radial-gradient(circle at 18% 0%, var(--soft), transparent 34rem),
+        linear-gradient(180deg, transparent, rgba(1, 142, 238, 0.04)),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(980px, calc(100vw - 36px));
+      margin: 0 auto;
+      padding: 72px 0 64px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 28px;
+      align-items: end;
+      min-height: 32svh;
+      padding-bottom: 34px;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 760px;
+      font-size: clamp(3rem, 12vw, 7.5rem);
+      line-height: 0.88;
+      letter-spacing: 0;
+    }
+
+    .accent {
+      color: var(--accent);
+    }
+
+    .summary {
+      margin: 18px 0 0;
+      max-width: 560px;
+      color: var(--muted);
+      font-size: clamp(1rem, 2.8vw, 1.15rem);
+      line-height: 1.7;
+    }
+
+    .count {
+      min-width: 8rem;
+      padding-bottom: 0.4rem;
+      color: var(--muted);
+      text-align: right;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    .count strong {
+      display: block;
+      color: var(--accent);
+      font-size: clamp(2.4rem, 6vw, 4rem);
+      line-height: 1;
+    }
+
+    .works {
+      margin-top: 22px;
+    }
+
+    .work-row {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: center;
+      min-height: 94px;
+      border-bottom: 1px solid var(--rule);
+      color: var(--text);
+      text-decoration: none;
+      animation: enter 520ms ease both;
+      animation-delay: calc(var(--i) * 70ms);
+      transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+    }
+
+    .work-row:hover,
+    .work-row:focus-visible {
+      background: var(--surface);
+      color: var(--accent);
+      outline: none;
+      transform: translateX(6px);
+    }
+
+    .work-index,
+    .work-meta,
+    .work-main small {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .work-main strong {
+      display: block;
+      overflow-wrap: anywhere;
+      font-size: clamp(1.45rem, 5vw, 2.35rem);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .work-main small {
+      display: block;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+
+    .work-meta {
+      white-space: nowrap;
+    }
+
+    footer {
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.7;
+    }
+
+    code {
+      color: var(--accent);
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+
+    @keyframes enter {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 680px) {
+      main {
+        width: min(100vw - 44px, 980px);
+        padding-top: 48px;
+      }
+
+      header {
+        grid-template-columns: 1fr;
+        min-height: 24svh;
+      }
+
+      .count {
+        text-align: left;
+      }
+
+      .work-row {
+        grid-template-columns: 38px minmax(0, 1fr);
+        gap: 12px;
+        min-height: 88px;
+        padding: 0 4px;
+      }
+
+      .work-meta {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>x2146-fic<span class="accent">.</span>reader</h1>
+        <p class="summary">双语阅读入口，已适配手机和电脑。阅读页顶部状态栏显示当前作品和滚动进度，点设置可调整字号、中文比例、栏宽和深浅色。</p>
+      </div>
+      <p class="count"><strong>3</strong>works</p>
+    </header>
+    <section class="works" aria-label="作品列表">
+
+      <a class="work-row" href="Broken_Boy-zh-CN-dual-reader.html" style="--i:0">
+        <span class="work-index">01</span>
+        <span class="work-main">
+          <strong>Broken Boy</strong>
+          <small>破碎男孩 · oscarshourglass</small>
+        </span>
+        <span class="work-meta">1 chapter</span>
+      </a>
+      <a class="work-row" href="Casual-zh-CN-dual-reader.html" style="--i:1">
+        <span class="work-index">02</span>
+        <span class="work-main">
+          <strong>Casual</strong>
+          <small>休闲 · loquarocoeur</small>
+        </span>
+        <span class="work-meta">13 chapters</span>
+      </a>
+      <a class="work-row" href="invocations-zh-CN-dual-reader.html" style="--i:2">
+        <span class="work-index">03</span>
+        <span class="work-main">
+          <strong>invocations</strong>
+          <small>念咒 · debrief</small>
+        </span>
+        <span class="work-meta">1 chapter</span>
+      </a>
+    </section>
+    <footer>重新生成阅读版：在当前文件夹运行 <code>node build-reader-pages.mjs</code>。</footer>
+  </main>
+</body>
+</html>

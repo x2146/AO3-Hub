@@ -1,0 +1,23 @@
+{
+  "name": "ao3-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"bun --cwd server run dev\" \"bun --cwd web run dev\"",
+    "dev:server": "bun --cwd server run dev",
+    "dev:web": "bun --cwd web run dev",
+    "build:web": "bun --cwd web run build",
+    "build": "bun --cwd server run build",
+    "start": "bun --cwd server run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.6.3"
+  }
+}

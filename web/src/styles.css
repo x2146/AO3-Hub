@@ -1,0 +1,228 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #fbfaf6;
+  --color-ink: #1a1a1c;
+  --color-ink-muted: #6e6e76;
+  --color-rule: rgba(26, 26, 28, 0.12);
+  --color-surface: rgba(255, 255, 255, 0.74);
+  --color-accent: #1f6feb;
+
+  --font-sans:
+    "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-serif:
+    "Source Serif 4", "Source Serif Pro", "Iowan Old Style", "Charter", Georgia, "Noto Serif SC",
+    "Songti SC", serif;
+  --font-mono:
+    "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+@layer base {
+  :root {
+    color-scheme: light dark;
+    --reader-measure: 760px;
+    --reader-font-size: 17px;
+    --reader-zh-scale: 0.96;
+    --reader-line: 1.78;
+
+    --paper: 251 250 246;
+    --ink: 26 26 28;
+    --ink-muted: 110 110 118;
+    --rule: 26 26 28;
+    --surface: 255 255 255;
+    --accent: 31 111 235;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --paper: 12 13 16;
+    --ink: 237 238 240;
+    --ink-muted: 154 159 168;
+    --rule: 237 238 240;
+    --surface: 22 23 27;
+    --accent: 132 175 246;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root[data-theme="auto"] {
+      color-scheme: dark;
+      --paper: 12 13 16;
+      --ink: 237 238 240;
+      --ink-muted: 154 159 168;
+      --rule: 237 238 240;
+      --surface: 22 23 27;
+      --accent: 132 175 246;
+    }
+  }
+
+  html,
+  body {
+    background: rgb(var(--paper));
+    color: rgb(var(--ink));
+  }
+  body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: rgb(var(--accent) / 0.22);
+  }
+}
+
+.surface {
+  background: rgb(var(--surface) / 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.rule {
+  border-color: rgb(var(--rule) / 0.14);
+}
+
+.text-muted {
+  color: rgb(var(--ink-muted));
+}
+
+.text-accent {
+  color: rgb(var(--accent));
+}
+
+.bg-paper {
+  background: rgb(var(--paper));
+}
+
+.bg-surface {
+  background: rgb(var(--surface) / 0.82);
+}
+
+.prose-reader {
+  font-family: var(--font-serif);
+  font-size: var(--reader-font-size);
+  line-height: var(--reader-line);
+}
+
+.prose-reader p,
+.prose-reader blockquote {
+  margin: 0;
+}
+
+.prose-reader a {
+  color: rgb(var(--accent));
+  text-decoration: underline;
+  text-decoration-thickness: 0.06em;
+  text-underline-offset: 0.18em;
+}
+
+.prose-reader em,
+.prose-reader i {
+  font-style: italic;
+}
+.prose-reader strong,
+.prose-reader b {
+  font-weight: 600;
+}
+
+.zh-shadow {
+  font-size: calc(var(--reader-font-size) * var(--reader-zh-scale));
+  color: rgb(var(--ink-muted));
+  line-height: 1.72;
+  font-family: var(--font-serif);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 550;
+  color: rgb(var(--ink));
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.btn:hover {
+  background: rgb(var(--ink) / 0.06);
+}
+.btn-primary {
+  background: rgb(var(--ink));
+  color: rgb(var(--paper));
+}
+.btn-primary:hover {
+  background: rgb(var(--ink) / 0.86);
+}
+.btn-ghost {
+  border-color: rgb(var(--rule) / 0.2);
+  background: transparent;
+}
+
+.input {
+  display: block;
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgb(var(--rule) / 0.16);
+  background: rgb(var(--surface) / 0.5);
+  padding: 10px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  color: rgb(var(--ink));
+  outline: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.input:focus {
+  border-color: rgb(var(--accent) / 0.6);
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.12);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgb(var(--ink) / 0.06);
+  color: rgb(var(--ink-muted));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chip-accent {
+  background: rgb(var(--accent) / 0.14);
+  color: rgb(var(--accent));
+}
+
+.chip-error {
+  background: rgb(239 68 68 / 0.14);
+  color: rgb(239 68 68);
+}
+
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  margin-right: 6px;
+}
+
+.fade-in {
+  animation: fadeIn 220ms ease both;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
