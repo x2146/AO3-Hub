@@ -79,10 +79,11 @@ AO3HUB_TARGET=bun-darwin-arm64 bun run build
 
 ## CI / Release
 
-GitHub Actions 已配置两条流水线：
+GitHub Actions 使用同一个 `CI / Release` workflow：
 
-- `CI`：push 到 `main` 或 PR 时执行 `bun install --frozen-lockfile`、类型检查和单文件构建。
-- `Release`：普通 push 发布滚动 `dev` OTA；push 形如 `v0.1.1` 的 tag 时发布稳定版 OTA。
+- PR：只执行 `bun install --frozen-lockfile`、类型检查和单文件构建。
+- 普通 push：先执行 CI 校验，通过后发布滚动 `dev` OTA。
+- push 形如 `v0.1.1` 的 tag：先执行 CI 校验，通过后发布稳定版 OTA。
 
 Release 使用 matrix 交叉编译四个目标：
 
