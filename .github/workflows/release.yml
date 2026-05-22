@@ -35,7 +35,7 @@ jobs:
         run: |
           PKG_VERSION="$(node -p 'require("./package.json").version')"
           SHORT_SHA="${GITHUB_SHA::7}"
-          BUILD_DATE="$(date -u +%Y%m%d%H%M%S)"
+          BUILD_DATE="$(date -u +%Y%m%d)"
 
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -50,12 +50,14 @@ jobs:
             PRERELEASE="false"
             NOTES="Release ${GITHUB_REF_NAME}"
           else
-            VERSION="dev-${GITHUB_RUN_ID}-${BUILD_DATE}-${SHORT_SHA}"
+            RUN_NUMBER="$(printf "%04d" "${GITHUB_RUN_NUMBER}")"
+            VERSION="dev-${RUN_NUMBER}-${BUILD_DATE}-${SHORT_SHA}"
             RELEASE_TAG="dev"
             CHANNEL="dev"
-            TITLE="dev ${VERSION}"
+            TITLE="Dev Build (${VERSION})"
             PRERELEASE="true"
-            NOTES="Rolling dev build ${VERSION} from ${GITHUB_REF_NAME} (${SHORT_SHA})."
+            printf -v NOTES 'Automated pre-release from `%s` branch.\n\nVersion: `%s`\nCommit: %s' \
+              "${GITHUB_REF_NAME}" "${VERSION}" "${SHORT_SHA}"
           fi
 
           {

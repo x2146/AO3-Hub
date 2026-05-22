@@ -94,7 +94,7 @@ Release 使用 matrix 交叉编译四个目标：
 普通 push 会覆盖 GitHub prerelease `dev` 的资源，但每次构建都有唯一版本号：
 
 ```text
-dev-<run_id>-<UTC yyyyMMddHHmmss>-<short_sha>
+dev-<run_number:0000>-<UTC yyyyMMdd>-<short_sha>
 ```
 
 dev channel manifest 固定在：
