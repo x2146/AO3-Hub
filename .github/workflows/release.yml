@@ -29,8 +29,13 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Use npm registry in CI
+        run: |
+          perl -0pi -e 's#https://registry\.npmmirror\.com/#https://registry.npmjs.org/#g' bun.lock
+
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        timeout-minutes: 10
+        run: bun install --frozen-lockfile --registry https://registry.npmjs.org --no-progress
 
       - name: Run CI checks
         run: bun run ci
@@ -119,8 +124,13 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Use npm registry in CI
+        run: |
+          perl -0pi -e 's#https://registry\.npmmirror\.com/#https://registry.npmjs.org/#g' bun.lock
+
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        timeout-minutes: 10
+        run: bun install --frozen-lockfile --registry https://registry.npmjs.org --no-progress
 
       - name: Build binary
         run: |
