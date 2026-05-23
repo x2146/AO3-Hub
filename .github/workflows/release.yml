@@ -24,26 +24,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Use npm registry in CI
-        run: |
-          perl -0pi -e 's#https://registry\.npmmirror\.com/#https://registry.npmjs.org/#g' bun.lock
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
       - name: Install dependencies
         timeout-minutes: 10
-        run: bun install --frozen-lockfile --registry https://registry.npmjs.org --no-progress
+        run: npm ci
 
       - name: Run CI checks
-        run: bun run ci
+        run: npm run ci
 
   meta:
     name: Resolve release metadata
@@ -54,6 +51,7 @@ jobs:
       channel: ${{ steps.meta.outputs.channel }}
       notes: ${{ steps.meta.outputs.notes }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      published_at: ${{ steps.meta.outputs.published_at }}
       release_tag: ${{ steps.meta.outputs.release_tag }}
       title: ${{ steps.meta.outputs.title }}
       version: ${{ steps.meta.outputs.version }}
@@ -68,6 +66,7 @@ jobs:
           PKG_VERSION="$(node -p 'require("./package.json").version')"
           SHORT_SHA="${GITHUB_SHA::7}"
           BUILD_DATE="$(date -u +%Y%m%d)"
+          PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -95,6 +94,7 @@ jobs:
           {
             echo "channel=${CHANNEL}"
             echo "prerelease=${PRERELEASE}"
+            echo "published_at=${PUBLISHED_AT}"
             echo "release_tag=${RELEASE_TAG}"
             echo "title=${TITLE}"
             echo "version=${VERSION}"
@@ -124,30 +124,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Use npm registry in CI
-        run: |
-          perl -0pi -e 's#https://registry\.npmmirror\.com/#https://registry.npmjs.org/#g' bun.lock
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
       - name: Install dependencies
         timeout-minutes: 10
-        run: bun install --frozen-lockfile --registry https://registry.npmjs.org --no-progress
+        run: npm ci
 
       - name: Build binary
         run: |
           AO3HUB_TARGET="${{ matrix.target }}" \
           AO3HUB_OUT="${{ matrix.asset }}" \
           AO3HUB_VERSION="${{ needs.meta.outputs.version }}" \
-          bun run build
+          AO3HUB_BUILT_AT="${{ needs.meta.outputs.published_at }}" \
+          npm run build
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -182,6 +180,7 @@ jobs:
         env:
           AO3HUB_RELEASE_CHANNEL: ${{ needs.meta.outputs.channel }}
           AO3HUB_RELEASE_NOTES: ${{ needs.meta.outputs.notes }}
+          AO3HUB_RELEASE_PUBLISHED_AT: ${{ needs.meta.outputs.published_at }}
           AO3HUB_RELEASE_REPO: ${{ github.repository }}
           AO3HUB_RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
           AO3HUB_RELEASE_VERSION: ${{ needs.meta.outputs.version }}
@@ -195,6 +194,7 @@ jobs:
             --version "${AO3HUB_RELEASE_VERSION}" \
             --channel "${AO3HUB_RELEASE_CHANNEL}" \
             --notes "${AO3HUB_RELEASE_NOTES}" \
+            --published-at "${AO3HUB_RELEASE_PUBLISHED_AT}" \
             --out server/build/release/manifest.json \
             server/build/release/ao3-hub-*
           (cd server/build/release && sha256sum ao3-hub-* manifest.json launcher.sh > SHA256SUMS)
@@ -204,20 +204,24 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f "${{ needs.meta.outputs.release_tag }}" "${GITHUB_SHA}"
+          GIT_COMMITTER_DATE="${{ needs.meta.outputs.published_at }}" \
+            git tag -fa "${{ needs.meta.outputs.release_tag }}" "${GITHUB_SHA}" \
+              -m "Dev build ${{ needs.meta.outputs.version }}"
           git push origin "refs/tags/${{ needs.meta.outputs.release_tag }}" --force
 
       - name: Publish stable release
         if: needs.meta.outputs.channel == 'stable'
         env:
+          AO3HUB_RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
+          AO3HUB_RELEASE_TITLE: ${{ needs.meta.outputs.title }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ needs.meta.outputs.release_tag }}"
+          TAG="${AO3HUB_RELEASE_TAG}"
           if gh release view "${TAG}" >/dev/null 2>&1; then
             gh release upload "${TAG}" server/build/release/* --clobber
           else
             gh release create "${TAG}" server/build/release/* \
-              --title "${{ needs.meta.outputs.title }}" \
+              --title "${AO3HUB_RELEASE_TITLE}" \
               --generate-notes \
               --verify-tag
           fi
@@ -225,19 +229,22 @@ jobs:
       - name: Publish dev release
         if: needs.meta.outputs.channel == 'dev'
         env:
+          AO3HUB_RELEASE_NOTES: ${{ needs.meta.outputs.notes }}
+          AO3HUB_RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
+          AO3HUB_RELEASE_TITLE: ${{ needs.meta.outputs.title }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ needs.meta.outputs.release_tag }}"
+          set -euo pipefail
+
+          TAG="${AO3HUB_RELEASE_TAG}"
+          NOTES_FILE="$(mktemp)"
+          printf '%s\n' "${AO3HUB_RELEASE_NOTES}" > "${NOTES_FILE}"
+
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release edit "${TAG}" \
-              --title "${{ needs.meta.outputs.title }}" \
-              --notes "${{ needs.meta.outputs.notes }}" \
-              --prerelease
-            gh release upload "${TAG}" server/build/release/* --clobber
-          else
-            gh release create "${TAG}" server/build/release/* \
-              --title "${{ needs.meta.outputs.title }}" \
-              --notes "${{ needs.meta.outputs.notes }}" \
-              --prerelease \
-              --verify-tag
+            gh release delete "${TAG}" --yes
           fi
+          gh release create "${TAG}" server/build/release/* \
+            --title "${AO3HUB_RELEASE_TITLE}" \
+            --notes-file "${NOTES_FILE}" \
+            --prerelease \
+            --verify-tag

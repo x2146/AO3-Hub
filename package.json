@@ -8,13 +8,13 @@
     "web"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,magenta \"bun run dev:server\" \"bun run --cwd web dev\"",
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev:server\" \"npm run dev --workspace @ao3hub/web\"",
     "dev:server": "go run ./cmd/ao3hub",
-    "dev:web": "bun run --cwd web dev",
-    "typecheck": "go test ./... && bun run --cwd web typecheck",
-    "build:web": "bun run --cwd web build",
-    "build": "bun run scripts/build-go.mjs",
-    "ci": "bun run typecheck && bun run build",
+    "dev:web": "npm run dev --workspace @ao3hub/web",
+    "typecheck": "go test ./... && npm run typecheck --workspace @ao3hub/web",
+    "build:web": "npm run build --workspace @ao3hub/web",
+    "build": "node scripts/build-go.mjs",
+    "ci": "npm run typecheck && npm run build",
     "ota:manifest": "go run ./cmd/ao3hub-manifest",
     "start": "go run ./cmd/ao3hub"
   },

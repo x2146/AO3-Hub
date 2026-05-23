@@ -686,7 +686,7 @@ func (a *App) serveAsset(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !embeddedHasIndex() {
-		http.Error(w, "AO3-Hub server is running. Web bundle is not embedded — run `bun --cwd web run dev` or build the server.", http.StatusNotFound)
+		http.Error(w, "AO3-Hub server is running. Web bundle is not embedded; run `npm run dev:web` or build the server.", http.StatusNotFound)
 		return
 	}
 	http.Error(w, "not found", http.StatusNotFound)

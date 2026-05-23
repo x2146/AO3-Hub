@@ -1,8 +1,9 @@
-import { $ } from "bun";
-import { cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = path.resolve(import.meta.dirname, "..");
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const WEB = path.join(ROOT, "web");
 const WEB_DIST = path.join(WEB, "dist");
 const EMBED_DIST = path.join(ROOT, "internal", "webassets", "web-dist");
@@ -25,7 +26,7 @@ function goEnvForTarget() {
 
 async function main() {
   console.log("[build] vite build");
-  await $`bun run build`.cwd(WEB);
+  await run("npm", ["run", "build", "--workspace", "@ao3hub/web"]);
 
   console.log("[build] embedding web/dist");
   await rm(EMBED_DIST, { recursive: true, force: true });
@@ -41,10 +42,12 @@ async function main() {
   };
   const ldflags = [
     `-X ao3hub/internal/app.Version=${process.env.AO3HUB_VERSION ?? (await packageVersion())}`,
-    `-X ao3hub/internal/app.BuiltAt=${new Date().toISOString()}`,
+    `-X ao3hub/internal/app.BuiltAt=${process.env.AO3HUB_BUILT_AT ?? new Date().toISOString()}`,
   ].join(" ");
 
-  await $`go build -trimpath -ldflags=${ldflags} -o ${OUT_PATH} ./cmd/ao3hub`.env(env);
+  await run("go", ["build", "-trimpath", `-ldflags=${ldflags}`, "-o", OUT_PATH, "./cmd/ao3hub"], {
+    env,
+  });
 
   console.log("[build] restoring empty embed directory");
   await rm(EMBED_DIST, { recursive: true, force: true });
@@ -59,8 +62,28 @@ async function main() {
 }
 
 async function packageVersion() {
-  const pkg = await Bun.file(path.join(ROOT, "package.json")).json();
+  const pkg = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
   return String(pkg.version ?? "0.0.0");
+}
+
+async function run(command, args, options = {}) {
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: ROOT,
+      env: options.env ?? process.env,
+      shell: process.platform === "win32",
+      stdio: "inherit",
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const suffix = signal ? `signal ${signal}` : `exit code ${code}`;
+      reject(new Error(`${command} ${args.join(" ")} failed with ${suffix}`));
+    });
+  });
 }
 
 await main();

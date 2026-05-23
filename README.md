@@ -39,18 +39,18 @@ AO3-Hub/
 
 ## Dev
 
-需要 Go 和 Bun（前端构建/包管理）。
+需要 Go 和 Node.js/npm（前端构建/包管理）。
 
 ```bash
-bun install                   # 装所有 workspace
-bun run dev                   # 并行起 server（默认 :3000）+ web (:5173)
+npm install                   # 装所有 workspace
+npm run dev                   # 并行起 server（默认 :3000）+ web (:5173)
 ```
 
 或分别：
 
 ```bash
-bun run dev:server            # 起 Go server
-bun run dev:web               # 起 vite，:5173，/api 代理到配置的 server 端口
+npm run dev:server            # 起 Go server
+npm run dev:web               # 起 vite，:5173，/api 代理到配置的 server 端口
 ```
 
 数据默认存 `./data/`，可用 `AO3HUB_DATA_DIR=/some/path` 覆盖。
@@ -60,23 +60,23 @@ bun run dev:web               # 起 vite，:5173，/api 代理到配置的 serve
 ## Build（单文件）
 
 ```bash
-bun run build                 # vite build → go:embed → go build
+npm run build                 # vite build → go:embed → go build
 # 产物：server/build/ao3-hub
 ```
 
 跨平台构建（在 Mac 上构 Linux 二进制）：
 
 ```bash
-AO3HUB_TARGET=linux-x64 bun run build
-AO3HUB_TARGET=linux-arm64 bun run build
-AO3HUB_TARGET=darwin-arm64 bun run build
+AO3HUB_TARGET=linux-x64 npm run build
+AO3HUB_TARGET=linux-arm64 npm run build
+AO3HUB_TARGET=darwin-arm64 npm run build
 ```
 
 ## CI / Release
 
 GitHub Actions 使用同一个 `CI / Release` workflow：
 
-- PR：只执行 `bun install --frozen-lockfile`、类型检查和单文件构建。
+- PR：只执行 `npm ci`、类型检查和单文件构建。
 - 普通 push：先执行 CI 校验，通过后发布滚动 `dev` OTA。
 - push 形如 `v0.1.1` 的 tag：先执行 CI 校验，通过后发布稳定版 OTA。
 
