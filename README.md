@@ -26,6 +26,7 @@ AO3-Hub/
 ├── server/
 │   └── scripts/launcher.sh # OTA 重启 launcher
 ├── scripts/build-go.mjs    # vite build → go:embed → go build
+├── cmd/ao3hub-manifest/    # OTA manifest 生成器
 └── web/
     ├── src/
     │   ├── main.tsx + router.tsx
@@ -81,10 +82,10 @@ GitHub Actions 使用同一个 `CI / Release` workflow：
 
 Release 使用 matrix 交叉编译四个目标：
 
-- `bun-darwin-arm64` → `ao3-hub-darwin-arm64`
-- `bun-darwin-x64` → `ao3-hub-darwin-x64`
-- `bun-linux-arm64` → `ao3-hub-linux-arm64`
-- `bun-linux-x64` → `ao3-hub-linux-x64`
+- `darwin-arm64` → `ao3-hub-darwin-arm64`
+- `darwin-x64` → `ao3-hub-darwin-x64`
+- `linux-arm64` → `ao3-hub-linux-arm64`
+- `linux-x64` → `ao3-hub-linux-x64`
 
 普通 push 会覆盖 GitHub prerelease `dev` 的资源，但每次构建都有唯一版本号：
 
@@ -167,7 +168,7 @@ Restart=on-failure
 https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json
 ```
 
-Release workflow 会自动生成并上传 `manifest.json`。也可以手动发布一个兼容 manifest（参考 `manifest.example.json`）到任意 URL：
+Release workflow 会自动用 Go 生成并上传 `manifest.json`。也可以手动发布一个兼容 manifest（参考 `manifest.example.json`）到任意 URL：
 
 ```json
 {

@@ -32,7 +32,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
+          go-version-file: go.mod
 
       - name: Use npm registry in CI
         run: |
@@ -111,13 +111,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: bun-darwin-arm64
+          - target: darwin-arm64
             asset: ao3-hub-darwin-arm64
-          - target: bun-darwin-x64
+          - target: darwin-x64
             asset: ao3-hub-darwin-x64
-          - target: bun-linux-arm64
+          - target: linux-arm64
             asset: ao3-hub-linux-arm64
-          - target: bun-linux-x64
+          - target: linux-x64
             asset: ao3-hub-linux-x64
 
     steps:
@@ -132,7 +132,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
+          go-version-file: go.mod
 
       - name: Use npm registry in CI
         run: |
@@ -167,10 +167,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          bun-version: latest
+          go-version-file: go.mod
 
       - name: Download binaries
         uses: actions/download-artifact@v4
@@ -179,15 +179,22 @@ jobs:
           merge-multiple: true
 
       - name: Prepare release assets
+        env:
+          AO3HUB_RELEASE_CHANNEL: ${{ needs.meta.outputs.channel }}
+          AO3HUB_RELEASE_NOTES: ${{ needs.meta.outputs.notes }}
+          AO3HUB_RELEASE_REPO: ${{ github.repository }}
+          AO3HUB_RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
+          AO3HUB_RELEASE_VERSION: ${{ needs.meta.outputs.version }}
         run: |
+          set -euo pipefail
           cp server/scripts/launcher.sh server/build/release/launcher.sh
           chmod +x server/build/release/ao3-hub-* server/build/release/launcher.sh
-          bun run ota:manifest -- \
-            --repo "${GITHUB_REPOSITORY}" \
-            --tag "${{ needs.meta.outputs.release_tag }}" \
-            --version "${{ needs.meta.outputs.version }}" \
-            --channel "${{ needs.meta.outputs.channel }}" \
-            --notes "${{ needs.meta.outputs.notes }}" \
+          go run ./cmd/ao3hub-manifest \
+            --repo "${AO3HUB_RELEASE_REPO}" \
+            --tag "${AO3HUB_RELEASE_TAG}" \
+            --version "${AO3HUB_RELEASE_VERSION}" \
+            --channel "${AO3HUB_RELEASE_CHANNEL}" \
+            --notes "${AO3HUB_RELEASE_NOTES}" \
             --out server/build/release/manifest.json \
             server/build/release/ao3-hub-*
           (cd server/build/release && sha256sum ao3-hub-* manifest.json launcher.sh > SHA256SUMS)

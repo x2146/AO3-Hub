@@ -13,8 +13,7 @@ const OUT_PATH = path.join(OUT_DIR, OUT_NAME);
 function goEnvForTarget() {
   const target = process.env.AO3HUB_TARGET?.trim();
   if (!target) return {};
-  const normalized = target.replace(/^bun-/, "");
-  const [goos, arch] = normalized.split("-");
+  const [goos, arch] = target.split("-");
   if (!goos || !arch) {
     throw new Error(`Invalid AO3HUB_TARGET: ${target}`);
   }

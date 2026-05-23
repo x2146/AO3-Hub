@@ -15,7 +15,7 @@
     "build:web": "bun run --cwd web build",
     "build": "bun run scripts/build-go.mjs",
     "ci": "bun run typecheck && bun run build",
-    "ota:manifest": "bun run server/scripts/release-manifest.ts",
+    "ota:manifest": "go run ./cmd/ao3hub-manifest",
     "start": "go run ./cmd/ao3hub"
   },
   "devDependencies": {
