@@ -2,28 +2,66 @@ package app
 
 import "testing"
 
-func TestCompareVersionsDevRunNumbers(t *testing.T) {
+func TestCheckForUpdateStableStrategy(t *testing.T) {
 	tests := []struct {
-		name string
-		a    string
-		b    string
-		want int
+		name       string
+		current    string
+		remote     string
+		hasUpdate  bool
+		wantReason string
 	}{
-		{name: "newer dev run", a: "dev-0012-20260523-abcdef0", b: "dev-0011-20260522-fedcba9", want: 1},
-		{name: "older dev run", a: "dev-0011-20260522-fedcba9", b: "dev-0012-20260523-abcdef0", want: -1},
-		{name: "same dev version", a: "dev-0012-20260523-abcdef0", b: "dev-0012-20260523-abcdef0", want: 0},
-		{name: "dev release beats local dev", a: "dev-0012-20260523-abcdef0", b: "dev-local", want: 1},
-		{name: "local dev is older than dev release", a: "dev-local", b: "dev-0012-20260523-abcdef0", want: -1},
-		{name: "dev can upgrade stable users", a: "dev-0012-20260523-abcdef0", b: "0.1.0", want: 1},
-		{name: "stable can upgrade dev users when selected", a: "0.1.1", b: "dev-0012-20260523-abcdef0", want: 1},
-		{name: "stable v prefix is equivalent", a: "v0.1.1", b: "0.1.1", want: 0},
+		{name: "newer stable", current: "v0.1.0", remote: "v0.1.1", hasUpdate: true, wantReason: "远端 stable 版本更新"},
+		{name: "same stable ignores v prefix", current: "0.1.1", remote: "v0.1.1", wantReason: "版本相同"},
+		{name: "older stable", current: "v0.2.0", remote: "v0.1.1", wantReason: "当前 stable 版本已是最新"},
+		{name: "stable can replace dev build", current: "dev-0012-20260523-abcdef0", remote: "v0.1.1", hasUpdate: true, wantReason: "当前为 dev 构建，允许切换到 stable"},
+		{name: "stable rejects dev remote", current: "v0.1.0", remote: "dev-0012-20260523-abcdef0", wantReason: "stable channel 需要远端版本是 semver"},
+		{name: "unknown current is not comparable", current: "nightly", remote: "v0.1.1", wantReason: "当前版本不是可比较的 semver"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := compareVersions(tt.a, tt.b)
-			if got != tt.want {
-				t.Fatalf("compareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+			got := checkForUpdate("stable", tt.current, tt.remote)
+			if got.Strategy != "stable-semver" {
+				t.Fatalf("strategy = %q, want stable-semver", got.Strategy)
+			}
+			if got.HasUpdate != tt.hasUpdate {
+				t.Fatalf("hasUpdate = %v, want %v", got.HasUpdate, tt.hasUpdate)
+			}
+			if got.Reason != tt.wantReason {
+				t.Fatalf("reason = %q, want %q", got.Reason, tt.wantReason)
+			}
+		})
+	}
+}
+
+func TestCheckForUpdateDevStrategy(t *testing.T) {
+	tests := []struct {
+		name       string
+		current    string
+		remote     string
+		hasUpdate  bool
+		wantReason string
+	}{
+		{name: "newer dev run", current: "dev-0007-20260401-aaaaaaa", remote: "dev-0042-20260425-bbbbbbb", hasUpdate: true, wantReason: "远端 dev run number 更新"},
+		{name: "same commit sha", current: "dev-0007-20260401-aaaaaaa", remote: "dev-0042-20260425-aaaaaaa", wantReason: "commit SHA 相同"},
+		{name: "older dev run", current: "dev-0042-20260425-bbbbbbb", remote: "dev-0007-20260401-aaaaaaa", wantReason: "当前 dev run number 已是最新"},
+		{name: "local dev accepts ci dev", current: "dev-local", remote: "dev-0042-20260425-bbbbbbb", hasUpdate: true, wantReason: "本地 dev 版本未注入 CI run，允许升级"},
+		{name: "stable does not auto switch to dev", current: "v0.1.1", remote: "dev-0042-20260425-bbbbbbb", wantReason: "当前版本不是 dev CI tag，避免自动切换或回退"},
+		{name: "invalid remote dev", current: "dev-0007-20260401-aaaaaaa", remote: "v0.1.1", wantReason: "dev channel 需要远端版本是 dev CI tag"},
+		{name: "unknown dev current", current: "dev-preview", remote: "dev-0042-20260425-bbbbbbb", wantReason: "当前版本不是 dev CI tag，避免自动切换或回退"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := checkForUpdate("dev", tt.current, tt.remote)
+			if got.Strategy != "dev-run" {
+				t.Fatalf("strategy = %q, want dev-run", got.Strategy)
+			}
+			if got.HasUpdate != tt.hasUpdate {
+				t.Fatalf("hasUpdate = %v, want %v", got.HasUpdate, tt.hasUpdate)
+			}
+			if got.Reason != tt.wantReason {
+				t.Fatalf("reason = %q, want %q", got.Reason, tt.wantReason)
 			}
 		})
 	}

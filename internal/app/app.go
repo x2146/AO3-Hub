@@ -677,7 +677,7 @@ func (a *App) mountUpdate(mux *http.ServeMux) {
 			status = http.StatusOK
 			if result.Restart {
 				cfg, _ := a.store.LoadConfig()
-				scheduleExit(cfg.Update.RestartDelayMS)
+				scheduleExec(cfg.Update.RestartDelayMS)
 			}
 		}
 		writeJSON(w, status, result)

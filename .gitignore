@@ -71,6 +71,7 @@ web_modules/
 !.env.example
 
 # AO3-Hub
+.DS_Store
 server/data/
 server/build/
 server/web-dist/

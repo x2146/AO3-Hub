@@ -201,12 +201,14 @@ type Manifest struct {
 }
 
 type LatestVersion struct {
-	Version     string `json:"version"`
-	Channel     string `json:"channel,omitempty"`
-	Notes       string `json:"notes,omitempty"`
-	PublishedAt string `json:"publishedAt,omitempty"`
-	HasUpdate   bool   `json:"hasUpdate"`
-	DownloadURL string `json:"downloadUrl,omitempty"`
+	Version      string `json:"version"`
+	Channel      string `json:"channel,omitempty"`
+	Notes        string `json:"notes,omitempty"`
+	PublishedAt  string `json:"publishedAt,omitempty"`
+	HasUpdate    bool   `json:"hasUpdate"`
+	Strategy     string `json:"strategy,omitempty"`
+	UpdateReason string `json:"updateReason,omitempty"`
+	DownloadURL  string `json:"downloadUrl,omitempty"`
 }
 
 type VersionInfo struct {

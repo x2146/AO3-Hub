@@ -225,6 +225,8 @@ export const VersionInfo = z.object({
       notes: z.string().optional(),
       publishedAt: z.string().optional(),
       hasUpdate: z.boolean(),
+      strategy: z.string().optional(),
+      updateReason: z.string().optional(),
       downloadUrl: z.string().optional(),
     })
     .optional(),

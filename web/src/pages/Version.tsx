@@ -77,6 +77,12 @@ export function Version() {
                 <Badge>已最新</Badge>
               )}
             </div>
+            {(latest.strategy || latest.updateReason) && (
+              <p className="text-muted-foreground text-[12px]">
+                {latest.strategy ? `${latest.strategy} · ` : ""}
+                {latest.updateReason}
+              </p>
+            )}
             {latest.notes && (
               <pre className="whitespace-pre-wrap rounded-2xl border border-border bg-surface/60 p-4 font-mono text-[12px] leading-relaxed">
                 {latest.notes}
