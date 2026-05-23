@@ -19,6 +19,7 @@ import { api, subscribeStream } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import {
   applyReaderSettings,
+  DEFAULT_READER_SETTINGS,
   loadReaderSettings,
   READER_LIMITS,
   saveReaderSettings,
@@ -37,6 +38,21 @@ export function Reader() {
   const [tocOpen, setTocOpen] = useState(false);
   const [progress, setProgress] = useState(0);
   const [showAllEn, setShowAllEn] = useState(true);
+  const { data: config } = useQuery({
+    queryKey: ["config", "public"],
+    queryFn: () => api.getPublicConfig(),
+  });
+
+  useEffect(() => {
+    if (!config) return;
+    setSettings(
+      loadReaderSettings({
+        font: config.reader.defaultFont,
+        zh: config.reader.defaultZhScale,
+        measure: config.reader.defaultMeasure,
+      }),
+    );
+  }, [config]);
 
   useEffect(() => {
     applyReaderSettings(settings);
@@ -151,6 +167,15 @@ export function Reader() {
         <SettingsDrawer
           settings={settings}
           setSettings={setSettings}
+          defaultSettings={
+            config
+              ? {
+                  font: config.reader.defaultFont,
+                  zh: config.reader.defaultZhScale,
+                  measure: config.reader.defaultMeasure,
+                }
+              : DEFAULT_READER_SETTINGS
+          }
           showAllEn={showAllEn}
           setShowAllEn={setShowAllEn}
           onClose={() => setSettingsOpen(false)}
@@ -304,12 +329,14 @@ function ReaderTopbar(props: {
 function SettingsDrawer({
   settings,
   setSettings,
+  defaultSettings,
   showAllEn,
   setShowAllEn,
   onClose,
 }: {
   settings: ReaderSettings;
   setSettings: (s: ReaderSettings) => void;
+  defaultSettings: ReaderSettings;
   showAllEn: boolean;
   setShowAllEn: (v: boolean) => void;
   onClose: () => void;
@@ -375,7 +402,7 @@ function SettingsDrawer({
           variant="outline"
           size="sm"
           className="gap-1.5 self-start"
-          onClick={() => setSettings({ font: 17, zh: 0.96, measure: 760 })}
+          onClick={() => setSettings(defaultSettings)}
         >
           <RotateCcw className="size-3.5" />
           恢复默认

@@ -17,6 +17,11 @@ export { sessions } from "./sessions";
 export type { SessionRecord } from "./sessions";
 
 const DEFAULT_CONFIG = Config.parse({
+  server: {},
+  auth: {},
+  stream: {},
+  import: {},
+  ui: {},
   llm: {},
   ao3: {},
   reader: {},
@@ -25,9 +30,16 @@ const DEFAULT_CONFIG = Config.parse({
 
 export async function loadConfig() {
   const data = await readJson<unknown>(paths.config());
-  if (!data) return DEFAULT_CONFIG;
+  if (!data) {
+    await writeJson(paths.config(), DEFAULT_CONFIG);
+    return DEFAULT_CONFIG;
+  }
   const parsed = Config.safeParse(data);
-  return parsed.success ? parsed.data : DEFAULT_CONFIG;
+  if (!parsed.success) return DEFAULT_CONFIG;
+  if (JSON.stringify(data) !== JSON.stringify(parsed.data)) {
+    await writeJson(paths.config(), parsed.data);
+  }
+  return parsed.data;
 }
 
 export async function saveConfig(data: unknown) {

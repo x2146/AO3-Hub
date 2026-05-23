@@ -124,7 +124,7 @@ export async function runTranslation(storyId: string): Promise<void> {
       continue;
     }
 
-    const batches = chunk(pending, cfg.llm.blocksPerRequest);
+    const batches = chunk(pending, cfg.llm.blocksPerRequest, cfg.llm.maxTokensPerRequest);
 
     const concurrency = Math.max(1, cfg.llm.concurrency);
     let cursor = 0;

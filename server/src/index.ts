@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
-import { HOST, PORT, VERSION } from "./env";
+import { resolveHost, resolvePort, VERSION } from "./env";
 import stories from "./routes/stories";
 import config from "./routes/config";
 import stream from "./routes/stream";
@@ -12,6 +12,7 @@ import usersRoute from "./routes/users";
 import { attachUser } from "./auth/middleware";
 import { assets } from "./embedded";
 import { initWorker, resumeOnStartup } from "./service";
+import { loadConfig } from "./db";
 
 const app = new Hono();
 app.use(logger());
@@ -77,9 +78,12 @@ app.get("*", (c) => {
 initWorker();
 await resumeOnStartup();
 
+const cfg = await loadConfig();
+const host = resolveHost(cfg.server.host);
+const port = resolvePort(cfg.server.port);
 const server = Bun.serve({
-  port: PORT,
-  hostname: HOST,
+  port,
+  hostname: host,
   fetch: app.fetch,
 });
 

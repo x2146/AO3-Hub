@@ -120,6 +120,7 @@ export const LlmConfig = z.object({
   temperature: z.number().default(0.3),
   concurrency: z.number().int().positive().default(3),
   blocksPerRequest: z.number().int().positive().default(8),
+  maxTokensPerRequest: z.number().int().positive().default(3500),
 });
 export type LlmConfig = z.infer<typeof LlmConfig>;
 
@@ -136,8 +137,35 @@ export type Ao3Config = z.infer<typeof Ao3Config>;
 export const ReaderConfig = z.object({
   defaultMeasure: z.number().int().positive().default(780),
   defaultFont: z.number().int().positive().default(17),
+  defaultZhScale: z.number().positive().default(0.96),
 });
 export type ReaderConfig = z.infer<typeof ReaderConfig>;
+
+export const ServerConfig = z.object({
+  host: z.string().trim().min(1).default("0.0.0.0"),
+  port: z.coerce.number().int().min(1).max(65535).default(3000),
+});
+export type ServerConfig = z.infer<typeof ServerConfig>;
+
+export const AuthConfig = z.object({
+  sessionTtlDays: z.number().int().positive().default(30),
+});
+export type AuthConfig = z.infer<typeof AuthConfig>;
+
+export const StreamConfig = z.object({
+  heartbeatMs: z.number().int().positive().default(15000),
+});
+export type StreamConfig = z.infer<typeof StreamConfig>;
+
+export const ImportConfig = z.object({
+  minHtmlLength: z.number().int().nonnegative().default(100),
+});
+export type ImportConfig = z.infer<typeof ImportConfig>;
+
+export const UiConfig = z.object({
+  libraryRefetchIntervalMs: z.number().int().positive().default(3000),
+});
+export type UiConfig = z.infer<typeof UiConfig>;
 
 export const DEFAULT_UPDATE_MANIFEST_URL =
   "https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json";
@@ -148,10 +176,16 @@ export const UpdateConfig = z.object({
   manifestURL: z.string().default(DEFAULT_UPDATE_MANIFEST_URL),
   channel: z.string().default("stable"),
   autoCheck: z.boolean().default(false),
+  restartDelayMs: z.number().int().nonnegative().default(600),
 });
 export type UpdateConfig = z.infer<typeof UpdateConfig>;
 
 export const Config = z.object({
+  server: ServerConfig.default({}),
+  auth: AuthConfig.default({}),
+  stream: StreamConfig.default({}),
+  import: ImportConfig.default({}),
+  ui: UiConfig.default({}),
   llm: LlmConfig,
   ao3: Ao3Config,
   reader: ReaderConfig,

@@ -87,6 +87,7 @@ export const api = {
     http<{ ok: true }>(`/stories/${id}`, { method: "DELETE" }),
 
   getConfig: () => http<Config & { llm: Config["llm"] & { hasApiKey: boolean }; ao3: Config["ao3"] & { hasCookie: boolean } }>("/config"),
+  getPublicConfig: () => http<Pick<Config, "reader" | "ui">>("/config/public"),
   saveConfig: (body: any) =>
     http<{ ok: true }>("/config", { method: "PUT", body: JSON.stringify(body) }),
   testConfig: () =>

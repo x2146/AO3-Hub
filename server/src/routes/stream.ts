@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { StreamEvent } from "@ao3hub/shared";
-import { story } from "../db";
+import { loadConfig, story } from "../db";
 import { subscribe } from "../sse";
 
 const r = new Hono();
@@ -44,9 +44,10 @@ r.get("/:id/stream", async (c) => {
       else abort.addEventListener("abort", () => resolve("close"), { once: true });
     });
 
+    const cfg = await loadConfig();
     const heartbeat = setInterval(() => {
       stream.writeSSE({ event: "ping", data: String(Date.now()) }).catch(() => {});
-    }, 15000);
+    }, cfg.stream.heartbeatMs);
 
     try {
       while (!abort.aborted) {

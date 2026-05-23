@@ -16,5 +16,17 @@ export const BUILT_AT =
 export const PLATFORM = `${process.platform}`;
 export const ARCH = `${process.arch}`;
 
-export const PORT = Number(process.env.PORT ?? 3000);
-export const HOST = process.env.HOST ?? "0.0.0.0";
+export function resolveHost(configHost: string): string {
+  return process.env.HOST?.trim() || configHost;
+}
+
+export function resolvePort(configPort: number): number {
+  const raw = process.env.PORT?.trim();
+  if (!raw) return configPort;
+
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid PORT: ${raw}`);
+  }
+  return port;
+}

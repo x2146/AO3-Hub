@@ -6,18 +6,23 @@ export type ReaderSettings = {
   measure: number;
 };
 
-const defaults: ReaderSettings = {
+export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   font: 17,
   zh: 0.96,
   measure: 760,
 };
 
-export function loadReaderSettings(): ReaderSettings {
+export function loadReaderSettings(defaults = DEFAULT_READER_SETTINGS): ReaderSettings {
   return {
-    font: Number(localStorage.getItem(KEY_PREFIX + "font") ?? defaults.font),
-    zh: Number(localStorage.getItem(KEY_PREFIX + "zh") ?? defaults.zh),
-    measure: Number(localStorage.getItem(KEY_PREFIX + "measure") ?? defaults.measure),
+    font: readNumber(KEY_PREFIX + "font", defaults.font),
+    zh: readNumber(KEY_PREFIX + "zh", defaults.zh),
+    measure: readNumber(KEY_PREFIX + "measure", defaults.measure),
   };
+}
+
+function readNumber(key: string, fallback: number): number {
+  const raw = localStorage.getItem(key);
+  return raw == null ? fallback : Number(raw);
 }
 
 export function saveReaderSettings(s: ReaderSettings): void {

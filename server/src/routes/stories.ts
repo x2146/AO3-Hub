@@ -5,7 +5,7 @@ import {
   RetryRequest,
   type ChapterView,
 } from "@ao3hub/shared";
-import { loadIndex, story, type UserRecord } from "../db";
+import { loadConfig, loadIndex, story, type UserRecord } from "../db";
 import { requireAuth } from "../auth/middleware";
 import {
   createFromHtml,
@@ -49,7 +49,8 @@ r.post("/upload", requireAuth, async (c) => {
   } else {
     html = await c.req.text();
   }
-  if (!html || html.length < 100) {
+  const cfg = await loadConfig();
+  if (!html || html.length < cfg.import.minHtmlLength) {
     return c.json({ error: "empty or invalid html" }, 400);
   }
   try {

@@ -10,6 +10,10 @@ import { StatusPill } from "../components/StatusPill";
 export function Library() {
   const qc = useQueryClient();
   const { user } = useAuth();
+  const { data: config } = useQuery({
+    queryKey: ["config", "public"],
+    queryFn: () => api.getPublicConfig(),
+  });
   const { data, isLoading, error } = useQuery({
     queryKey: ["stories"],
     queryFn: () => api.listStories(),
@@ -18,7 +22,7 @@ export function Library() {
       const inFlight = stories?.some((s) =>
         ["queued", "fetching", "parsing", "translating"].includes(s.status),
       );
-      return inFlight ? 3000 : false;
+      return inFlight ? config?.ui.libraryRefetchIntervalMs ?? 3000 : false;
     },
   });
 

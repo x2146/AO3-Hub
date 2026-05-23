@@ -6,13 +6,21 @@ import { requireAdmin } from "../auth/middleware";
 
 const r = new Hono<{ Variables: { user: UserRecord | null } }>();
 
-r.use("*", requireAdmin);
-
 function mask(key: string): string {
   if (!key) return "";
   if (key.length <= 8) return "*".repeat(key.length);
   return key.slice(0, 4) + "…" + key.slice(-4);
 }
+
+r.get("/public", async (c) => {
+  const cfg = await loadConfig();
+  return c.json({
+    reader: cfg.reader,
+    ui: cfg.ui,
+  });
+});
+
+r.use("*", requireAdmin);
 
 r.get("/", async (c) => {
   const cfg = await loadConfig();
@@ -28,6 +36,11 @@ r.put("/", async (c) => {
   const current = await loadConfig();
 
   const merged = {
+    server: { ...current.server, ...body.server },
+    auth: { ...current.auth, ...body.auth },
+    stream: { ...current.stream, ...body.stream },
+    import: { ...current.import, ...body.import },
+    ui: { ...current.ui, ...body.ui },
     llm: {
       ...current.llm,
       ...body.llm,

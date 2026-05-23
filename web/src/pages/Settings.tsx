@@ -14,6 +14,22 @@ import { Separator } from "@/components/ui/separator";
 import { api } from "../lib/api";
 
 type LocalConfig = {
+  server: {
+    host: string;
+    port: number;
+  };
+  auth: {
+    sessionTtlDays: number;
+  };
+  stream: {
+    heartbeatMs: number;
+  };
+  import: {
+    minHtmlLength: number;
+  };
+  ui: {
+    libraryRefetchIntervalMs: number;
+  };
   llm: {
     baseURL: string;
     apiKey: string;
@@ -21,15 +37,22 @@ type LocalConfig = {
     temperature: number;
     concurrency: number;
     blocksPerRequest: number;
+    maxTokensPerRequest: number;
   };
   ao3: {
     cookie: string;
     userAgent: string;
   };
+  reader: {
+    defaultMeasure: number;
+    defaultFont: number;
+    defaultZhScale: number;
+  };
   update: {
     manifestURL: string;
     channel: string;
     autoCheck: boolean;
+    restartDelayMs: number;
   };
 };
 
@@ -58,6 +81,22 @@ export function Settings() {
   useEffect(() => {
     if (!data) return;
     setForm({
+      server: {
+        host: data.server.host,
+        port: data.server.port,
+      },
+      auth: {
+        sessionTtlDays: data.auth.sessionTtlDays,
+      },
+      stream: {
+        heartbeatMs: data.stream.heartbeatMs,
+      },
+      import: {
+        minHtmlLength: data.import.minHtmlLength,
+      },
+      ui: {
+        libraryRefetchIntervalMs: data.ui.libraryRefetchIntervalMs,
+      },
       llm: {
         baseURL: data.llm.baseURL,
         apiKey: data.llm.apiKey,
@@ -65,12 +104,19 @@ export function Settings() {
         temperature: data.llm.temperature,
         concurrency: data.llm.concurrency,
         blocksPerRequest: data.llm.blocksPerRequest,
+        maxTokensPerRequest: data.llm.maxTokensPerRequest,
       },
       ao3: { cookie: data.ao3.cookie, userAgent: data.ao3.userAgent },
+      reader: {
+        defaultMeasure: data.reader.defaultMeasure,
+        defaultFont: data.reader.defaultFont,
+        defaultZhScale: data.reader.defaultZhScale,
+      },
       update: {
         manifestURL: data.update.manifestURL,
         channel: data.update.channel,
         autoCheck: data.update.autoCheck,
+        restartDelayMs: data.update.restartDelayMs,
       },
     });
   }, [data]);
@@ -96,8 +142,14 @@ export function Settings() {
 
   const onSave = () => {
     const body: any = {
+      server: { ...form.server },
+      auth: { ...form.auth },
+      stream: { ...form.stream },
+      import: { ...form.import },
+      ui: { ...form.ui },
       llm: { ...form.llm },
       ao3: { ...form.ao3 },
+      reader: { ...form.reader },
       update: { ...form.update },
     };
     if (!apiKeyDirty) delete body.llm.apiKey;
@@ -131,9 +183,107 @@ export function Settings() {
           Settings
         </h1>
         <p className="text-muted-foreground mt-3 text-[14px]">
-          配置 LLM provider、AO3 cookie、OTA manifest。所有数据存在服务端 data/config.json。
+          配置服务监听、LLM provider、AO3 cookie、OTA manifest。所有数据存在服务端 data/config.json。
         </p>
       </header>
+
+      <section className="space-y-5">
+        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
+          Server
+        </h2>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field id="server-host" label="Host">
+            <Input
+              id="server-host"
+              value={form.server.host}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  server: { ...form.server, host: e.target.value },
+                })
+              }
+            />
+          </Field>
+          <Field id="server-port" label="Port（重启后生效）">
+            <Input
+              id="server-port"
+              type="number"
+              min="1"
+              max="65535"
+              value={form.server.port}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  server: { ...form.server, port: Number(e.target.value) },
+                })
+              }
+            />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field id="auth-session-ttl" label="Session TTL days">
+            <Input
+              id="auth-session-ttl"
+              type="number"
+              min="1"
+              value={form.auth.sessionTtlDays}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  auth: { ...form.auth, sessionTtlDays: Number(e.target.value) },
+                })
+              }
+            />
+          </Field>
+          <Field id="stream-heartbeat" label="SSE heartbeat ms">
+            <Input
+              id="stream-heartbeat"
+              type="number"
+              min="1"
+              value={form.stream.heartbeatMs}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  stream: { ...form.stream, heartbeatMs: Number(e.target.value) },
+                })
+              }
+            />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field id="import-min-html" label="Min HTML length">
+            <Input
+              id="import-min-html"
+              type="number"
+              min="0"
+              value={form.import.minHtmlLength}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  import: { ...form.import, minHtmlLength: Number(e.target.value) },
+                })
+              }
+            />
+          </Field>
+          <Field id="ui-library-refetch" label="Library refresh ms">
+            <Input
+              id="ui-library-refetch"
+              type="number"
+              min="1"
+              value={form.ui.libraryRefetchIntervalMs}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  ui: {
+                    ...form.ui,
+                    libraryRefetchIntervalMs: Number(e.target.value),
+                  },
+                })
+              }
+            />
+          </Field>
+        </div>
+      </section>
 
       <section className="space-y-5">
         <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
@@ -172,7 +322,7 @@ export function Settings() {
             }
           />
         </Field>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Field id="llm-temp" label="Temperature">
             <Input
               id="llm-temp"
@@ -211,6 +361,20 @@ export function Settings() {
                 setForm({
                   ...form,
                   llm: { ...form.llm, blocksPerRequest: Number(e.target.value) },
+                })
+              }
+            />
+          </Field>
+          <Field id="llm-max-tokens" label="Max tokens">
+            <Input
+              id="llm-max-tokens"
+              type="number"
+              min="1"
+              value={form.llm.maxTokensPerRequest}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  llm: { ...form.llm, maxTokensPerRequest: Number(e.target.value) },
                 })
               }
             />
@@ -275,6 +439,57 @@ export function Settings() {
 
       <section className="space-y-5">
         <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
+          Reader Defaults
+        </h2>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field id="reader-font" label="Font px">
+            <Input
+              id="reader-font"
+              type="number"
+              min="1"
+              value={form.reader.defaultFont}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  reader: { ...form.reader, defaultFont: Number(e.target.value) },
+                })
+              }
+            />
+          </Field>
+          <Field id="reader-zh-scale" label="ZH scale">
+            <Input
+              id="reader-zh-scale"
+              type="number"
+              min="0.1"
+              step="0.01"
+              value={form.reader.defaultZhScale}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  reader: { ...form.reader, defaultZhScale: Number(e.target.value) },
+                })
+              }
+            />
+          </Field>
+          <Field id="reader-measure" label="Measure px">
+            <Input
+              id="reader-measure"
+              type="number"
+              min="1"
+              value={form.reader.defaultMeasure}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  reader: { ...form.reader, defaultMeasure: Number(e.target.value) },
+                })
+              }
+            />
+          </Field>
+        </div>
+      </section>
+
+      <section className="space-y-5">
+        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
           OTA Update
         </h2>
         <Field id="ota-manifest" label="Manifest URL">
@@ -290,7 +505,7 @@ export function Settings() {
             }
           />
         </Field>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field id="ota-channel" label="Channel">
             <div id="ota-channel" className="flex gap-2">
               {["stable", "dev"].map((channel) => (
@@ -322,6 +537,20 @@ export function Settings() {
             </label>
           </div>
         </div>
+        <Field id="ota-restart-delay" label="Restart delay ms">
+          <Input
+            id="ota-restart-delay"
+            type="number"
+            min="0"
+            value={form.update.restartDelayMs}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                update: { ...form.update, restartDelayMs: Number(e.target.value) },
+              })
+            }
+          />
+        </Field>
       </section>
 
       <Separator />
