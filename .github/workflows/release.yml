@@ -245,15 +245,29 @@ jobs:
           printf '%s\n' "${AO3HUB_RELEASE_NOTES}" > "${NOTES_FILE}"
 
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release edit "${TAG}" \
-              --title "${AO3HUB_RELEASE_TITLE}" \
-              --notes-file "${NOTES_FILE}" \
-              --prerelease
-            gh release upload "${TAG}" server/build/release/* --clobber
-          else
-            gh release create "${TAG}" server/build/release/* \
+            gh release delete "${TAG}" --yes
+            for attempt in {1..12}; do
+              if ! gh release view "${TAG}" >/dev/null 2>&1; then
+                break
+              fi
+              if [ "${attempt}" -eq 12 ]; then
+                echo "Release ${TAG} still exists after deletion" >&2
+                exit 1
+              fi
+              sleep 5
+            done
+          fi
+
+          for attempt in {1..6}; do
+            if gh release create "${TAG}" server/build/release/* \
               --title "${AO3HUB_RELEASE_TITLE}" \
               --notes-file "${NOTES_FILE}" \
               --prerelease \
-              --verify-tag
-          fi
+              --verify-tag; then
+              exit 0
+            fi
+            if [ "${attempt}" -eq 6 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done

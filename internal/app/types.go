@@ -27,6 +27,15 @@ type IndexFile struct {
 	Stories []IndexEntry `json:"stories"`
 }
 
+type StoryListItem struct {
+	IndexEntry
+	Progress *Progress `json:"progress,omitempty"`
+}
+
+type StoryList struct {
+	Stories []StoryListItem `json:"stories"`
+}
+
 type Tags struct {
 	Fandom       []string `json:"fandom"`
 	Relationship []string `json:"relationship"`
@@ -115,6 +124,8 @@ type Progress struct {
 	Phase          ProgressPhase   `json:"phase"`
 	TotalBlocks    int             `json:"totalBlocks"`
 	DoneBlocks     int             `json:"doneBlocks"`
+	ErrorBlocks    int             `json:"errorBlocks"`
+	InflightBlocks int             `json:"inflightBlocks"`
 	CurrentChapter *int            `json:"currentChapter,omitempty"`
 	StartedAt      string          `json:"startedAt"`
 	FinishedAt     string          `json:"finishedAt,omitempty"`
@@ -131,6 +142,7 @@ type LLMConfig struct {
 	Concurrency         int     `json:"concurrency"`
 	BlocksPerRequest    int     `json:"blocksPerRequest"`
 	MaxTokensPerRequest int     `json:"maxTokensPerRequest"`
+	MaxAutoRetries      int     `json:"maxAutoRetries"`
 }
 
 type AO3Config struct {
@@ -290,11 +302,13 @@ type AuthMe struct {
 }
 
 type StreamEvent struct {
-	Type         string        `json:"type"`
-	DoneBlocks   int           `json:"doneBlocks,omitempty"`
-	TotalBlocks  int           `json:"totalBlocks,omitempty"`
-	Phase        ProgressPhase `json:"phase,omitempty"`
-	ChapterIndex int           `json:"chapterIndex,omitempty"`
-	BlockID      string        `json:"blockId,omitempty"`
-	Message      string        `json:"message,omitempty"`
+	Type           string        `json:"type"`
+	DoneBlocks     int           `json:"doneBlocks,omitempty"`
+	TotalBlocks    int           `json:"totalBlocks,omitempty"`
+	ErrorBlocks    int           `json:"errorBlocks,omitempty"`
+	InflightBlocks int           `json:"inflightBlocks,omitempty"`
+	Phase          ProgressPhase `json:"phase,omitempty"`
+	ChapterIndex   int           `json:"chapterIndex,omitempty"`
+	BlockID        string        `json:"blockId,omitempty"`
+	Message        string        `json:"message,omitempty"`
 }

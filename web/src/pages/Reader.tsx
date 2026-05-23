@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   ChevronRight,
@@ -9,7 +9,7 @@ import {
   Settings as SettingsIcon,
   X,
 } from "lucide-react";
-import type { ChapterView } from "@ao3hub/shared";
+import type { ChapterView, Progress } from "@ao3hub/shared";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -25,6 +25,11 @@ import {
   saveReaderSettings,
   type ReaderSettings,
 } from "../lib/reader-settings";
+import {
+  TranslateProgressBar,
+  TranslateProgressLegend,
+  breakdownOf,
+} from "../components/TranslateProgress";
 
 export function Reader() {
   const { id, chapter } = useParams({ from: "/r/$id/$chapter" });
@@ -36,8 +41,9 @@ export function Reader() {
   const [settings, setSettings] = useState<ReaderSettings>(() => loadReaderSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [scrollProgress, setScrollProgress] = useState(0);
   const [showAllEn, setShowAllEn] = useState(true);
+  const [liveProgress, setLiveProgress] = useState<Progress | null>(null);
   const { data: config } = useQuery({
     queryKey: ["config", "public"],
     queryFn: () => api.getPublicConfig(),
@@ -62,7 +68,7 @@ export function Reader() {
   useEffect(() => {
     const onScroll = () => {
       const h = document.documentElement.scrollHeight - window.innerHeight;
-      setProgress(h > 0 ? Math.min(1, Math.max(0, window.scrollY / h)) : 0);
+      setScrollProgress(h > 0 ? Math.min(1, Math.max(0, window.scrollY / h)) : 0);
     };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -74,6 +80,11 @@ export function Reader() {
     queryFn: () => api.getChapter(id, chapterIndex),
   });
 
+  useEffect(() => {
+    if (!data) return;
+    setLiveProgress((cur) => cur ?? data.progress);
+  }, [data]);
+
   const total = data?.nav.total;
   const totalDigits = useMemo(
     () => (total != null ? String(total).length : 1),
@@ -84,9 +95,25 @@ export function Reader() {
     if (!data) return;
     if (data.progress.phase === "ready") return;
     const unsub = subscribeStream(id, (event) => {
-      if (event.type === "block-done" && event.chapterIndex === chapterIndex) {
+      if (event.type === "progress") {
+        setLiveProgress((cur) => ({
+          phase: event.phase,
+          totalBlocks: event.totalBlocks,
+          doneBlocks: event.doneBlocks,
+          errorBlocks: event.errorBlocks ?? 0,
+          inflightBlocks: event.inflightBlocks ?? 0,
+          startedAt: cur?.startedAt ?? new Date().toISOString(),
+          finishedAt: cur?.finishedAt,
+          message: cur?.message,
+          errors: cur?.errors ?? [],
+          currentChapter: cur?.currentChapter,
+        }));
+      } else if (event.type === "block-done" && event.chapterIndex === chapterIndex) {
         qc.invalidateQueries({ queryKey: ["chapter", id, chapterIndex] });
       } else if (event.type === "phase") {
+        setLiveProgress((cur) =>
+          cur ? { ...cur, phase: event.phase, message: event.message } : cur,
+        );
         qc.invalidateQueries({ queryKey: ["chapter", id, chapterIndex] });
         qc.invalidateQueries({ queryKey: ["stories"] });
       } else if (event.type === "chapter-done") {
@@ -95,6 +122,15 @@ export function Reader() {
     });
     return unsub;
   }, [id, chapterIndex, data?.progress.phase, qc]);
+
+  const retryFailed = useMutation({
+    mutationFn: (body: { blockIds?: string[]; chapterIndex?: number }) =>
+      api.retry(id, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["chapter", id, chapterIndex] });
+      qc.invalidateQueries({ queryKey: ["stories"] });
+    },
+  });
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
@@ -123,13 +159,17 @@ export function Reader() {
   const titleEn = data.chapter.titleEn ?? data.meta.title;
   const chineseTitle =
     data.meta.chineseTitle ?? data.chapter.titleZh ?? undefined;
+  const progressForBar = liveProgress ?? data.progress;
+  const chapterErrorPairs = data.chapter.pairs.filter((p) => p.status === "error");
+  const showChapterRetry =
+    !!user && chapterErrorPairs.length > 0 && data.progress.phase !== "translating";
 
   return (
     <>
       <ReaderTopbar
         title={titleEn}
         subtitle={[chineseTitle, data.meta.author].filter(Boolean).join(" · ")}
-        progress={progress}
+        progress={scrollProgress}
         chapterIndex={chapterIndex}
         total={total ?? 1}
         totalDigits={totalDigits}
@@ -208,7 +248,20 @@ export function Reader() {
               CH {chapterIndex + 1}/{data.nav.total} · {data.chapter.titleEn}
             </p>
           )}
-          <ProgressBar progress={data.progress} />
+          <ChapterProgress
+            progress={progressForBar}
+            chapterErrorCount={chapterErrorPairs.length}
+            showChapterRetry={showChapterRetry}
+            onRetryChapter={() =>
+              retryFailed.mutate({
+                blockIds: chapterErrorPairs.map((p) => p.id),
+                chapterIndex,
+              })
+            }
+            onRetryAll={() => retryFailed.mutate({})}
+            retrying={retryFailed.isPending}
+            canRetryAll={!!user}
+          />
         </header>
 
         <div className="prose-reader space-y-[1.28em]">
@@ -232,7 +285,7 @@ export function Reader() {
       <div className="fixed top-0 left-0 right-0 z-50 h-[3px] pointer-events-none">
         <div
           className="h-full bg-accent transition-[width] duration-100"
-          style={{ width: `${progress * 100}%` }}
+          style={{ width: `${scrollProgress * 100}%` }}
         />
       </div>
     </>
@@ -539,35 +592,76 @@ function ChapterNav({
   );
 }
 
-function ProgressBar({ progress }: { progress: ChapterView["progress"] }) {
-  if (progress.phase === "ready") return null;
-  const pct = progress.totalBlocks
-    ? Math.round((progress.doneBlocks / progress.totalBlocks) * 100)
-    : 0;
+function ChapterProgress({
+  progress,
+  chapterErrorCount,
+  showChapterRetry,
+  onRetryChapter,
+  onRetryAll,
+  retrying,
+  canRetryAll,
+}: {
+  progress: Progress | undefined | null;
+  chapterErrorCount: number;
+  showChapterRetry: boolean;
+  onRetryChapter: () => void;
+  onRetryAll: () => void;
+  retrying: boolean;
+  canRetryAll: boolean;
+}) {
+  if (!progress || progress.phase === "ready") return null;
+  const { total, error } = breakdownOf(progress);
+  const hasGlobalErrors = error > chapterErrorCount;
+  const phaseLabel =
+    progress.phase === "translating"
+      ? "翻译中"
+      : progress.phase === "fetching"
+        ? "抓取中"
+        : progress.phase === "parsing"
+          ? "解析中"
+          : progress.phase === "queued"
+            ? "排队中"
+            : progress.phase === "error"
+              ? "出错"
+              : progress.phase;
   return (
-    <div className="mt-6 rounded-xl border border-border p-3">
-      <div className="flex items-center justify-between text-[12px]">
-        <span className="text-muted-foreground">
-          {progress.phase === "translating"
-            ? "翻译中"
-            : progress.phase === "fetching"
-              ? "抓取中"
-              : progress.phase === "parsing"
-                ? "解析中"
-                : progress.phase === "queued"
-                  ? "排队中"
-                  : progress.phase}
+    <div className="mt-6 rounded-xl border border-border p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-muted-foreground text-[12px]">
+          {phaseLabel}
+          {progress.message ? ` · ${progress.message}` : null}
         </span>
-        <span className="font-mono">
-          {progress.doneBlocks}/{progress.totalBlocks} · {pct}%
-        </span>
+        <TranslateProgressLegend progress={progress} />
       </div>
-      <div className="mt-2 h-1 overflow-hidden rounded-full bg-secondary">
-        <div
-          className="h-full bg-accent transition-[width] duration-300"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      <TranslateProgressBar progress={progress} />
+      {total > 0 && (showChapterRetry || hasGlobalErrors) && canRetryAll && (
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          {showChapterRetry && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1"
+              disabled={retrying}
+              onClick={onRetryChapter}
+            >
+              <RotateCcw className="size-3" />
+              重试本章失败 ({chapterErrorCount})
+            </Button>
+          )}
+          {hasGlobalErrors && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1"
+              disabled={retrying}
+              onClick={onRetryAll}
+            >
+              <RotateCcw className="size-3" />
+              重试全部失败 ({error})
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

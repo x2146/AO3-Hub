@@ -39,6 +39,7 @@ type LocalConfig = {
     concurrency: number;
     blocksPerRequest: number;
     maxTokensPerRequest: number;
+    maxAutoRetries: number;
   };
   ao3: {
     cookie: string;
@@ -118,6 +119,7 @@ export function Settings() {
         concurrency: data.llm.concurrency,
         blocksPerRequest: data.llm.blocksPerRequest,
         maxTokensPerRequest: data.llm.maxTokensPerRequest,
+        maxAutoRetries: data.llm.maxAutoRetries,
       },
       ao3: { cookie: data.ao3.cookie, userAgent: data.ao3.userAgent },
       reader: {
@@ -434,6 +436,22 @@ export function Settings() {
                 setForm({
                   ...form,
                   llm: { ...form.llm, maxTokensPerRequest: Number(e.target.value) },
+                })
+              }
+            />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field id="llm-auto-retries" label="自动重试轮次">
+            <Input
+              id="llm-auto-retries"
+              type="number"
+              min="0"
+              value={form.llm.maxAutoRetries}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  llm: { ...form.llm, maxAutoRetries: Number(e.target.value) },
                 })
               }
             />

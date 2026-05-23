@@ -249,6 +249,7 @@ func defaultLLMConfig(apiType string) LLMConfig {
 		Concurrency:         3,
 		BlocksPerRequest:    8,
 		MaxTokensPerRequest: 3500,
+		MaxAutoRetries:      2,
 	}
 	if normalized == LLMAPITypeClaudeMessages {
 		cfg.APIType = LLMAPITypeClaudeMessages
@@ -294,6 +295,9 @@ func normalizeConfig(c Config) Config {
 	}
 	if c.LLM.MaxTokensPerRequest <= 0 {
 		c.LLM.MaxTokensPerRequest = llmDefaults.MaxTokensPerRequest
+	}
+	if c.LLM.MaxAutoRetries < 0 {
+		c.LLM.MaxAutoRetries = llmDefaults.MaxAutoRetries
 	}
 	if strings.TrimSpace(c.AO3.UserAgent) == "" {
 		c.AO3.UserAgent = d.AO3.UserAgent
@@ -355,6 +359,9 @@ func validateConfig(c Config) error {
 	}
 	if c.LLM.MaxTokensPerRequest <= 0 {
 		return errors.New("llm.maxTokensPerRequest must be positive")
+	}
+	if c.LLM.MaxAutoRetries < 0 {
+		return errors.New("llm.maxAutoRetries must be nonnegative")
 	}
 	if c.Reader.DefaultMeasure <= 0 {
 		return errors.New("reader.defaultMeasure must be positive")

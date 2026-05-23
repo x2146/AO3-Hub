@@ -14,16 +14,19 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"ao3hub/internal/webassets"
 )
 
 type App struct {
-	store *Store
-	bus   *EventBus
-	queue *Queue
-	ctx   context.Context
+	store      *Store
+	bus        *EventBus
+	queue      *Queue
+	ctx        context.Context
+	inflightMu sync.RWMutex
+	inflight   map[string]map[string]bool
 }
 
 func New() (*App, error) {
@@ -36,9 +39,10 @@ func New() (*App, error) {
 		return nil, err
 	}
 	app := &App{
-		store: store,
-		bus:   NewEventBus(),
-		ctx:   context.Background(),
+		store:    store,
+		bus:      NewEventBus(),
+		ctx:      context.Background(),
+		inflight: map[string]map[string]bool{},
 	}
 	app.queue = NewQueue(app)
 	return app, nil
@@ -281,7 +285,17 @@ func (a *App) mountStories(mux *http.ServeMux) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, idx)
+		out := StoryList{Stories: make([]StoryListItem, 0, len(idx.Stories))}
+		for _, entry := range idx.Stories {
+			item := StoryListItem{IndexEntry: entry}
+			if entry.Status != StatusReady {
+				if p, _ := a.store.LoadProgress(entry.ID); p != nil {
+					item.Progress = p
+				}
+			}
+			out.Stories = append(out.Stories, item)
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
 	mux.HandleFunc("POST /stories", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
 		var body struct {
@@ -596,6 +610,7 @@ func configResponse(cfg Config) map[string]any {
 			"concurrency":         cfg.LLM.Concurrency,
 			"blocksPerRequest":    cfg.LLM.BlocksPerRequest,
 			"maxTokensPerRequest": cfg.LLM.MaxTokensPerRequest,
+			"maxAutoRetries":      cfg.LLM.MaxAutoRetries,
 		},
 		"ao3": map[string]any{
 			"cookie":    map[bool]string{true: "***", false: ""}[cfg.AO3.Cookie != ""],

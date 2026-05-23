@@ -105,6 +105,8 @@ export const Progress = z.object({
   phase: ProgressPhase,
   totalBlocks: z.number().int().nonnegative().default(0),
   doneBlocks: z.number().int().nonnegative().default(0),
+  errorBlocks: z.number().int().nonnegative().default(0),
+  inflightBlocks: z.number().int().nonnegative().default(0),
   currentChapter: z.number().int().nonnegative().optional(),
   startedAt: z.string(),
   finishedAt: z.string().optional(),
@@ -124,6 +126,7 @@ export const LlmConfig = z.object({
   concurrency: z.number().int().positive().default(3),
   blocksPerRequest: z.number().int().positive().default(8),
   maxTokensPerRequest: z.number().int().positive().default(3500),
+  maxAutoRetries: z.number().int().nonnegative().default(2),
 });
 export type LlmConfig = z.infer<typeof LlmConfig>;
 
@@ -277,11 +280,28 @@ export const RetryRequest = z.object({
 export type RetryRequest = z.infer<typeof RetryRequest>;
 
 export type StreamEvent =
-  | { type: "progress"; doneBlocks: number; totalBlocks: number; phase: ProgressPhase }
+  | {
+      type: "progress";
+      doneBlocks: number;
+      totalBlocks: number;
+      errorBlocks?: number;
+      inflightBlocks?: number;
+      phase: ProgressPhase;
+    }
   | { type: "block-done"; chapterIndex: number; blockId: string }
   | { type: "block-error"; chapterIndex: number; blockId: string; message: string }
   | { type: "chapter-done"; chapterIndex: number }
   | { type: "phase"; phase: ProgressPhase; message?: string };
+
+export const StoryListItem = IndexEntry.extend({
+  progress: Progress.optional(),
+});
+export type StoryListItem = z.infer<typeof StoryListItem>;
+
+export const StoryList = z.object({
+  stories: z.array(StoryListItem),
+});
+export type StoryList = z.infer<typeof StoryList>;
 
 export const Role = z.enum(["admin", "user"]);
 export type Role = z.infer<typeof Role>;

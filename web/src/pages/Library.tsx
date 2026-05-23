@@ -1,11 +1,16 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { api } from "../lib/api";
+import { api, type StoriesListResponse } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { StatusPill } from "../components/StatusPill";
+import {
+  TranslateProgressBar,
+  TranslateProgressLegend,
+  breakdownOf,
+} from "../components/TranslateProgress";
 
 export function Library() {
   const qc = useQueryClient();
@@ -18,7 +23,7 @@ export function Library() {
     queryKey: ["stories"],
     queryFn: () => api.listStories(),
     refetchInterval: (q) => {
-      const stories = (q.state.data as Awaited<ReturnType<typeof api.listStories>> | undefined)?.stories;
+      const stories = (q.state.data as StoriesListResponse | undefined)?.stories;
       const inFlight = stories?.some((s) =>
         ["queued", "fetching", "parsing", "translating"].includes(s.status),
       );
@@ -28,6 +33,11 @@ export function Library() {
 
   const del = useMutation({
     mutationFn: (id: string) => api.remove(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["stories"] }),
+  });
+
+  const retry = useMutation({
+    mutationFn: (id: string) => api.retry(id, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["stories"] }),
   });
 
@@ -79,48 +89,75 @@ export function Library() {
         </div>
       ) : (
         <ul>
-          {stories.map((s, i) => (
-            <li key={s.id}>
-              {i > 0 && <Separator />}
-              <div className="group grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-5 py-6 transition-transform hover:translate-x-1">
-                <span className="text-muted-foreground font-mono text-[12px]">
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-                <Link
-                  to="/r/$id/$chapter"
-                  params={{ id: s.id, chapter: "0" }}
-                  className="min-w-0"
-                >
-                  <p className="truncate text-[clamp(1.3rem,3.2vw,2rem)] font-semibold leading-[1.1] tracking-tight">
-                    {s.title}
-                  </p>
-                  <p className="text-muted-foreground mt-1 truncate text-[13px]">
-                    {[s.chineseTitle, s.author].filter(Boolean).join(" · ") ||
-                      "—"}
-                  </p>
-                </Link>
-                <div className="flex items-center gap-3">
-                  <span className="text-muted-foreground text-[12px] tabular-nums">
-                    {s.chapterCount} ch · {s.wordCount.toLocaleString()} w
+          {stories.map((s, i) => {
+            const showProgress =
+              s.progress &&
+              (s.status !== "ready" ||
+                (s.progress.totalBlocks ?? 0) > (s.progress.doneBlocks ?? 0));
+            const { error: errorCount } = breakdownOf(s.progress);
+            const canRetry = !!user && (s.status === "error" || errorCount > 0);
+            const retrying = retry.isPending && retry.variables === s.id;
+            return (
+              <li key={s.id}>
+                {i > 0 && <Separator />}
+                <div className="group grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-5 py-6 transition-transform hover:translate-x-1">
+                  <span className="text-muted-foreground font-mono text-[12px]">
+                    {String(i + 1).padStart(2, "0")}
                   </span>
-                  <StatusPill status={s.status} />
-                  {user && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="opacity-0 transition-opacity group-hover:opacity-100"
-                      onClick={() => {
-                        if (confirm(`删除「${s.title}」？`)) del.mutate(s.id);
-                      }}
-                      aria-label="删除"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
-                  )}
+                  <Link
+                    to="/r/$id/$chapter"
+                    params={{ id: s.id, chapter: "0" }}
+                    className="min-w-0"
+                  >
+                    <p className="truncate text-[clamp(1.3rem,3.2vw,2rem)] font-semibold leading-[1.1] tracking-tight">
+                      {s.title}
+                    </p>
+                    <p className="text-muted-foreground mt-1 truncate text-[13px]">
+                      {[s.chineseTitle, s.author].filter(Boolean).join(" · ") ||
+                        "—"}
+                    </p>
+                    {showProgress && (
+                      <div className="mt-3 space-y-1.5">
+                        <TranslateProgressBar progress={s.progress} thin />
+                        <TranslateProgressLegend progress={s.progress} />
+                      </div>
+                    )}
+                  </Link>
+                  <div className="flex items-center gap-3">
+                    <span className="text-muted-foreground text-[12px] tabular-nums">
+                      {s.chapterCount} ch · {s.wordCount.toLocaleString()} w
+                    </span>
+                    <StatusPill status={s.status} />
+                    {canRetry && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1"
+                        disabled={retrying}
+                        onClick={() => retry.mutate(s.id)}
+                      >
+                        <RotateCcw className="size-3" />
+                        {retrying ? "重试中…" : "重试失败"}
+                      </Button>
+                    )}
+                    {user && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="opacity-0 transition-opacity group-hover:opacity-100"
+                        onClick={() => {
+                          if (confirm(`删除「${s.title}」？`)) del.mutate(s.id);
+                        }}
+                        aria-label="删除"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

@@ -3,11 +3,11 @@ import type {
   ChapterView,
   Config,
   CreateUserRequest,
-  IndexEntry,
   Meta,
   Progress,
   PublicUser,
   Role,
+  StoryList,
   StreamEvent,
   VersionInfo,
   ApplyUpdateRequest,
@@ -42,7 +42,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export type StoriesListResponse = { stories: IndexEntry[] };
+export type StoriesListResponse = StoryList;
 export type StoryDetail = { meta: Meta; progress: Progress };
 
 export const api = {

@@ -186,28 +186,85 @@ func makeBlankTranslated(original ChapterFile) ChapterFile {
 	return ChapterFile{Chapters: chapters}
 }
 
+func (a *App) markInflight(storyID string, ids []string) {
+	a.inflightMu.Lock()
+	defer a.inflightMu.Unlock()
+	set, ok := a.inflight[storyID]
+	if !ok {
+		set = map[string]bool{}
+		a.inflight[storyID] = set
+	}
+	for _, id := range ids {
+		set[id] = true
+	}
+}
+
+func (a *App) clearInflight(storyID string, ids []string) {
+	a.inflightMu.Lock()
+	defer a.inflightMu.Unlock()
+	set, ok := a.inflight[storyID]
+	if !ok {
+		return
+	}
+	for _, id := range ids {
+		delete(set, id)
+	}
+	if len(set) == 0 {
+		delete(a.inflight, storyID)
+	}
+}
+
+func (a *App) resetInflight(storyID string) {
+	a.inflightMu.Lock()
+	defer a.inflightMu.Unlock()
+	delete(a.inflight, storyID)
+}
+
+func (a *App) inflightCount(storyID string) int {
+	a.inflightMu.RLock()
+	defer a.inflightMu.RUnlock()
+	return len(a.inflight[storyID])
+}
+
 func (a *App) emitProgress(storyID string, translated ChapterFile, original ChapterFile) error {
 	total := 0
 	done := 0
+	errs := 0
 	for i := range original.Chapters {
 		for j := range original.Chapters[i].Blocks {
 			if !isTranslatable(original.Chapters[i].Blocks[j]) {
 				continue
 			}
 			total++
-			if i < len(translated.Chapters) && j < len(translated.Chapters[i].Blocks) && translated.Chapters[i].Blocks[j].Status == BlockDone {
+			if i >= len(translated.Chapters) || j >= len(translated.Chapters[i].Blocks) {
+				continue
+			}
+			switch translated.Chapters[i].Blocks[j].Status {
+			case BlockDone:
 				done++
+			case BlockError:
+				errs++
 			}
 		}
 	}
+	inflight := a.inflightCount(storyID)
 	if err := a.setProgress(storyID, func(p Progress) Progress {
 		p.TotalBlocks = total
 		p.DoneBlocks = done
+		p.ErrorBlocks = errs
+		p.InflightBlocks = inflight
 		return p
 	}); err != nil {
 		return err
 	}
-	a.bus.Emit(storyID, StreamEvent{Type: "progress", DoneBlocks: done, TotalBlocks: total, Phase: PhaseTranslating})
+	a.bus.Emit(storyID, StreamEvent{
+		Type:           "progress",
+		DoneBlocks:     done,
+		TotalBlocks:    total,
+		ErrorBlocks:    errs,
+		InflightBlocks: inflight,
+		Phase:          PhaseTranslating,
+	})
 	return nil
 }
 
@@ -279,6 +336,78 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 	}
 	a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseTranslating})
 
+	a.resetInflight(storyID)
+	defer a.resetInflight(storyID)
+
+	maxRounds := cfg.LLM.MaxAutoRetries
+	if maxRounds < 0 {
+		maxRounds = 0
+	}
+	for round := 0; round <= maxRounds; round++ {
+		if round > 0 {
+			if !resetErrorsToPending(translated) {
+				break
+			}
+			if err := a.store.SaveTranslated(storyID, *translated); err != nil {
+				return err
+			}
+			if err := a.emitProgress(storyID, *translated, *original); err != nil {
+				return err
+			}
+			a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseTranslating, Message: fmt.Sprintf("自动重试第 %d/%d 轮", round, maxRounds)})
+		}
+		if err := a.translatePass(ctx, storyID, cfg, *meta, original, translated); err != nil {
+			return err
+		}
+	}
+
+	hasErrors := false
+	for _, chapter := range translated.Chapters {
+		for _, block := range chapter.Blocks {
+			if block.Status == BlockError {
+				hasErrors = true
+				break
+			}
+		}
+	}
+	phase := PhaseReady
+	status := StatusReady
+	if hasErrors {
+		phase = PhaseError
+		status = StatusError
+	}
+	if err := a.setProgress(storyID, func(p Progress) Progress {
+		p.Phase = phase
+		p.CurrentChapter = nil
+		p.FinishedAt = nowISO()
+		p.InflightBlocks = 0
+		return p
+	}); err != nil {
+		return err
+	}
+	if err := a.updateStoryStatus(storyID, status); err != nil {
+		return err
+	}
+	a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: phase})
+	return nil
+}
+
+func resetErrorsToPending(translated *ChapterFile) bool {
+	reset := false
+	for ci := range translated.Chapters {
+		for bi := range translated.Chapters[ci].Blocks {
+			if translated.Chapters[ci].Blocks[bi].Status == BlockError {
+				translated.Chapters[ci].Blocks[bi].Status = BlockPending
+				translated.Chapters[ci].Blocks[bi].HTML = ""
+				translated.Chapters[ci].Blocks[bi].Error = ""
+				reset = true
+			}
+		}
+	}
+	return reset
+}
+
+func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, meta Meta, original *ChapterFile, translated *ChapterFile) error {
 	for chIdx := 0; chIdx < len(original.Chapters); chIdx++ {
 		orig := original.Chapters[chIdx]
 		if chIdx >= len(translated.Chapters) {
@@ -355,11 +484,15 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 					}
 					b := batches[i]
 					inputs := make([]translateInput, len(b.Blocks))
+					ids := make([]string, len(b.Blocks))
 					for j, block := range b.Blocks {
 						inputs[j] = translateInput{ID: block.ID, HTML: block.HTML}
+						ids[j] = block.ID
 					}
+					a.markInflight(storyID, ids)
+					_ = a.emitProgress(storyID, *translated, *original)
 					outs, err := withRetry(func() ([]translateOutput, error) {
-						return translateBatch(ctx, cfg, *meta, inputs)
+						return translateBatch(ctx, cfg, meta, inputs)
 					}, 2)
 
 					transMu.Lock()
@@ -397,6 +530,7 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 						}
 					}
 					_ = a.store.SaveTranslated(storyID, *translated)
+					a.clearInflight(storyID, ids)
 					_ = a.emitProgress(storyID, *translated, *original)
 					transMu.Unlock()
 				}
@@ -405,34 +539,6 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 		wg.Wait()
 		a.bus.Emit(storyID, StreamEvent{Type: "chapter-done", ChapterIndex: chIdx})
 	}
-
-	hasErrors := false
-	for _, chapter := range translated.Chapters {
-		for _, block := range chapter.Blocks {
-			if block.Status == BlockError {
-				hasErrors = true
-				break
-			}
-		}
-	}
-	phase := PhaseReady
-	status := StatusReady
-	if hasErrors {
-		phase = PhaseError
-		status = StatusError
-	}
-	if err := a.setProgress(storyID, func(p Progress) Progress {
-		p.Phase = phase
-		p.CurrentChapter = nil
-		p.FinishedAt = nowISO()
-		return p
-	}); err != nil {
-		return err
-	}
-	if err := a.updateStoryStatus(storyID, status); err != nil {
-		return err
-	}
-	a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: phase})
 	return nil
 }
 
