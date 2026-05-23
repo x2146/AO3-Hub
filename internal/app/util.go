@@ -191,7 +191,25 @@ func normalizeMeta(m Meta) Meta {
 	if m.WordCount < 0 {
 		m.WordCount = 0
 	}
+	if m.TranslationMode != "" {
+		m.TranslationMode = normalizeTranslationMode(m.TranslationMode)
+	}
 	return m
+}
+
+func normalizeTranslationMode(mode TranslationMode) TranslationMode {
+	switch strings.ToLower(strings.TrimSpace(string(mode))) {
+	case "", string(TranslationModeNormal):
+		return TranslationModeNormal
+	case string(TranslationModeRefined):
+		return TranslationModeRefined
+	default:
+		return TranslationModeNormal
+	}
+}
+
+func validTranslationMode(mode TranslationMode) bool {
+	return mode == TranslationModeNormal || mode == TranslationModeRefined
 }
 
 func normalizeProgress(p Progress) Progress {
@@ -241,15 +259,17 @@ func defaultConfig() Config {
 func defaultLLMConfig(apiType string) LLMConfig {
 	normalized := normalizeLLMAPIType(apiType)
 	cfg := LLMConfig{
-		APIType:             LLMAPITypeOpenAICompatible,
-		BaseURL:             DefaultOpenAICompatibleBaseURL,
-		APIKey:              "",
-		Model:               DefaultOpenAICompatibleModel,
-		Temperature:         0.3,
-		Concurrency:         3,
-		BlocksPerRequest:    8,
-		MaxTokensPerRequest: 3500,
-		MaxAutoRetries:      2,
+		APIType:                LLMAPITypeOpenAICompatible,
+		BaseURL:                DefaultOpenAICompatibleBaseURL,
+		APIKey:                 "",
+		Model:                  DefaultOpenAICompatibleModel,
+		Temperature:            0.3,
+		Concurrency:            3,
+		BlocksPerRequest:       8,
+		MaxTokensPerRequest:    3500,
+		MaxAutoRetries:         2,
+		Mode:                   TranslationModeNormal,
+		AnalysisMaxInputTokens: 60000,
 	}
 	if normalized == LLMAPITypeClaudeMessages {
 		cfg.APIType = LLMAPITypeClaudeMessages
@@ -298,6 +318,10 @@ func normalizeConfig(c Config) Config {
 	}
 	if c.LLM.MaxAutoRetries < 0 {
 		c.LLM.MaxAutoRetries = llmDefaults.MaxAutoRetries
+	}
+	c.LLM.Mode = normalizeTranslationMode(c.LLM.Mode)
+	if c.LLM.AnalysisMaxInputTokens <= 0 {
+		c.LLM.AnalysisMaxInputTokens = llmDefaults.AnalysisMaxInputTokens
 	}
 	if strings.TrimSpace(c.AO3.UserAgent) == "" {
 		c.AO3.UserAgent = d.AO3.UserAgent
@@ -362,6 +386,12 @@ func validateConfig(c Config) error {
 	}
 	if c.LLM.MaxAutoRetries < 0 {
 		return errors.New("llm.maxAutoRetries must be nonnegative")
+	}
+	if !validTranslationMode(c.LLM.Mode) {
+		return errors.New("llm.mode is invalid")
+	}
+	if c.LLM.AnalysisMaxInputTokens <= 0 {
+		return errors.New("llm.analysisMaxInputTokens must be positive")
 	}
 	if c.Reader.DefaultMeasure <= 0 {
 		return errors.New("reader.defaultMeasure must be positive")

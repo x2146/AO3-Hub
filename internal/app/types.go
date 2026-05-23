@@ -6,9 +6,17 @@ const (
 	StatusQueued      StoryStatus = "queued"
 	StatusFetching    StoryStatus = "fetching"
 	StatusParsing     StoryStatus = "parsing"
+	StatusAnalyzing   StoryStatus = "analyzing"
 	StatusTranslating StoryStatus = "translating"
 	StatusReady       StoryStatus = "ready"
 	StatusError       StoryStatus = "error"
+)
+
+type TranslationMode string
+
+const (
+	TranslationModeNormal  TranslationMode = "normal"
+	TranslationModeRefined TranslationMode = "refined"
 )
 
 type IndexEntry struct {
@@ -47,22 +55,23 @@ type Tags struct {
 }
 
 type Meta struct {
-	ID           string `json:"id"`
-	URL          string `json:"url"`
-	DownloadURL  string `json:"downloadUrl,omitempty"`
-	Title        string `json:"title"`
-	ChineseTitle string `json:"chineseTitle,omitempty"`
-	Author       string `json:"author"`
-	AuthorURL    string `json:"authorUrl,omitempty"`
-	Summary      string `json:"summary,omitempty"`
-	Notes        string `json:"notes,omitempty"`
-	Endnotes     string `json:"endnotes,omitempty"`
-	Tags         Tags   `json:"tags"`
-	Language     string `json:"language"`
-	PublishedAt  string `json:"publishedAt,omitempty"`
-	UpdatedAt    string `json:"updatedAt,omitempty"`
-	WordCount    int    `json:"wordCount"`
-	ChapterCount int    `json:"chapterCount"`
+	ID              string          `json:"id"`
+	URL             string          `json:"url"`
+	DownloadURL     string          `json:"downloadUrl,omitempty"`
+	Title           string          `json:"title"`
+	ChineseTitle    string          `json:"chineseTitle,omitempty"`
+	Author          string          `json:"author"`
+	AuthorURL       string          `json:"authorUrl,omitempty"`
+	Summary         string          `json:"summary,omitempty"`
+	Notes           string          `json:"notes,omitempty"`
+	Endnotes        string          `json:"endnotes,omitempty"`
+	Tags            Tags            `json:"tags"`
+	Language        string          `json:"language"`
+	PublishedAt     string          `json:"publishedAt,omitempty"`
+	UpdatedAt       string          `json:"updatedAt,omitempty"`
+	WordCount       int             `json:"wordCount"`
+	ChapterCount    int             `json:"chapterCount"`
+	TranslationMode TranslationMode `json:"translationMode,omitempty"`
 }
 
 type BlockType string
@@ -108,6 +117,7 @@ const (
 	PhaseQueued      ProgressPhase = "queued"
 	PhaseFetching    ProgressPhase = "fetching"
 	PhaseParsing     ProgressPhase = "parsing"
+	PhaseAnalyzing   ProgressPhase = "analyzing"
 	PhaseTranslating ProgressPhase = "translating"
 	PhaseReady       ProgressPhase = "ready"
 	PhaseError       ProgressPhase = "error"
@@ -134,15 +144,17 @@ type Progress struct {
 }
 
 type LLMConfig struct {
-	APIType             string  `json:"apiType"`
-	BaseURL             string  `json:"baseURL"`
-	APIKey              string  `json:"apiKey"`
-	Model               string  `json:"model"`
-	Temperature         float64 `json:"temperature"`
-	Concurrency         int     `json:"concurrency"`
-	BlocksPerRequest    int     `json:"blocksPerRequest"`
-	MaxTokensPerRequest int     `json:"maxTokensPerRequest"`
-	MaxAutoRetries      int     `json:"maxAutoRetries"`
+	APIType                string          `json:"apiType"`
+	BaseURL                string          `json:"baseURL"`
+	APIKey                 string          `json:"apiKey"`
+	Model                  string          `json:"model"`
+	Temperature            float64         `json:"temperature"`
+	Concurrency            int             `json:"concurrency"`
+	BlocksPerRequest       int             `json:"blocksPerRequest"`
+	MaxTokensPerRequest    int             `json:"maxTokensPerRequest"`
+	MaxAutoRetries         int             `json:"maxAutoRetries"`
+	Mode                   TranslationMode `json:"mode"`
+	AnalysisMaxInputTokens int             `json:"analysisMaxInputTokens"`
 }
 
 type AO3Config struct {
@@ -299,6 +311,29 @@ type SessionsFile struct {
 type AuthMe struct {
 	User       *PublicUser `json:"user"`
 	NeedsSetup bool        `json:"needsSetup"`
+}
+
+type Character struct {
+	Name string `json:"name"`
+	Zh   string `json:"zh,omitempty"`
+	Role string `json:"role,omitempty"`
+}
+
+type ChapterSummary struct {
+	Index   int    `json:"index"`
+	Title   string `json:"title,omitempty"`
+	Summary string `json:"summary"`
+}
+
+type TranslationContext struct {
+	Summary          string            `json:"summary,omitempty"`
+	Tone             string            `json:"tone,omitempty"`
+	Ships            []string          `json:"ships"`
+	Characters       []Character       `json:"characters"`
+	Glossary         map[string]string `json:"glossary"`
+	ChapterSummaries []ChapterSummary  `json:"chapterSummaries"`
+	GeneratedAt      string            `json:"generatedAt,omitempty"`
+	ChapterCount     int               `json:"chapterCount,omitempty"`
 }
 
 type StreamEvent struct {

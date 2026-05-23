@@ -268,6 +268,58 @@ func (s *Store) LoadSource(id string) (string, bool, error) {
 	return s.readText(s.path("stories", id, "source.html"))
 }
 
+func (s *Store) LoadContext(id string) (*TranslationContext, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ctx TranslationContext
+	ok, err := s.readJSON(s.path("stories", id, "context.json"), &ctx)
+	if err != nil || !ok {
+		return nil, err
+	}
+	if ctx.Ships == nil {
+		ctx.Ships = []string{}
+	}
+	if ctx.Characters == nil {
+		ctx.Characters = []Character{}
+	}
+	if ctx.Glossary == nil {
+		ctx.Glossary = map[string]string{}
+	}
+	if ctx.ChapterSummaries == nil {
+		ctx.ChapterSummaries = []ChapterSummary{}
+	}
+	return &ctx, nil
+}
+
+func (s *Store) SaveContext(id string, ctx TranslationContext) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ctx.Ships == nil {
+		ctx.Ships = []string{}
+	}
+	if ctx.Characters == nil {
+		ctx.Characters = []Character{}
+	}
+	if ctx.Glossary == nil {
+		ctx.Glossary = map[string]string{}
+	}
+	if ctx.ChapterSummaries == nil {
+		ctx.ChapterSummaries = []ChapterSummary{}
+	}
+	return s.writeJSON(s.path("stories", id, "context.json"), ctx)
+}
+
+func (s *Store) DeleteContext(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.path("stories", id, "context.json")
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func (s *Store) RemoveStory(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

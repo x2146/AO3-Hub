@@ -20,6 +20,14 @@ const systemPrompt = `你是文学翻译。把英文文学作品翻译为中文�
 5) 输入是一个 JSON 数组，输出也必须是相同长度的 JSON 数组
 6) 仅输出 JSON 对象 { "blocks": [{ "id": "...", "html": "..." }] }，不要任何解释`
 
+const refinedSystemPrompt = `你是 AO3 同人文翻译专家，专精英文同人作品的中文本地化。要求：
+1) 严格保留输入中的 HTML 内联标签（em/strong/a/i/b/u/s/sup/sub/br/span/code 等），仅翻译文字内容
+2) 每个输入段落必须对应一个输出段落，顺序、数量完全一致
+3) 译文符合中文同人圈语感：自然、有文学性、不机翻味，保留作者的语气与节奏
+4) 严格遵守 context 中 glossary 的译名；ship 关系动态与基调参考 ships/tone 字段，使角色对白与心理符合既定动态
+5) 同人圈惯用术语（pet name、kink 词汇、ship 行话等）使用圈内通用的中文表达
+6) 仅输出 JSON 对象 { "blocks": [{ "id": "...", "html": "..." }] }，不要任何解释`
+
 type translateInput struct {
 	ID   string `json:"id"`
 	HTML string `json:"html"`
@@ -63,14 +71,54 @@ func chunkBlocks(blocks []Block, blocksPerRequest, maxTokens int) []batch {
 	return batches
 }
 
-func buildUserPayload(meta Meta, blocks []translateInput) (string, error) {
+func buildUserPayload(meta Meta, blocks []translateInput, transCtx *TranslationContext, chapterIndex int) (string, error) {
+	contextPayload := map[string]any{
+		"title":    meta.Title,
+		"fandom":   meta.Tags.Fandom,
+		"glossary": map[string]string{},
+	}
+	if transCtx != nil {
+		if transCtx.Summary != "" {
+			contextPayload["summary"] = transCtx.Summary
+		}
+		if transCtx.Tone != "" {
+			contextPayload["tone"] = transCtx.Tone
+		}
+		if len(transCtx.Ships) > 0 {
+			contextPayload["ships"] = transCtx.Ships
+		}
+		if len(transCtx.Characters) > 0 {
+			contextPayload["characters"] = transCtx.Characters
+		}
+		if len(transCtx.Glossary) > 0 {
+			contextPayload["glossary"] = transCtx.Glossary
+		}
+		if rating := meta.Tags.Rating; rating != "" {
+			contextPayload["rating"] = rating
+		}
+		if len(meta.Tags.Relationship) > 0 {
+			contextPayload["relationships"] = meta.Tags.Relationship
+		}
+		if len(meta.Tags.Warnings) > 0 {
+			contextPayload["warnings"] = meta.Tags.Warnings
+		}
+		if len(meta.Tags.Additional) > 0 {
+			contextPayload["additionalTags"] = meta.Tags.Additional
+		}
+		for _, summary := range transCtx.ChapterSummaries {
+			if summary.Index == chapterIndex {
+				contextPayload["currentChapter"] = map[string]any{
+					"index":   summary.Index,
+					"title":   summary.Title,
+					"summary": summary.Summary,
+				}
+				break
+			}
+		}
+	}
 	payload := map[string]any{
-		"context": map[string]any{
-			"title":    meta.Title,
-			"fandom":   meta.Tags.Fandom,
-			"glossary": map[string]string{},
-		},
-		"blocks": blocks,
+		"context": contextPayload,
+		"blocks":  blocks,
 	}
 	buf, err := json.Marshal(payload)
 	if err != nil {
@@ -107,13 +155,17 @@ func parseJSONResponse(content string) ([]translateOutput, error) {
 	return out, nil
 }
 
-func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []translateInput) ([]translateOutput, error) {
-	userPayload, err := buildUserPayload(meta, inputs)
+func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []translateInput, transCtx *TranslationContext, chapterIndex int) ([]translateOutput, error) {
+	userPayload, err := buildUserPayload(meta, inputs, transCtx, chapterIndex)
 	if err != nil {
 		return nil, err
 	}
+	prompt := systemPrompt
+	if transCtx != nil {
+		prompt = refinedSystemPrompt
+	}
 	result, err := chat(ctx, cfg.LLM, []ChatMessage{
-		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: prompt},
 		{Role: "user", Content: userPayload},
 	}, true)
 	if err != nil {
@@ -339,6 +391,40 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 	a.resetInflight(storyID)
 	defer a.resetInflight(storyID)
 
+	effectiveMode := meta.TranslationMode
+	if effectiveMode == "" {
+		effectiveMode = cfg.LLM.Mode
+	}
+	effectiveMode = normalizeTranslationMode(effectiveMode)
+
+	var transCtx *TranslationContext
+	if effectiveMode == TranslationModeRefined {
+		analysed, err := a.runAnalysis(ctx, storyID, *meta, *original, cfg)
+		if err != nil {
+			msg := "精翻预读分析失败: " + err.Error()
+			_ = a.setProgress(storyID, func(p Progress) Progress {
+				p.Phase = PhaseError
+				p.Message = msg
+				p.FinishedAt = nowISO()
+				return p
+			})
+			_ = a.updateStoryStatus(storyID, StatusError)
+			a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseError, Message: msg})
+			return nil
+		}
+		transCtx = analysed
+		if err := a.updateStoryStatus(storyID, StatusTranslating); err != nil {
+			return err
+		}
+		if err := a.setProgress(storyID, func(p Progress) Progress {
+			p.Phase = PhaseTranslating
+			return p
+		}); err != nil {
+			return err
+		}
+		a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseTranslating})
+	}
+
 	maxRounds := cfg.LLM.MaxAutoRetries
 	if maxRounds < 0 {
 		maxRounds = 0
@@ -356,7 +442,7 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 			}
 			a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseTranslating, Message: fmt.Sprintf("自动重试第 %d/%d 轮", round, maxRounds)})
 		}
-		if err := a.translatePass(ctx, storyID, cfg, *meta, original, translated); err != nil {
+		if err := a.translatePass(ctx, storyID, cfg, *meta, original, translated, transCtx); err != nil {
 			return err
 		}
 	}
@@ -407,7 +493,7 @@ func resetErrorsToPending(translated *ChapterFile) bool {
 	return reset
 }
 
-func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, meta Meta, original *ChapterFile, translated *ChapterFile) error {
+func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, meta Meta, original *ChapterFile, translated *ChapterFile, transCtx *TranslationContext) error {
 	for chIdx := 0; chIdx < len(original.Chapters); chIdx++ {
 		orig := original.Chapters[chIdx]
 		if chIdx >= len(translated.Chapters) {
@@ -492,7 +578,7 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 					a.markInflight(storyID, ids)
 					_ = a.emitProgress(storyID, *translated, *original)
 					outs, err := withRetry(func() ([]translateOutput, error) {
-						return translateBatch(ctx, cfg, meta, inputs)
+						return translateBatch(ctx, cfg, meta, inputs, transCtx, chIdx)
 					}, 2)
 
 					transMu.Lock()
