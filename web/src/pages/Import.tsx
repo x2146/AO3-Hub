@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Download, UploadCloud } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -8,8 +8,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { api } from "../lib/api";
+import type { TranslationMode } from "@ao3hub/shared";
 
 type Mode = "upload" | "url";
+type ModeChoice = "default" | TranslationMode;
 
 export function ImportPage() {
   const navigate = useNavigate();
@@ -18,6 +20,16 @@ export function ImportPage() {
   const [url, setUrl] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modeChoice, setModeChoice] = useState<ModeChoice>("default");
+
+  const { data: cfg } = useQuery({
+    queryKey: ["config", "public"],
+    queryFn: () => api.getPublicConfig(),
+  });
+  const defaultMode: TranslationMode = (cfg?.llm?.mode ?? "normal") as TranslationMode;
+  const effectiveMode: TranslationMode =
+    modeChoice === "default" ? defaultMode : modeChoice;
+  const requestMode = modeChoice === "default" ? undefined : modeChoice;
 
   const onDone = (id: string) => {
     qc.invalidateQueries({ queryKey: ["stories"] });
@@ -25,13 +37,13 @@ export function ImportPage() {
   };
 
   const upload = useMutation({
-    mutationFn: (file: File) => api.uploadHtml(file),
+    mutationFn: (file: File) => api.uploadHtml(file, requestMode),
     onSuccess: (d) => onDone(d.id),
     onError: (e: Error) => setError(e.message),
   });
 
   const create = useMutation({
-    mutationFn: (u: string) => api.createFromUrl(u),
+    mutationFn: (u: string) => api.createFromUrl(u, requestMode),
     onSuccess: (d) => onDone(d.id),
     onError: (e: Error) => setError(e.message),
   });
@@ -60,6 +72,34 @@ export function ImportPage() {
           直接把 AO3「Download → HTML」生成的文件拖进来；或者贴 work URL，服务端代为下载。
         </p>
       </header>
+
+      <section className="space-y-3">
+        <Label>翻译模式</Label>
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ["default", `跟随默认（${defaultMode === "refined" ? "精翻" : "普通"}）`],
+              ["normal", "普通"],
+              ["refined", "精翻"],
+            ] as const
+          ).map(([value, label]) => (
+            <Button
+              key={value}
+              type="button"
+              variant={modeChoice === value ? "default" : "outline"}
+              size="sm"
+              onClick={() => setModeChoice(value)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+        <p className="text-muted-foreground text-[12px] leading-relaxed">
+          {effectiveMode === "refined"
+            ? "精翻：先用 LLM 通读全文，输出全文摘要、角色术语表与基调，再分块翻译。质量高，但首次需要额外的预读成本。"
+            : "普通：直接分块翻译，速度快、token 成本低。"}
+        </p>
+      </section>
 
       <Tabs
         value={mode}

@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 func indexEntryFor(meta Meta, status StoryStatus) IndexEntry {
@@ -24,7 +25,7 @@ func (a *App) persistParsed(html string, source struct {
 	URL         string
 	DownloadURL string
 	WorkID      string
-}) (Meta, ChapterFile, bool, error) {
+}, mode TranslationMode) (Meta, ChapterFile, bool, error) {
 	parsed, err := parseAO3HTML(html)
 	if err != nil {
 		return Meta{}, ChapterFile{}, false, err
@@ -47,6 +48,14 @@ func (a *App) persistParsed(html string, source struct {
 	meta.ID = id
 	meta.URL = url
 	meta.DownloadURL = source.DownloadURL
+
+	existing, _ := a.store.LoadMeta(id)
+	switch {
+	case strings.TrimSpace(string(mode)) != "":
+		meta.TranslationMode = normalizeTranslationMode(mode)
+	case existing != nil:
+		meta.TranslationMode = existing.TranslationMode
+	}
 	meta = normalizeMeta(meta)
 
 	isNew := !a.store.StoryExists(id)
@@ -126,7 +135,7 @@ func (a *App) prepareEntry(id, title, author string, status StoryStatus) error {
 	})
 }
 
-func (a *App) CreateFromURL(url string) (map[string]string, error) {
+func (a *App) CreateFromURL(url string, mode TranslationMode) (map[string]string, error) {
 	workID := extractWorkID(url)
 	if workID == "" {
 		return nil, errors.New("无法从 URL 提取 work id")
@@ -153,7 +162,7 @@ func (a *App) CreateFromURL(url string) (map[string]string, error) {
 		URL:         url,
 		DownloadURL: fmt.Sprintf("https://archiveofourown.org/works/%s?view_full_work=true", workID),
 		WorkID:      workID,
-	})
+	}, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -164,12 +173,12 @@ func (a *App) CreateFromURL(url string) (map[string]string, error) {
 	return map[string]string{"id": workID, "status": string(StatusQueued)}, nil
 }
 
-func (a *App) CreateFromHTML(html string) (map[string]string, error) {
+func (a *App) CreateFromHTML(html string, mode TranslationMode) (map[string]string, error) {
 	meta, _, _, err := a.persistParsed(html, struct {
 		URL         string
 		DownloadURL string
 		WorkID      string
-	}{})
+	}{}, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +189,7 @@ func (a *App) CreateFromHTML(html string) (map[string]string, error) {
 	return map[string]string{"id": meta.ID, "status": string(StatusQueued)}, nil
 }
 
-func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int) error {
+func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode TranslationMode) error {
 	translated, err := a.store.LoadTranslated(id)
 	if err != nil || translated == nil {
 		return errors.New("story not found")
@@ -188,6 +197,15 @@ func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int) error 
 	original, err := a.store.LoadOriginal(id)
 	if err != nil || original == nil {
 		return errors.New("story not found")
+	}
+	if strings.TrimSpace(string(mode)) != "" {
+		nextMode := normalizeTranslationMode(mode)
+		if meta, _ := a.store.LoadMeta(id); meta != nil && meta.TranslationMode != nextMode {
+			meta.TranslationMode = nextMode
+			if err := a.store.SaveMeta(id, *meta); err != nil {
+				return err
+			}
+		}
 	}
 	idSet := map[string]bool{}
 	if len(blockIDs) > 0 {

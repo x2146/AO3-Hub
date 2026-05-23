@@ -615,15 +615,17 @@ function ChapterProgress({
   const phaseLabel =
     progress.phase === "translating"
       ? "翻译中"
-      : progress.phase === "fetching"
-        ? "抓取中"
-        : progress.phase === "parsing"
-          ? "解析中"
-          : progress.phase === "queued"
-            ? "排队中"
-            : progress.phase === "error"
-              ? "出错"
-              : progress.phase;
+      : progress.phase === "analyzing"
+        ? "预读分析中"
+        : progress.phase === "fetching"
+          ? "抓取中"
+          : progress.phase === "parsing"
+            ? "解析中"
+            : progress.phase === "queued"
+              ? "排队中"
+              : progress.phase === "error"
+                ? "出错"
+                : progress.phase;
   return (
     <div className="mt-6 rounded-xl border border-border p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">

@@ -40,6 +40,8 @@ type LocalConfig = {
     blocksPerRequest: number;
     maxTokensPerRequest: number;
     maxAutoRetries: number;
+    mode: "normal" | "refined";
+    analysisMaxInputTokens: number;
   };
   ao3: {
     cookie: string;
@@ -120,6 +122,8 @@ export function Settings() {
         blocksPerRequest: data.llm.blocksPerRequest,
         maxTokensPerRequest: data.llm.maxTokensPerRequest,
         maxAutoRetries: data.llm.maxAutoRetries,
+        mode: data.llm.mode ?? "normal",
+        analysisMaxInputTokens: data.llm.analysisMaxInputTokens ?? 60000,
       },
       ao3: { cookie: data.ao3.cookie, userAgent: data.ao3.userAgent },
       reader: {
@@ -457,6 +461,49 @@ export function Settings() {
             />
           </Field>
         </div>
+        <Field id="llm-mode" label="翻译模式（默认）">
+          <div id="llm-mode" className="flex flex-wrap gap-2">
+            {[
+              ["normal", "普通"],
+              ["refined", "精翻（AO3 同人专家 + 全文预读）"],
+            ].map(([mode, label]) => (
+              <Button
+                key={mode}
+                type="button"
+                variant={form.llm.mode === mode ? "default" : "outline"}
+                size="sm"
+                onClick={() =>
+                  setForm({
+                    ...form,
+                    llm: { ...form.llm, mode: mode as LocalConfig["llm"]["mode"] },
+                  })
+                }
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </Field>
+        <Field
+          id="llm-analysis-tokens"
+          label="精翻：单次预读 token 上限（超过则自动降级为分章 + 归并）"
+        >
+          <Input
+            id="llm-analysis-tokens"
+            type="number"
+            min="1000"
+            value={form.llm.analysisMaxInputTokens}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                llm: {
+                  ...form.llm,
+                  analysisMaxInputTokens: Number(e.target.value),
+                },
+              })
+            }
+          />
+        </Field>
         <div className="flex items-center gap-3">
           <Button
             variant="outline"

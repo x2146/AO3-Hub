@@ -4,11 +4,15 @@ export const StoryStatus = z.enum([
   "queued",
   "fetching",
   "parsing",
+  "analyzing",
   "translating",
   "ready",
   "error",
 ]);
 export type StoryStatus = z.infer<typeof StoryStatus>;
+
+export const TranslationMode = z.enum(["normal", "refined"]);
+export type TranslationMode = z.infer<typeof TranslationMode>;
 
 export const IndexEntry = z.object({
   id: z.string(),
@@ -53,6 +57,7 @@ export const Meta = z.object({
   updatedAt: z.string().optional(),
   wordCount: z.number().int().nonnegative().default(0),
   chapterCount: z.number().int().nonnegative().default(1),
+  translationMode: TranslationMode.optional(),
 });
 export type Meta = z.infer<typeof Meta>;
 
@@ -87,6 +92,7 @@ export const ProgressPhase = z.enum([
   "queued",
   "fetching",
   "parsing",
+  "analyzing",
   "translating",
   "ready",
   "error",
@@ -127,6 +133,8 @@ export const LlmConfig = z.object({
   blocksPerRequest: z.number().int().positive().default(8),
   maxTokensPerRequest: z.number().int().positive().default(3500),
   maxAutoRetries: z.number().int().nonnegative().default(2),
+  mode: TranslationMode.default("normal"),
+  analysisMaxInputTokens: z.number().int().positive().default(60000),
 });
 export type LlmConfig = z.infer<typeof LlmConfig>;
 
@@ -244,6 +252,7 @@ export type ApplyUpdateRequest = z.infer<typeof ApplyUpdateRequest>;
 
 export const CreateStoryRequest = z.object({
   url: z.string().url(),
+  mode: TranslationMode.optional(),
 });
 export type CreateStoryRequest = z.infer<typeof CreateStoryRequest>;
 
@@ -276,6 +285,7 @@ export type ChapterView = z.infer<typeof ChapterView>;
 export const RetryRequest = z.object({
   blockIds: z.array(z.string()).optional(),
   chapterIndex: z.number().int().nonnegative().optional(),
+  mode: TranslationMode.optional(),
 });
 export type RetryRequest = z.infer<typeof RetryRequest>;
 

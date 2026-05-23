@@ -25,7 +25,7 @@ export function Library() {
     refetchInterval: (q) => {
       const stories = (q.state.data as StoriesListResponse | undefined)?.stories;
       const inFlight = stories?.some((s) =>
-        ["queued", "fetching", "parsing", "translating"].includes(s.status),
+        ["queued", "fetching", "parsing", "analyzing", "translating"].includes(s.status),
       );
       return inFlight ? config?.ui.libraryRefetchIntervalMs ?? 3000 : false;
     },

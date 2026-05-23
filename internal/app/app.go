@@ -299,7 +299,8 @@ func (a *App) mountStories(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /stories", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
 		var body struct {
-			URL string `json:"url"`
+			URL  string          `json:"url"`
+			Mode TranslationMode `json:"mode"`
 		}
 		if err := decodeJSON(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid url")
@@ -309,7 +310,7 @@ func (a *App) mountStories(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "invalid url")
 			return
 		}
-		out, err := a.CreateFromURL(body.URL)
+		out, err := a.CreateFromURL(body.URL, body.Mode)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -317,7 +318,7 @@ func (a *App) mountStories(mux *http.ServeMux) {
 		writeJSON(w, http.StatusCreated, out)
 	}))
 	mux.HandleFunc("POST /stories/upload", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
-		html, err := readUploadHTML(r)
+		html, mode, err := readUploadHTML(r)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "empty or invalid html")
 			return
@@ -331,7 +332,7 @@ func (a *App) mountStories(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "empty or invalid html")
 			return
 		}
-		out, err := a.CreateFromHTML(html)
+		out, err := a.CreateFromHTML(html, mode)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -357,8 +358,9 @@ func (a *App) mountStories(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /stories/{id}/retry", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
 		var body struct {
-			BlockIDs     []string `json:"blockIds"`
-			ChapterIndex *int     `json:"chapterIndex"`
+			BlockIDs     []string        `json:"blockIds"`
+			ChapterIndex *int            `json:"chapterIndex"`
+			Mode         TranslationMode `json:"mode"`
 		}
 		if err := decodeJSON(r, &body); err != nil && !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, "invalid retry payload")
@@ -368,7 +370,7 @@ func (a *App) mountStories(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "invalid retry payload")
 			return
 		}
-		if err := a.RetryStory(r.PathValue("id"), body.BlockIDs, body.ChapterIndex); err != nil {
+		if err := a.RetryStory(r.PathValue("id"), body.BlockIDs, body.ChapterIndex, body.Mode); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -386,37 +388,50 @@ func (a *App) mountStories(mux *http.ServeMux) {
 	})
 }
 
-func readUploadHTML(r *http.Request) (string, error) {
+func readUploadHTML(r *http.Request) (string, TranslationMode, error) {
 	ct := r.Header.Get("content-type")
 	if strings.HasPrefix(ct, "multipart/form-data") {
 		reader, err := r.MultipartReader()
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
+		var html string
+		var mode TranslationMode
 		for {
 			part, err := reader.NextPart()
 			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {
-				return "", err
+				return "", "", err
 			}
-			if part.FormName() != "file" && part.FormName() != "html" {
-				continue
+			switch part.FormName() {
+			case "file", "html":
+				data, err := readMultipartPart(part)
+				if err != nil {
+					return "", "", err
+				}
+				html = string(data)
+			case "mode":
+				data, err := readMultipartPart(part)
+				if err != nil {
+					return "", "", err
+				}
+				mode = TranslationMode(strings.TrimSpace(string(data)))
+			default:
+				_ = part.Close()
 			}
-			data, err := readMultipartPart(part)
-			if err != nil {
-				return "", err
-			}
-			return string(data), nil
 		}
-		return "", errors.New("no file")
+		if html == "" {
+			return "", "", errors.New("no file")
+		}
+		return html, mode, nil
 	}
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return string(data), nil
+	return string(data), TranslationMode(strings.TrimSpace(r.URL.Query().Get("mode"))), nil
 }
 
 func readMultipartPart(part *multipart.Part) ([]byte, error) {
@@ -545,7 +560,13 @@ func (a *App) mountConfig(mux *http.ServeMux) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"reader": cfg.Reader, "ui": cfg.UI})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"reader": cfg.Reader,
+			"ui":     cfg.UI,
+			"llm": map[string]any{
+				"mode": cfg.LLM.Mode,
+			},
+		})
 	})
 	mux.HandleFunc("GET /config", requireAdmin(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
 		cfg, err := a.store.LoadConfig()
@@ -694,7 +715,7 @@ func (a *App) mountUpdate(mux *http.ServeMux) {
 			status = http.StatusOK
 			if result.Restart {
 				cfg, _ := a.store.LoadConfig()
-				scheduleExec(cfg.Update.RestartDelayMS)
+				scheduleExec(cfg.Update.RestartDelayMS, result.execPath)
 			}
 		}
 		writeJSON(w, status, result)

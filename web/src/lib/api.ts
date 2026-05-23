@@ -9,6 +9,7 @@ import type {
   Role,
   StoryList,
   StreamEvent,
+  TranslationMode,
   VersionInfo,
   ApplyUpdateRequest,
 } from "@ao3hub/shared";
@@ -50,18 +51,19 @@ export const api = {
   getStory: (id: string) => http<StoryDetail>(`/stories/${id}`),
   getChapter: (id: string, n: number) =>
     http<ChapterView>(`/stories/${id}/chapters/${n}`),
-  createFromUrl: (url: string) =>
+  createFromUrl: (url: string, mode?: TranslationMode) =>
     http<{ id: string; status: string }>("/stories", {
       method: "POST",
-      body: JSON.stringify({ url }),
+      body: JSON.stringify(mode ? { url, mode } : { url }),
     }),
-  uploadHtml: async (file: File | string) => {
+  uploadHtml: async (file: File | string, mode?: TranslationMode) => {
     const form = new FormData();
     if (typeof file === "string") {
       form.append("file", new Blob([file], { type: "text/html" }), "upload.html");
     } else {
       form.append("file", file);
     }
+    if (mode) form.append("mode", mode);
     const res = await fetch(base + "/stories/upload", {
       method: "POST",
       credentials: "same-origin",
@@ -79,7 +81,10 @@ export const api = {
     }
     return (await res.json()) as { id: string; status: string };
   },
-  retry: (id: string, body: { blockIds?: string[]; chapterIndex?: number } = {}) =>
+  retry: (
+    id: string,
+    body: { blockIds?: string[]; chapterIndex?: number; mode?: TranslationMode } = {},
+  ) =>
     http<{ ok: true }>(`/stories/${id}/retry`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -88,7 +93,10 @@ export const api = {
     http<{ ok: true }>(`/stories/${id}`, { method: "DELETE" }),
 
   getConfig: () => http<Config & { llm: Config["llm"] & { hasApiKey: boolean }; ao3: Config["ao3"] & { hasCookie: boolean } }>("/config"),
-  getPublicConfig: () => http<Pick<Config, "reader" | "ui">>("/config/public"),
+  getPublicConfig: () =>
+    http<Pick<Config, "reader" | "ui"> & { llm: { mode: TranslationMode } }>(
+      "/config/public",
+    ),
   saveConfig: (body: any) =>
     http<{ ok: true }>("/config", { method: "PUT", body: JSON.stringify(body) }),
   testConfig: () =>

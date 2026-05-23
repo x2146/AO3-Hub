@@ -272,10 +272,11 @@ func sha256HexFile(file string) (string, error) {
 }
 
 type ApplyResult struct {
-	OK      bool   `json:"ok"`
-	Version string `json:"version,omitempty"`
-	Message string `json:"message"`
-	Restart bool   `json:"restart,omitempty"`
+	OK       bool   `json:"ok"`
+	Version  string `json:"version,omitempty"`
+	Message  string `json:"message"`
+	Restart  bool   `json:"restart,omitempty"`
+	execPath string
 }
 
 type ApplyUpdateOptions struct {
@@ -381,14 +382,16 @@ func (a *App) ApplyUpdate(opts ApplyUpdateOptions) ApplyResult {
 		_ = os.Remove(tmp)
 		return ApplyResult{OK: false, Message: err.Error()}
 	}
-	if err := installUpdate(final); err != nil {
+	execPath, err := installUpdate(final)
+	if err != nil {
 		return ApplyResult{OK: false, Message: err.Error()}
 	}
 	return ApplyResult{
-		OK:      true,
-		Version: manifest.Version,
-		Message: fmt.Sprintf("已升级到 %s，进程即将重启", manifest.Version),
-		Restart: true,
+		OK:       true,
+		Version:  manifest.Version,
+		Message:  fmt.Sprintf("已升级到 %s，进程即将重启", manifest.Version),
+		Restart:  true,
+		execPath: execPath,
 	}
 }
 
@@ -409,10 +412,10 @@ func safePathSegment(value string) string {
 	return replacer.Replace(value)
 }
 
-func installUpdate(newBinaryPath string) error {
+func installUpdate(newBinaryPath string) (string, error) {
 	execPath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("resolve executable path: %w", err)
+		return "", fmt.Errorf("resolve executable path: %w", err)
 	}
 	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
 		execPath = resolved
@@ -421,20 +424,20 @@ func installUpdate(newBinaryPath string) error {
 
 	_ = os.Remove(backupPath)
 	if err := os.Rename(execPath, backupPath); err != nil {
-		return fmt.Errorf("backup current binary: %w", err)
+		return "", fmt.Errorf("backup current binary: %w", err)
 	}
 	if err := copyFile(newBinaryPath, execPath); err != nil {
 		_ = os.Rename(backupPath, execPath)
-		return fmt.Errorf("install new binary: %w", err)
+		return "", fmt.Errorf("install new binary: %w", err)
 	}
 	if err := os.Chmod(execPath, 0o755); err != nil {
 		_ = os.Rename(backupPath, execPath)
 		_ = os.Remove(newBinaryPath)
-		return fmt.Errorf("chmod new binary: %w", err)
+		return "", fmt.Errorf("chmod new binary: %w", err)
 	}
 	_ = os.Remove(backupPath)
 	_ = os.Remove(newBinaryPath)
-	return nil
+	return execPath, nil
 }
 
 func copyFile(src, dst string) error {
@@ -455,20 +458,16 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-func scheduleExec(delayMS int) {
+func scheduleExec(delayMS int, execPath string) {
+	if execPath == "" {
+		fmt.Fprintf(os.Stderr, "[ao3-hub] restart failed: missing executable path\n")
+		return
+	}
 	if delayMS < 0 {
 		delayMS = 600
 	}
 	go func() {
 		time.Sleep(time.Duration(delayMS) * time.Millisecond)
-		execPath, err := os.Executable()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[ao3-hub] restart failed: resolve executable path: %v\n", err)
-			return
-		}
-		if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
-			execPath = resolved
-		}
 		fmt.Fprintf(os.Stderr, "[ao3-hub] restarting with updated binary\n")
 		if err := execCurrentProcess(execPath); err != nil {
 			fmt.Fprintf(os.Stderr, "[ao3-hub] restart failed: %v\n", err)
