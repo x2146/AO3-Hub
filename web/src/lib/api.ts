@@ -10,6 +10,7 @@ import type {
   Role,
   StreamEvent,
   VersionInfo,
+  ApplyUpdateRequest,
 } from "@ao3hub/shared";
 
 const base = "/api";
@@ -98,10 +99,10 @@ export const api = {
   version: () => http<VersionInfo>("/update/version"),
   checkUpdate: () =>
     http<VersionInfo>("/update/check", { method: "POST" }),
-  applyUpdate: (force = false) =>
+  applyUpdate: (body: ApplyUpdateRequest = {}) =>
     http<{ ok: boolean; message: string; version?: string }>("/update/apply", {
       method: "POST",
-      body: JSON.stringify({ force }),
+      body: JSON.stringify(body),
     }),
 
   me: () => http<AuthMe>("/auth/me"),

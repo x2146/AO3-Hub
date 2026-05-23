@@ -31,6 +31,7 @@ type LocalConfig = {
     libraryRefetchIntervalMs: number;
   };
   llm: {
+    apiType: "openai-compatible" | "claude-messages";
     baseURL: string;
     apiKey: string;
     model: string;
@@ -66,6 +67,17 @@ const DEFAULT_MANIFEST_URLS = new Set([
   DEFAULT_DEV_UPDATE_MANIFEST_URL,
 ]);
 
+const LLM_PROVIDER_DEFAULTS = {
+  "openai-compatible": {
+    baseURL: "https://api.deepseek.com/v1",
+    model: "deepseek-chat",
+  },
+  "claude-messages": {
+    baseURL: "https://api.anthropic.com/v1",
+    model: "claude-sonnet-4-5",
+  },
+} satisfies Record<LocalConfig["llm"]["apiType"], { baseURL: string; model: string }>;
+
 export function Settings() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
@@ -98,6 +110,7 @@ export function Settings() {
         libraryRefetchIntervalMs: data.ui.libraryRefetchIntervalMs,
       },
       llm: {
+        apiType: data.llm.apiType,
         baseURL: data.llm.baseURL,
         apiKey: data.llm.apiKey,
         model: data.llm.model,
@@ -171,6 +184,29 @@ export function Settings() {
           ...current.update,
           channel,
           manifestURL: nextURL,
+        },
+      };
+    });
+  };
+
+  const setLlmAPIType = (apiType: LocalConfig["llm"]["apiType"]) => {
+    setForm((current) => {
+      if (!current) return current;
+      const previousDefaults = LLM_PROVIDER_DEFAULTS[current.llm.apiType];
+      const nextDefaults = LLM_PROVIDER_DEFAULTS[apiType];
+      return {
+        ...current,
+        llm: {
+          ...current.llm,
+          apiType,
+          baseURL:
+            current.llm.baseURL.trim() === previousDefaults.baseURL
+              ? nextDefaults.baseURL
+              : current.llm.baseURL,
+          model:
+            current.llm.model.trim() === previousDefaults.model
+              ? nextDefaults.model
+              : current.llm.model,
         },
       };
     });
@@ -289,9 +325,32 @@ export function Settings() {
         <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
           LLM Provider
         </h2>
+        <Field id="llm-api-type" label="API Type">
+          <div id="llm-api-type" className="flex flex-wrap gap-2">
+            {[
+              ["openai-compatible", "OpenAI compatible"],
+              ["claude-messages", "Claude Messages"],
+            ].map(([apiType, label]) => (
+              <Button
+                key={apiType}
+                type="button"
+                variant={form.llm.apiType === apiType ? "default" : "outline"}
+                size="sm"
+                onClick={() => setLlmAPIType(apiType as LocalConfig["llm"]["apiType"])}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </Field>
         <Field id="llm-baseurl" label="Base URL">
           <Input
             id="llm-baseurl"
+            placeholder={
+              form.llm.apiType === "claude-messages"
+                ? "https://api.anthropic.com/v1"
+                : "https://api.deepseek.com/v1"
+            }
             value={form.llm.baseURL}
             onChange={(e) =>
               setForm({ ...form, llm: { ...form.llm, baseURL: e.target.value } })

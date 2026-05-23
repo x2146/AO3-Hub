@@ -114,6 +114,9 @@ export const Progress = z.object({
 export type Progress = z.infer<typeof Progress>;
 
 export const LlmConfig = z.object({
+  apiType: z
+    .enum(["openai-compatible", "claude-messages"])
+    .default("openai-compatible"),
   baseURL: z.string().default("https://api.deepseek.com/v1"),
   apiKey: z.string().default(""),
   model: z.string().default("deepseek-chat"),
@@ -227,6 +230,12 @@ export const VersionInfo = z.object({
     .optional(),
 });
 export type VersionInfo = z.infer<typeof VersionInfo>;
+
+export const ApplyUpdateRequest = z.object({
+  force: z.boolean().optional(),
+  forceVersion: z.string().optional(),
+});
+export type ApplyUpdateRequest = z.infer<typeof ApplyUpdateRequest>;
 
 export const CreateStoryRequest = z.object({
   url: z.string().url(),

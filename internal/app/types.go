@@ -123,6 +123,7 @@ type Progress struct {
 }
 
 type LLMConfig struct {
+	APIType             string  `json:"apiType"`
 	BaseURL             string  `json:"baseURL"`
 	APIKey              string  `json:"apiKey"`
 	Model               string  `json:"model"`

@@ -3,6 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import type { ApplyUpdateRequest } from "@ao3hub/shared";
 import { api } from "../lib/api";
 
 export function Version() {
@@ -12,7 +13,7 @@ export function Version() {
     queryFn: () => api.version(),
   });
   const apply = useMutation({
-    mutationFn: (force: boolean) => api.applyUpdate(force),
+    mutationFn: (body: ApplyUpdateRequest) => api.applyUpdate(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["version"] }),
   });
 
@@ -89,20 +90,20 @@ export function Version() {
             <div className="flex gap-2">
               <Button
                 variant="default"
-                onClick={() => apply.mutate(false)}
+                onClick={() => apply.mutate({})}
                 disabled={!latest.hasUpdate || apply.isPending}
               >
                 {apply.isPending ? "下载安装中…" : "下载并安装"}
               </Button>
-              {!latest.hasUpdate && (
-                <Button
-                  variant="outline"
-                  onClick={() => apply.mutate(true)}
-                  disabled={apply.isPending}
-                >
-                  强制重装当前版本
-                </Button>
-              )}
+              <Button
+                variant="outline"
+                onClick={() =>
+                  apply.mutate({ force: true, forceVersion: latest.version })
+                }
+                disabled={apply.isPending}
+              >
+                强制拉取此版本
+              </Button>
             </div>
             {apply.data && (
               <p

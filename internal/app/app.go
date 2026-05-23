@@ -58,7 +58,7 @@ func (a *App) Run() error {
 		return err
 	}
 	addr := fmt.Sprintf("%s:%d", host, port)
-	fmt.Printf("[ao3-hub] v%s listening on http://%s\n", Version, addr)
+	fmt.Printf("[ao3-hub] %s listening on http://%s\n", versionLabel(Version), addr)
 	return http.ListenAndServe(addr, a.routes())
 }
 
@@ -587,6 +587,7 @@ func configResponse(cfg Config) map[string]any {
 		"import": cfg.Import,
 		"ui":     cfg.UI,
 		"llm": map[string]any{
+			"apiType":             cfg.LLM.APIType,
 			"baseURL":             cfg.LLM.BaseURL,
 			"apiKey":              maskSecret(cfg.LLM.APIKey),
 			"hasApiKey":           cfg.LLM.APIKey != "",
@@ -629,11 +630,15 @@ func mergeConfig(cfg *Config, raw map[string]json.RawMessage) {
 		_ = json.Unmarshal(v, &cfg.Update)
 	}
 	if v, ok := raw["llm"]; ok {
-		currentKey := cfg.LLM.APIKey
+		previous := cfg.LLM
+		currentKey := previous.APIKey
+		var patch map[string]json.RawMessage
+		_ = json.Unmarshal(v, &patch)
 		_ = json.Unmarshal(v, &cfg.LLM)
 		if cfg.LLM.APIKey == "" || strings.Contains(cfg.LLM.APIKey, "…") {
 			cfg.LLM.APIKey = currentKey
 		}
+		normalizeLLMProviderDefaults(&cfg.LLM, previous, patch)
 	}
 	if v, ok := raw["ao3"]; ok {
 		currentCookie := cfg.AO3.Cookie
@@ -654,10 +659,19 @@ func (a *App) mountUpdate(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("POST /update/apply", requireAdmin(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
 		var body struct {
-			Force bool `json:"force"`
+			Force        bool   `json:"force"`
+			ForceVersion string `json:"forceVersion"`
+			Version      string `json:"version"`
 		}
 		_ = decodeJSON(r, &body)
-		result := a.ApplyUpdate(body.Force)
+		forceVersion := strings.TrimSpace(body.ForceVersion)
+		if forceVersion == "" {
+			forceVersion = strings.TrimSpace(body.Version)
+		}
+		result := a.ApplyUpdate(ApplyUpdateOptions{
+			Force:        body.Force,
+			ForceVersion: forceVersion,
+		})
 		status := http.StatusBadRequest
 		if result.OK {
 			status = http.StatusOK

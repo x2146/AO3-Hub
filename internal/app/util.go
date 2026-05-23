@@ -17,14 +17,42 @@ import (
 )
 
 const (
-	DefaultUpdateManifestURL    = "https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json"
-	DefaultDevUpdateManifestURL = "https://github.com/x2146/AO3-Hub/releases/download/dev/manifest.json"
+	DefaultUpdateManifestURL       = "https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json"
+	DefaultDevUpdateManifestURL    = "https://github.com/x2146/AO3-Hub/releases/download/dev/manifest.json"
+	LLMAPITypeOpenAICompatible     = "openai-compatible"
+	LLMAPITypeClaudeMessages       = "claude-messages"
+	DefaultOpenAICompatibleBaseURL = "https://api.deepseek.com/v1"
+	DefaultOpenAICompatibleModel   = "deepseek-chat"
+	DefaultClaudeMessagesBaseURL   = "https://api.anthropic.com/v1"
+	DefaultClaudeMessagesModel     = "claude-sonnet-4-5"
 )
 
 var (
-	Version = envOr("AO3HUB_VERSION", "0.1.0-dev")
-	BuiltAt = envOr("AO3HUB_BUILT_AT", time.Now().UTC().Format(time.RFC3339Nano))
+	Version = "dev-local"
+	BuiltAt = ""
 )
+
+func init() {
+	Version = envOr("AO3HUB_VERSION", Version)
+	BuiltAt = envOr("AO3HUB_BUILT_AT", BuiltAt)
+	if BuiltAt == "" {
+		BuiltAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+}
+
+func versionLabel(version string) string {
+	v := strings.TrimSpace(version)
+	if v == "" {
+		return "dev-local"
+	}
+	if strings.HasPrefix(v, "v") || strings.HasPrefix(v, "dev-") {
+		return v
+	}
+	if regexp.MustCompile(`^\d+\.\d+\.\d+(?:[-+].*)?$`).MatchString(v) {
+		return "v" + v
+	}
+	return v
+}
 
 func envOr(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
@@ -191,15 +219,7 @@ func defaultConfig() Config {
 		UI: UIConfig{
 			LibraryRefetchIntervalMS: 3000,
 		},
-		LLM: LLMConfig{
-			BaseURL:             "https://api.deepseek.com/v1",
-			APIKey:              "",
-			Model:               "deepseek-chat",
-			Temperature:         0.3,
-			Concurrency:         3,
-			BlocksPerRequest:    8,
-			MaxTokensPerRequest: 3500,
-		},
+		LLM: defaultLLMConfig(LLMAPITypeOpenAICompatible),
 		AO3: AO3Config{
 			Cookie:    "",
 			UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
@@ -216,6 +236,26 @@ func defaultConfig() Config {
 			RestartDelayMS: 600,
 		},
 	}
+}
+
+func defaultLLMConfig(apiType string) LLMConfig {
+	normalized := normalizeLLMAPIType(apiType)
+	cfg := LLMConfig{
+		APIType:             LLMAPITypeOpenAICompatible,
+		BaseURL:             DefaultOpenAICompatibleBaseURL,
+		APIKey:              "",
+		Model:               DefaultOpenAICompatibleModel,
+		Temperature:         0.3,
+		Concurrency:         3,
+		BlocksPerRequest:    8,
+		MaxTokensPerRequest: 3500,
+	}
+	if normalized == LLMAPITypeClaudeMessages {
+		cfg.APIType = LLMAPITypeClaudeMessages
+		cfg.BaseURL = DefaultClaudeMessagesBaseURL
+		cfg.Model = DefaultClaudeMessagesModel
+	}
+	return cfg
 }
 
 func normalizeConfig(c Config) Config {
@@ -238,20 +278,22 @@ func normalizeConfig(c Config) Config {
 	if c.UI.LibraryRefetchIntervalMS <= 0 {
 		c.UI.LibraryRefetchIntervalMS = d.UI.LibraryRefetchIntervalMS
 	}
+	c.LLM.APIType = normalizeLLMAPIType(c.LLM.APIType)
+	llmDefaults := defaultLLMConfig(c.LLM.APIType)
 	if strings.TrimSpace(c.LLM.BaseURL) == "" {
-		c.LLM.BaseURL = d.LLM.BaseURL
+		c.LLM.BaseURL = llmDefaults.BaseURL
 	}
 	if strings.TrimSpace(c.LLM.Model) == "" {
-		c.LLM.Model = d.LLM.Model
+		c.LLM.Model = llmDefaults.Model
 	}
 	if c.LLM.Concurrency <= 0 {
-		c.LLM.Concurrency = d.LLM.Concurrency
+		c.LLM.Concurrency = llmDefaults.Concurrency
 	}
 	if c.LLM.BlocksPerRequest <= 0 {
-		c.LLM.BlocksPerRequest = d.LLM.BlocksPerRequest
+		c.LLM.BlocksPerRequest = llmDefaults.BlocksPerRequest
 	}
 	if c.LLM.MaxTokensPerRequest <= 0 {
-		c.LLM.MaxTokensPerRequest = d.LLM.MaxTokensPerRequest
+		c.LLM.MaxTokensPerRequest = llmDefaults.MaxTokensPerRequest
 	}
 	if strings.TrimSpace(c.AO3.UserAgent) == "" {
 		c.AO3.UserAgent = d.AO3.UserAgent
@@ -296,6 +338,9 @@ func validateConfig(c Config) error {
 	if c.UI.LibraryRefetchIntervalMS <= 0 {
 		return errors.New("ui.libraryRefetchIntervalMs must be positive")
 	}
+	if !validLLMAPIType(normalizeLLMAPIType(c.LLM.APIType)) {
+		return errors.New("llm.apiType is invalid")
+	}
 	if strings.TrimSpace(c.LLM.BaseURL) == "" {
 		return errors.New("llm.baseURL is required")
 	}
@@ -330,6 +375,43 @@ func validateConfig(c Config) error {
 		return errors.New("update.restartDelayMs must be nonnegative")
 	}
 	return nil
+}
+
+func normalizeLLMAPIType(apiType string) string {
+	switch strings.ToLower(strings.TrimSpace(apiType)) {
+	case "", "openai", "openai-compatible", "chat-completions":
+		return LLMAPITypeOpenAICompatible
+	case "anthropic", "claude", "claude-messages", "anthropic-messages":
+		return LLMAPITypeClaudeMessages
+	default:
+		return strings.ToLower(strings.TrimSpace(apiType))
+	}
+}
+
+func normalizeLLMProviderDefaults(next *LLMConfig, previous LLMConfig, patch map[string]json.RawMessage) {
+	previousType := normalizeLLMAPIType(previous.APIType)
+	nextType := normalizeLLMAPIType(next.APIType)
+	if previousType == nextType {
+		return
+	}
+	nextDefaults := defaultLLMConfig(nextType)
+	previousDefaults := defaultLLMConfig(previousType)
+	_, hasBaseURLPatch := patch["baseURL"]
+	keptPreviousBaseURLDefault := strings.TrimSpace(previous.BaseURL) == previousDefaults.BaseURL &&
+		strings.TrimSpace(next.BaseURL) == previousDefaults.BaseURL
+	if (!hasBaseURLPatch && strings.TrimSpace(previous.BaseURL) == previousDefaults.BaseURL) || keptPreviousBaseURLDefault {
+		next.BaseURL = nextDefaults.BaseURL
+	}
+	_, hasModelPatch := patch["model"]
+	keptPreviousModelDefault := strings.TrimSpace(previous.Model) == previousDefaults.Model &&
+		strings.TrimSpace(next.Model) == previousDefaults.Model
+	if (!hasModelPatch && strings.TrimSpace(previous.Model) == previousDefaults.Model) || keptPreviousModelDefault {
+		next.Model = nextDefaults.Model
+	}
+}
+
+func validLLMAPIType(apiType string) bool {
+	return apiType == LLMAPITypeOpenAICompatible || apiType == LLMAPITypeClaudeMessages
 }
 
 func maskSecret(key string) string {

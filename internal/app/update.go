@@ -9,14 +9,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
 func compareSemver(a, b string) int {
-	pa := strings.Split(strings.TrimPrefix(a, "v"), ".")
-	pb := strings.Split(strings.TrimPrefix(b, "v"), ".")
+	pa := strings.Split(normalizeVersion(a), ".")
+	pb := strings.Split(normalizeVersion(b), ".")
 	n := len(pa)
 	if len(pb) > n {
 		n = len(pb)
@@ -36,13 +37,56 @@ func compareSemver(a, b string) int {
 	return 0
 }
 
+var devVersionRE = regexp.MustCompile(`^dev-(\d+)(?:[-+.].*)?$`)
+
+func normalizeVersion(version string) string {
+	return strings.TrimPrefix(strings.TrimSpace(version), "v")
+}
+
+func sameVersion(a, b string) bool {
+	return normalizeVersion(a) == normalizeVersion(b)
+}
+
 func isDevVersion(version string) bool {
-	return strings.HasPrefix(version, "dev-")
+	return strings.HasPrefix(normalizeVersion(version), "dev-")
+}
+
+func devRunNumber(version string) (int64, bool) {
+	match := devVersionRE.FindStringSubmatch(normalizeVersion(version))
+	if len(match) != 2 {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func compareDevVersions(a, b string) int {
+	aRun, aOK := devRunNumber(a)
+	bRun, bOK := devRunNumber(b)
+	if aOK && !bOK {
+		return 1
+	}
+	if !aOK && bOK {
+		return -1
+	}
+	if aOK && bOK && aRun != bRun {
+		if aRun > bRun {
+			return 1
+		}
+		return -1
+	}
+	return strings.Compare(normalizeVersion(a), normalizeVersion(b))
 }
 
 func compareVersions(a, b string) int {
-	if a == b {
+	if sameVersion(a, b) {
 		return 0
+	}
+	if isDevVersion(a) && isDevVersion(b) {
+		return compareDevVersions(a, b)
 	}
 	if isDevVersion(a) || isDevVersion(b) {
 		return 1
@@ -153,7 +197,12 @@ type ApplyResult struct {
 	Restart bool   `json:"restart,omitempty"`
 }
 
-func (a *App) ApplyUpdate(force bool) ApplyResult {
+type ApplyUpdateOptions struct {
+	Force        bool
+	ForceVersion string
+}
+
+func (a *App) ApplyUpdate(opts ApplyUpdateOptions) ApplyResult {
 	manifest, fetchErr := a.FetchManifest()
 	if manifest == nil {
 		if fetchErr == "" {
@@ -161,7 +210,17 @@ func (a *App) ApplyUpdate(force bool) ApplyResult {
 		}
 		return ApplyResult{OK: false, Message: fetchErr}
 	}
-	if !force && compareVersions(manifest.Version, Version) <= 0 {
+	forceVersion := strings.TrimSpace(opts.ForceVersion)
+	if forceVersion != "" {
+		if !sameVersion(manifest.Version, forceVersion) {
+			return ApplyResult{
+				OK:      false,
+				Message: fmt.Sprintf("manifest 版本 %s 不匹配指定版本 %s", manifest.Version, forceVersion),
+			}
+		}
+		opts.Force = true
+	}
+	if !opts.Force && compareVersions(manifest.Version, Version) <= 0 {
 		return ApplyResult{OK: false, Message: fmt.Sprintf("当前 %s 已是最新（remote %s）", Version, manifest.Version)}
 	}
 	var asset *ManifestAsset
