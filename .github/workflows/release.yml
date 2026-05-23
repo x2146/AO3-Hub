@@ -191,8 +191,7 @@ jobs:
           AO3HUB_RELEASE_VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
-          cp server/scripts/launcher.sh server/build/release/launcher.sh
-          chmod +x server/build/release/ao3-hub-* server/build/release/launcher.sh
+          chmod +x server/build/release/ao3-hub-*
           go run ./cmd/ao3hub-manifest \
             --repo "${AO3HUB_RELEASE_REPO}" \
             --tag "${AO3HUB_RELEASE_TAG}" \
@@ -202,7 +201,7 @@ jobs:
             --published-at "${AO3HUB_RELEASE_PUBLISHED_AT}" \
             --out server/build/release/manifest.json \
             server/build/release/ao3-hub-*
-          (cd server/build/release && sha256sum ao3-hub-* manifest.json launcher.sh > SHA256SUMS)
+          (cd server/build/release && sha256sum ao3-hub-* manifest.json > SHA256SUMS)
 
       - name: Move dev tag
         if: needs.meta.outputs.channel == 'dev'
@@ -246,10 +245,15 @@ jobs:
           printf '%s\n' "${AO3HUB_RELEASE_NOTES}" > "${NOTES_FILE}"
 
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release delete "${TAG}" --yes
+            gh release edit "${TAG}" \
+              --title "${AO3HUB_RELEASE_TITLE}" \
+              --notes-file "${NOTES_FILE}" \
+              --prerelease
+            gh release upload "${TAG}" server/build/release/* --clobber
+          else
+            gh release create "${TAG}" server/build/release/* \
+              --title "${AO3HUB_RELEASE_TITLE}" \
+              --notes-file "${NOTES_FILE}" \
+              --prerelease \
+              --verify-tag
           fi
-          gh release create "${TAG}" server/build/release/* \
-            --title "${AO3HUB_RELEASE_TITLE}" \
-            --notes-file "${NOTES_FILE}" \
-            --prerelease \
-            --verify-tag
