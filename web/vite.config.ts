@@ -8,12 +8,14 @@ function readApiTarget(): string {
   const rawPort = process.env.PORT?.trim();
   if (rawPort) return `http://127.0.0.1:${rawPort}`;
 
-  const dataDir = process.env.AO3HUB_DATA_DIR?.trim()
-    ? path.resolve(process.env.AO3HUB_DATA_DIR)
-    : path.resolve(__dirname, "../server/data");
-  const configPath = path.join(dataDir, "config.json");
+  const dataDirs = process.env.AO3HUB_DATA_DIR?.trim()
+    ? [path.resolve(process.env.AO3HUB_DATA_DIR)]
+    : [path.resolve(__dirname, "../data"), path.resolve(__dirname, "../server/data")];
+  const configPath = dataDirs
+    .map((dir) => path.join(dir, "config.json"))
+    .find((file) => existsSync(file));
 
-  if (existsSync(configPath)) {
+  if (configPath) {
     try {
       const cfg = JSON.parse(readFileSync(configPath, "utf8"));
       const port = Number(cfg?.server?.port);

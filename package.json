@@ -5,19 +5,18 @@
   "type": "module",
   "workspaces": [
     "shared",
-    "server",
     "web"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,magenta \"bun run --cwd server dev\" \"bun run --cwd web dev\"",
-    "dev:server": "bun run --cwd server dev",
+    "dev": "concurrently -n server,web -c blue,magenta \"bun run dev:server\" \"bun run --cwd web dev\"",
+    "dev:server": "go run ./cmd/ao3hub",
     "dev:web": "bun run --cwd web dev",
-    "typecheck": "bun run --cwd server typecheck && bun run --cwd web typecheck",
+    "typecheck": "go test ./... && bun run --cwd web typecheck",
     "build:web": "bun run --cwd web build",
-    "build": "bun run --cwd server build",
+    "build": "bun run scripts/build-go.mjs",
     "ci": "bun run typecheck && bun run build",
     "ota:manifest": "bun run server/scripts/release-manifest.ts",
-    "start": "bun run --cwd server start"
+    "start": "go run ./cmd/ao3hub"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

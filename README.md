@@ -4,7 +4,7 @@
 
 ## 形态
 
-- **Bun + Hono** 服务端，**Vite + React + TanStack Router/Query + Tailwind v4** 前端
+- **Go** 服务端，**Vite + React + TanStack Router/Query + Tailwind v4** 前端
 - 数据是分文件 JSON：`data/index.json` + `data/stories/{id}/{meta,original,translated,progress}.json` + `source.html`；用户与 session 走 `data/users.json` + `data/sessions.json`
 - 翻译用 **OpenAI 兼容 `/chat/completions`**（DeepSeek/Claude/本地模型，用户自配 baseURL/apiKey/model）
 - **段落级**翻译单元，可断点续传，可重试单段
@@ -18,22 +18,14 @@
 ```
 AO3-Hub/
 ├── package.json            # workspaces
-├── shared/schema.ts        # 前后端共享 zod schema
+├── shared/schema.ts        # 前端 TypeScript 类型/schema
+├── cmd/ao3hub/main.go      # Go 服务入口
+├── internal/
+│   ├── app/                # Go 后端：路由、数据、认证、AO3、翻译、OTA
+│   └── webassets/          # go:embed 前端产物
 ├── server/
-│   ├── src/
-│   │   ├── index.ts        # Hono + Bun.serve
-│   │   ├── env.ts          # 路径/版本
-│   │   ├── embedded.ts     # 生成的：web 资源 + 版本
-│   │   ├── service.ts      # 业务编排
-│   │   ├── update.ts       # OTA 逻辑
-│   │   ├── queue.ts        # 内存队列
-│   │   ├── sse.ts          # 事件总线
-│   │   ├── ao3/{fetch,parse}.ts
-│   │   ├── translate/{provider,prompt,chunker,worker}.ts
-│   │   ├── db/{index,paths,io,users,sessions}.ts
-│   │   ├── auth/{password,session,middleware}.ts
-│   │   └── routes/{stories,config,stream,update,auth,users}.ts
-│   └── scripts/{build.ts,launcher.sh}
+│   └── scripts/launcher.sh # OTA 重启 launcher
+├── scripts/build-go.mjs    # vite build → go:embed → go build
 └── web/
     ├── src/
     │   ├── main.tsx + router.tsx
@@ -46,7 +38,7 @@ AO3-Hub/
 
 ## Dev
 
-需要 Bun ≥ 1.1.
+需要 Go 和 Bun（前端构建/包管理）。
 
 ```bash
 bun install                   # 装所有 workspace
@@ -56,7 +48,7 @@ bun run dev                   # 并行起 server（默认 :3000）+ web (:5173)
 或分别：
 
 ```bash
-bun run dev:server            # 起 server，watch 模式
+bun run dev:server            # 起 Go server
 bun run dev:web               # 起 vite，:5173，/api 代理到配置的 server 端口
 ```
 
@@ -67,16 +59,16 @@ bun run dev:web               # 起 vite，:5173，/api 代理到配置的 serve
 ## Build（单文件）
 
 ```bash
-bun run build                 # vite build → 嵌入 → bun --compile
-# 产物：server/build/ao3-hub  (~55 MB，含 Bun runtime)
+bun run build                 # vite build → go:embed → go build
+# 产物：server/build/ao3-hub
 ```
 
 跨平台构建（在 Mac 上构 Linux 二进制）：
 
 ```bash
-AO3HUB_TARGET=bun-linux-x64 bun run build
-AO3HUB_TARGET=bun-linux-arm64 bun run build
-AO3HUB_TARGET=bun-darwin-arm64 bun run build
+AO3HUB_TARGET=linux-x64 bun run build
+AO3HUB_TARGET=linux-arm64 bun run build
+AO3HUB_TARGET=darwin-arm64 bun run build
 ```
 
 ## CI / Release
@@ -161,7 +153,7 @@ Restart=on-failure
 
 首次启动 `data/users.json` 不存在时，前端会跳到 `/setup` 让你创建首个 admin。之后在 `/users` 页可以新建 / 删除用户，或重置密码（重置会清掉该用户所有 session）。
 
-- 密码用 `Bun.password` 的 argon2id 哈希
+- 密码用 Go 的 argon2id 哈希（兼容 PHC 字符串格式）
 - session = 32 字节随机 token，存 `data/sessions.json`，以 HttpOnly + SameSite=Lax cookie 下发；反代为 HTTPS 时自动加 `Secure`
 - 滑动过期 30 天：每次请求 touch 后顺延
 - 删用户 / 重置密码会清空对应 session

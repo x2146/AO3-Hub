@@ -76,6 +76,8 @@ server/build/
 server/web-dist/
 server/src/embedded.ts.bak
 data/
+internal/webassets/web-dist/*
+!internal/webassets/web-dist/placeholder.txt
 *.bak
 
 # parcel-bundler cache (https://parceljs.org/)

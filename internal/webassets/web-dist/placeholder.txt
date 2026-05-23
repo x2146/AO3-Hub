@@ -1,0 +1,1 @@
+AO3-Hub web assets are generated during build.

@@ -1,0 +1,446 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"math/rand"
+	"strings"
+	"sync"
+	"time"
+)
+
+const systemPrompt = `你是文学翻译。把英文文学作品翻译为中文，要求：
+1) 严格保留输入中的 HTML 内联标签（em/strong/a/i/b/u/s/sup/sub/br/span/code 等），仅翻译文字内容
+2) 每个输入段落必须对应一个输出段落，顺序、数量完全一致
+3) 译文自然流畅，符合中文小说语感，不增不减
+4) 角色名、地名等专有名词在同一作品内保持一致
+5) 输入是一个 JSON 数组，输出也必须是相同长度的 JSON 数组
+6) 仅输出 JSON 对象 { "blocks": [{ "id": "...", "html": "..." }] }，不要任何解释`
+
+type translateInput struct {
+	ID   string `json:"id"`
+	HTML string `json:"html"`
+}
+
+type translateOutput struct {
+	ID   string `json:"id"`
+	HTML string `json:"html"`
+}
+
+type batch struct {
+	Blocks []Block
+}
+
+func approxTokens(text string) int {
+	return int(math.Ceil(float64(len(text)) / 3.2))
+}
+
+func isTranslatable(block Block) bool {
+	return block.Type != BlockHR && strings.TrimSpace(block.HTML) != ""
+}
+
+func chunkBlocks(blocks []Block, blocksPerRequest, maxTokens int) []batch {
+	batches := []batch{}
+	current := []Block{}
+	currentTokens := 0
+	for _, block := range blocks {
+		tokens := approxTokens(block.HTML)
+		wouldExceed := len(current) >= blocksPerRequest || (len(current) > 0 && currentTokens+tokens > maxTokens)
+		if wouldExceed {
+			batches = append(batches, batch{Blocks: current})
+			current = []Block{}
+			currentTokens = 0
+		}
+		current = append(current, block)
+		currentTokens += tokens
+	}
+	if len(current) > 0 {
+		batches = append(batches, batch{Blocks: current})
+	}
+	return batches
+}
+
+func buildUserPayload(meta Meta, blocks []translateInput) (string, error) {
+	payload := map[string]any{
+		"context": map[string]any{
+			"title":    meta.Title,
+			"fandom":   meta.Tags.Fandom,
+			"glossary": map[string]string{},
+		},
+		"blocks": blocks,
+	}
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+func parseJSONResponse(content string) ([]translateOutput, error) {
+	s := strings.TrimSpace(content)
+	if strings.HasPrefix(s, "```") {
+		s = strings.TrimSpace(strings.TrimPrefix(s, "```json"))
+		s = strings.TrimSpace(strings.TrimPrefix(s, "```"))
+		s = strings.TrimSpace(strings.TrimSuffix(s, "```"))
+	}
+	var raw struct {
+		Blocks  []translateOutput `json:"blocks"`
+		Data    []translateOutput `json:"data"`
+		Results []translateOutput `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(s), &raw); err != nil {
+		return nil, err
+	}
+	out := raw.Blocks
+	if out == nil {
+		out = raw.Data
+	}
+	if out == nil {
+		out = raw.Results
+	}
+	if out == nil {
+		return nil, errors.New("LLM response missing 'blocks' array")
+	}
+	return out, nil
+}
+
+func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []translateInput) ([]translateOutput, error) {
+	userPayload, err := buildUserPayload(meta, inputs)
+	if err != nil {
+		return nil, err
+	}
+	result, err := chat(ctx, cfg.LLM, []ChatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPayload},
+	}, true)
+	if err != nil {
+		return nil, err
+	}
+	out, err := parseJSONResponse(result.Content)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) != len(inputs) {
+		return nil, fmt.Errorf("段数不匹配: 输入 %d，输出 %d", len(inputs), len(out))
+	}
+	byID := map[string]translateOutput{}
+	for _, item := range out {
+		byID[item.ID] = item
+	}
+	ordered := make([]translateOutput, 0, len(inputs))
+	for _, input := range inputs {
+		found, ok := byID[input.ID]
+		if !ok {
+			return nil, fmt.Errorf("缺少段 id=%s 的译文", input.ID)
+		}
+		ordered = append(ordered, translateOutput{ID: input.ID, HTML: found.HTML})
+	}
+	return ordered, nil
+}
+
+func withRetry[T any](fn func() (T, error), retries int) (T, error) {
+	var zero T
+	var last error
+	for i := 0; i <= retries; i++ {
+		out, err := fn()
+		if err == nil {
+			return out, nil
+		}
+		last = err
+		var llmErr LLMError
+		if errors.As(err, &llmErr) && (llmErr.Status == 400 || llmErr.Status == 401) {
+			return zero, err
+		}
+		backoff := time.Duration(600*math.Pow(2, float64(i))) * time.Millisecond
+		backoff += time.Duration(rand.Intn(300)) * time.Millisecond
+		time.Sleep(backoff)
+	}
+	return zero, last
+}
+
+func makeBlankTranslated(original ChapterFile) ChapterFile {
+	chapters := make([]Chapter, len(original.Chapters))
+	for i, chapter := range original.Chapters {
+		blocks := make([]Block, len(chapter.Blocks))
+		for j, block := range chapter.Blocks {
+			status := BlockDone
+			if isTranslatable(block) {
+				status = BlockPending
+			}
+			blocks[j] = Block{
+				ID:     block.ID,
+				Type:   block.Type,
+				HTML:   "",
+				Status: status,
+			}
+		}
+		chapters[i] = Chapter{
+			Index:  chapter.Index,
+			Title:  chapter.Title,
+			Blocks: blocks,
+		}
+	}
+	return ChapterFile{Chapters: chapters}
+}
+
+func (a *App) emitProgress(storyID string, translated ChapterFile, original ChapterFile) error {
+	total := 0
+	done := 0
+	for i := range original.Chapters {
+		for j := range original.Chapters[i].Blocks {
+			if !isTranslatable(original.Chapters[i].Blocks[j]) {
+				continue
+			}
+			total++
+			if i < len(translated.Chapters) && j < len(translated.Chapters[i].Blocks) && translated.Chapters[i].Blocks[j].Status == BlockDone {
+				done++
+			}
+		}
+	}
+	if err := a.setProgress(storyID, func(p Progress) Progress {
+		p.TotalBlocks = total
+		p.DoneBlocks = done
+		return p
+	}); err != nil {
+		return err
+	}
+	a.bus.Emit(storyID, StreamEvent{Type: "progress", DoneBlocks: done, TotalBlocks: total, Phase: PhaseTranslating})
+	return nil
+}
+
+func (a *App) setProgress(storyID string, mutator func(Progress) Progress) error {
+	current, err := a.store.LoadProgress(storyID)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return errors.New("progress not found")
+	}
+	next := mutator(*current)
+	return a.store.SaveProgress(storyID, next)
+}
+
+func (a *App) updateStoryStatus(storyID string, status StoryStatus) error {
+	_, err := a.store.PatchIndex(storyID, func(entry *IndexEntry) {
+		entry.Status = status
+	})
+	return err
+}
+
+func (a *App) runTranslation(ctx context.Context, storyID string) error {
+	meta, err := a.store.LoadMeta(storyID)
+	if err != nil || meta == nil {
+		return fmt.Errorf("missing meta for %s", storyID)
+	}
+	original, err := a.store.LoadOriginal(storyID)
+	if err != nil || original == nil {
+		return fmt.Errorf("missing original for %s", storyID)
+	}
+	translated, err := a.store.LoadTranslated(storyID)
+	if err != nil {
+		return err
+	}
+	if translated == nil {
+		blank := makeBlankTranslated(*original)
+		translated = &blank
+		if err := a.store.SaveTranslated(storyID, *translated); err != nil {
+			return err
+		}
+	}
+
+	cfg, err := a.store.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.LLM.APIKey) == "" {
+		msg := "未配置 LLM apiKey，请到 Settings 填好后再 retry"
+		_ = a.setProgress(storyID, func(p Progress) Progress {
+			p.Phase = PhaseError
+			p.Message = msg
+			p.FinishedAt = nowISO()
+			return p
+		})
+		_ = a.updateStoryStatus(storyID, StatusError)
+		a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseError, Message: msg})
+		return nil
+	}
+
+	if err := a.updateStoryStatus(storyID, StatusTranslating); err != nil {
+		return err
+	}
+	if err := a.setProgress(storyID, func(p Progress) Progress {
+		p.Phase = PhaseTranslating
+		return p
+	}); err != nil {
+		return err
+	}
+	a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseTranslating})
+
+	for chIdx := 0; chIdx < len(original.Chapters); chIdx++ {
+		orig := original.Chapters[chIdx]
+		if chIdx >= len(translated.Chapters) {
+			translated.Chapters = append(translated.Chapters, Chapter{Index: chIdx, Title: orig.Title})
+		}
+		transCh := &translated.Chapters[chIdx]
+		for len(transCh.Blocks) < len(orig.Blocks) {
+			ob := orig.Blocks[len(transCh.Blocks)]
+			status := BlockDone
+			if isTranslatable(ob) {
+				status = BlockPending
+			}
+			transCh.Blocks = append(transCh.Blocks, Block{ID: ob.ID, Type: ob.Type, Status: status})
+		}
+
+		currentChapter := chIdx
+		if err := a.setProgress(storyID, func(p Progress) Progress {
+			p.CurrentChapter = &currentChapter
+			return p
+		}); err != nil {
+			return err
+		}
+
+		pending := []Block{}
+		for bi, ob := range orig.Blocks {
+			tb := transCh.Blocks[bi]
+			if !isTranslatable(ob) {
+				if tb.Status != BlockDone {
+					transCh.Blocks[bi] = Block{ID: tb.ID, Type: tb.Type, HTML: ob.HTML, Status: BlockDone}
+				}
+				continue
+			}
+			if tb.Status == BlockDone {
+				continue
+			}
+			pending = append(pending, ob)
+		}
+		if err := a.store.SaveTranslated(storyID, *translated); err != nil {
+			return err
+		}
+		if err := a.emitProgress(storyID, *translated, *original); err != nil {
+			return err
+		}
+
+		if len(pending) == 0 {
+			a.bus.Emit(storyID, StreamEvent{Type: "chapter-done", ChapterIndex: chIdx})
+			continue
+		}
+
+		batches := chunkBlocks(pending, cfg.LLM.BlocksPerRequest, cfg.LLM.MaxTokensPerRequest)
+		concurrency := cfg.LLM.Concurrency
+		if concurrency < 1 {
+			concurrency = 1
+		}
+		if concurrency > len(batches) {
+			concurrency = len(batches)
+		}
+
+		var cursor int
+		var cursorMu sync.Mutex
+		var transMu sync.Mutex
+		var wg sync.WaitGroup
+		for worker := 0; worker < concurrency; worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					cursorMu.Lock()
+					i := cursor
+					cursor++
+					cursorMu.Unlock()
+					if i >= len(batches) {
+						return
+					}
+					b := batches[i]
+					inputs := make([]translateInput, len(b.Blocks))
+					for j, block := range b.Blocks {
+						inputs[j] = translateInput{ID: block.ID, HTML: block.HTML}
+					}
+					outs, err := withRetry(func() ([]translateOutput, error) {
+						return translateBatch(ctx, cfg, *meta, inputs)
+					}, 2)
+
+					transMu.Lock()
+					if err != nil {
+						msg := err.Error()
+						for _, input := range inputs {
+							bi := findBlockIndex(transCh.Blocks, input.ID)
+							if bi < 0 {
+								continue
+							}
+							block := transCh.Blocks[bi]
+							block.Status = BlockError
+							block.Error = msg
+							transCh.Blocks[bi] = block
+							a.bus.Emit(storyID, StreamEvent{Type: "block-error", ChapterIndex: chIdx, BlockID: input.ID, Message: msg})
+						}
+						_ = a.setProgress(storyID, func(p Progress) Progress {
+							for _, input := range inputs {
+								p.Errors = append(p.Errors, ProgressError{ChapterIndex: chIdx, BlockID: input.ID, Message: msg, At: nowISO()})
+							}
+							return p
+						})
+					} else {
+						for _, out := range outs {
+							bi := findBlockIndex(transCh.Blocks, out.ID)
+							if bi < 0 {
+								continue
+							}
+							block := transCh.Blocks[bi]
+							block.HTML = out.HTML
+							block.Status = BlockDone
+							block.Error = ""
+							transCh.Blocks[bi] = block
+							a.bus.Emit(storyID, StreamEvent{Type: "block-done", ChapterIndex: chIdx, BlockID: out.ID})
+						}
+					}
+					_ = a.store.SaveTranslated(storyID, *translated)
+					_ = a.emitProgress(storyID, *translated, *original)
+					transMu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+		a.bus.Emit(storyID, StreamEvent{Type: "chapter-done", ChapterIndex: chIdx})
+	}
+
+	hasErrors := false
+	for _, chapter := range translated.Chapters {
+		for _, block := range chapter.Blocks {
+			if block.Status == BlockError {
+				hasErrors = true
+				break
+			}
+		}
+	}
+	phase := PhaseReady
+	status := StatusReady
+	if hasErrors {
+		phase = PhaseError
+		status = StatusError
+	}
+	if err := a.setProgress(storyID, func(p Progress) Progress {
+		p.Phase = phase
+		p.CurrentChapter = nil
+		p.FinishedAt = nowISO()
+		return p
+	}); err != nil {
+		return err
+	}
+	if err := a.updateStoryStatus(storyID, status); err != nil {
+		return err
+	}
+	a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: phase})
+	return nil
+}
+
+func findBlockIndex(blocks []Block, id string) int {
+	for i, block := range blocks {
+		if block.ID == id {
+			return i
+		}
+	}
+	return -1
+}

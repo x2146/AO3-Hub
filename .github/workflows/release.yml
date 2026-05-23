@@ -29,6 +29,11 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
       - name: Use npm registry in CI
         run: |
           perl -0pi -e 's#https://registry\.npmmirror\.com/#https://registry.npmjs.org/#g' bun.lock
@@ -123,6 +128,11 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
 
       - name: Use npm registry in CI
         run: |
