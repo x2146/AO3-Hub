@@ -214,3 +214,100 @@ func TestNormalizeLLMProviderDefaultsKeepsCustomValues(t *testing.T) {
 		t.Fatalf("model = %q", next.Model)
 	}
 }
+
+func TestChatOpenAICompatibleStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["stream"] != true {
+			t.Fatalf("expected stream=true, got %v", body["stream"])
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		chunks := []string{
+			`{"choices":[{"delta":{"content":"hello"}}]}`,
+			`{"choices":[{"delta":{"content":" world"}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"total_tokens":7}}`,
+			`[DONE]`,
+		}
+		for _, c := range chunks {
+			_, _ = w.Write([]byte("data: " + c + "\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	result, err := chat(context.Background(), LLMConfig{
+		APIType:             LLMAPITypeOpenAICompatible,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "test-model",
+		Temperature:         0.3,
+		MaxTokensPerRequest: 1000,
+		Stream:              true,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "hello world" {
+		t.Fatalf("content = %q", result.Content)
+	}
+	if _, _, total := extractUsage(result.Usage); total != 7 {
+		t.Fatalf("usage total = %d, want 7 (raw=%v)", total, result.Usage)
+	}
+}
+
+func TestChatClaudeMessagesStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["stream"] != true {
+			t.Fatalf("expected stream=true, got %v", body["stream"])
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		events := []struct{ name, data string }{
+			{"message_start", `{"type":"message_start","message":{"usage":{"input_tokens":5}}}`},
+			{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}`},
+			{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`},
+			{"message_stop", `{"type":"message_stop"}`},
+		}
+		for _, ev := range events {
+			_, _ = w.Write([]byte("event: " + ev.name + "\n"))
+			_, _ = w.Write([]byte("data: " + ev.data + "\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	result, err := chat(context.Background(), LLMConfig{
+		APIType:             LLMAPITypeClaudeMessages,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "claude-sonnet-4-5",
+		Temperature:         0.3,
+		MaxTokensPerRequest: 1000,
+		Stream:              true,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "hello world" {
+		t.Fatalf("content = %q", result.Content)
+	}
+	prompt, completion, _ := extractUsage(result.Usage)
+	if prompt != 5 || completion != 3 {
+		t.Fatalf("usage prompt=%d completion=%d", prompt, completion)
+	}
+}

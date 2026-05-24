@@ -705,6 +705,7 @@ func configResponse(cfg Config) map[string]any {
 			"maxAutoRetries":         cfg.LLM.MaxAutoRetries,
 			"mode":                   cfg.LLM.Mode,
 			"analysisMaxInputTokens": cfg.LLM.AnalysisMaxInputTokens,
+			"stream":                 cfg.LLM.Stream,
 		},
 		"ao3": map[string]any{
 			"cookie":    map[bool]string{true: "***", false: ""}[cfg.AO3.Cookie != ""],

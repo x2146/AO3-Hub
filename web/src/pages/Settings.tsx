@@ -42,6 +42,7 @@ type LocalConfig = {
     maxAutoRetries: number;
     mode: "normal" | "refined";
     analysisMaxInputTokens: number;
+    stream: boolean;
   };
   ao3: {
     cookie: string;
@@ -124,6 +125,7 @@ export function Settings() {
         maxAutoRetries: data.llm.maxAutoRetries,
         mode: data.llm.mode ?? "normal",
         analysisMaxInputTokens: data.llm.analysisMaxInputTokens ?? 60000,
+        stream: data.llm.stream ?? false,
       },
       ao3: { cookie: data.ao3.cookie, userAgent: data.ao3.userAgent },
       reader: {
@@ -460,6 +462,21 @@ export function Settings() {
               }
             />
           </Field>
+          <div className="flex items-end gap-3 pb-2">
+            <Switch
+              id="llm-stream"
+              checked={form.llm.stream}
+              onCheckedChange={(v) =>
+                setForm({
+                  ...form,
+                  llm: { ...form.llm, stream: v },
+                })
+              }
+            />
+            <label htmlFor="llm-stream" className="text-[13px] leading-none">
+              启用流式 LLM 请求（SSE 透明接收，减少长请求超时）
+            </label>
+          </div>
         </div>
         <Field id="llm-mode" label="翻译模式（默认）">
           <div id="llm-mode" className="flex flex-wrap gap-2">

@@ -135,6 +135,7 @@ export const LlmConfig = z.object({
   maxAutoRetries: z.number().int().nonnegative().default(2),
   mode: TranslationMode.default("normal"),
   analysisMaxInputTokens: z.number().int().positive().default(60000),
+  stream: z.boolean().default(false),
 });
 export type LlmConfig = z.infer<typeof LlmConfig>;
 

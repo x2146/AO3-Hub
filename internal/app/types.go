@@ -155,6 +155,7 @@ type LLMConfig struct {
 	MaxAutoRetries         int             `json:"maxAutoRetries"`
 	Mode                   TranslationMode `json:"mode"`
 	AnalysisMaxInputTokens int             `json:"analysisMaxInputTokens"`
+	Stream                 bool            `json:"stream"`
 }
 
 type AO3Config struct {
