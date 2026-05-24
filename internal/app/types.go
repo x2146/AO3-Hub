@@ -347,3 +347,79 @@ type StreamEvent struct {
 	BlockID        string        `json:"blockId,omitempty"`
 	Message        string        `json:"message,omitempty"`
 }
+
+type LLMCallStage string
+
+const (
+	StageAnalysisChapter LLMCallStage = "analysis-chapter"
+	StageAnalysisMerge   LLMCallStage = "analysis-merge"
+	StageAnalysisFull    LLMCallStage = "analysis-full"
+	StageTranslateBatch  LLMCallStage = "translate-batch"
+)
+
+type LLMCallStatus string
+
+const (
+	LLMCallSuccess LLMCallStatus = "success"
+	LLMCallError   LLMCallStatus = "error"
+)
+
+type LLMCallEvent struct {
+	ID               string        `json:"id"`
+	Stage            LLMCallStage  `json:"stage"`
+	Status           LLMCallStatus `json:"status"`
+	Model            string        `json:"model,omitempty"`
+	StartedAt        string        `json:"startedAt"`
+	DurationMS       int64         `json:"durationMs"`
+	PromptTokens     int           `json:"promptTokens"`
+	CompletionTokens int           `json:"completionTokens"`
+	TotalTokens      int           `json:"totalTokens"`
+	Attempt          int           `json:"attempt"`
+	ChapterIndex     *int          `json:"chapterIndex,omitempty"`
+	BlockIDs         []string      `json:"blockIds,omitempty"`
+	ErrorMessage     string        `json:"errorMessage,omitempty"`
+	ErrorStatus      int           `json:"errorStatus,omitempty"`
+}
+
+type StageStats struct {
+	Calls            int   `json:"calls"`
+	Successes        int   `json:"successes"`
+	Failures         int   `json:"failures"`
+	Retries          int   `json:"retries"`
+	PromptTokens     int   `json:"promptTokens"`
+	CompletionTokens int   `json:"completionTokens"`
+	TotalTokens      int   `json:"totalTokens"`
+	DurationMS       int64 `json:"durationMs"`
+}
+
+type TranslationStats struct {
+	Total      StageStats                  `json:"total"`
+	ByStage    map[LLMCallStage]StageStats `json:"byStage"`
+	StartedAt  string                      `json:"startedAt,omitempty"`
+	LastCallAt string                      `json:"lastCallAt,omitempty"`
+}
+
+type RequestSample struct {
+	Stage           LLMCallStage `json:"stage"`
+	CapturedAt      string       `json:"capturedAt"`
+	Model           string       `json:"model,omitempty"`
+	SystemPrompt    string       `json:"systemPrompt"`
+	UserPayload     string       `json:"userPayload"`
+	ResponsePreview string       `json:"responsePreview,omitempty"`
+	ChapterIndex    *int         `json:"chapterIndex,omitempty"`
+	BlockIDs        []string     `json:"blockIds,omitempty"`
+}
+
+type StatsFile struct {
+	Stats   TranslationStats              `json:"stats"`
+	Events  []LLMCallEvent                `json:"events"`
+	Samples map[LLMCallStage]RequestSample `json:"samples"`
+}
+
+type TranslationStatusView struct {
+	Stats   TranslationStats               `json:"stats"`
+	Events  []LLMCallEvent                 `json:"events"`
+	Samples map[LLMCallStage]RequestSample `json:"samples"`
+	Context *TranslationContext            `json:"context,omitempty"`
+	Mode    TranslationMode                `json:"mode"`
+}

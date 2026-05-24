@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type ChatMessage struct {
@@ -17,8 +18,9 @@ type ChatMessage struct {
 }
 
 type ChatResult struct {
-	Content string         `json:"content"`
-	Usage   map[string]any `json:"usage,omitempty"`
+	Content    string         `json:"content"`
+	Usage      map[string]any `json:"usage,omitempty"`
+	DurationMS int64          `json:"durationMs,omitempty"`
 }
 
 type LLMError struct {
@@ -41,14 +43,19 @@ func chat(ctx context.Context, config LLMConfig, messages []ChatMessage, jsonMod
 	if strings.TrimSpace(config.BaseURL) == "" {
 		return ChatResult{}, errors.New("LLM baseURL not configured")
 	}
+	start := time.Now()
+	var result ChatResult
+	var err error
 	switch normalizeLLMAPIType(config.APIType) {
 	case LLMAPITypeOpenAICompatible:
-		return chatOpenAICompatible(ctx, config, messages, jsonMode)
+		result, err = chatOpenAICompatible(ctx, config, messages, jsonMode)
 	case LLMAPITypeClaudeMessages:
-		return chatClaudeMessages(ctx, config, messages, jsonMode)
+		result, err = chatClaudeMessages(ctx, config, messages, jsonMode)
 	default:
 		return ChatResult{}, fmt.Errorf("unsupported LLM apiType: %s", config.APIType)
 	}
+	result.DurationMS = time.Since(start).Milliseconds()
+	return result, err
 }
 
 func chatOpenAICompatible(ctx context.Context, config LLMConfig, messages []ChatMessage, jsonMode bool) (ChatResult, error) {

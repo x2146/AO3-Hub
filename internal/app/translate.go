@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const maxProgressErrors = 100
+
 const systemPrompt = `你是文学翻译。把英文文学作品翻译为中文，要求：
 1) 严格保留输入中的 HTML 内联标签（em/strong/a/i/b/u/s/sup/sub/br/span/code 等），仅翻译文字内容
 2) 每个输入段落必须对应一个输出段落，顺序、数量完全一致
@@ -155,7 +157,7 @@ func parseJSONResponse(content string) ([]translateOutput, error) {
 	return out, nil
 }
 
-func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []translateInput, transCtx *TranslationContext, chapterIndex int) ([]translateOutput, error) {
+func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []translateInput, transCtx *TranslationContext, chapterIndex int, tracker *statsTracker, attempt int) ([]translateOutput, error) {
 	userPayload, err := buildUserPayload(meta, inputs, transCtx, chapterIndex)
 	if err != nil {
 		return nil, err
@@ -164,10 +166,19 @@ func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []transla
 	if transCtx != nil {
 		prompt = refinedSystemPrompt
 	}
-	result, err := chat(ctx, cfg.LLM, []ChatMessage{
+	ids := make([]string, len(inputs))
+	for i, input := range inputs {
+		ids[i] = input.ID
+	}
+	result, err := tracker.trackedChat(ctx, cfg.LLM, []ChatMessage{
 		{Role: "system", Content: prompt},
 		{Role: "user", Content: userPayload},
-	}, true)
+	}, true, trackedCallContext{
+		stage:        StageTranslateBatch,
+		chapterIndex: intPtr(chapterIndex),
+		blockIDs:     ids,
+		attempt:      attempt,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -193,11 +204,11 @@ func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []transla
 	return ordered, nil
 }
 
-func withRetry[T any](fn func() (T, error), retries int) (T, error) {
+func withRetry[T any](fn func(attempt int) (T, error), retries int) (T, error) {
 	var zero T
 	var last error
 	for i := 0; i <= retries; i++ {
-		out, err := fn()
+		out, err := fn(i)
 		if err == nil {
 			return out, nil
 		}
@@ -391,6 +402,8 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 	a.resetInflight(storyID)
 	defer a.resetInflight(storyID)
 
+	tracker := newStatsTracker(a, storyID)
+
 	effectiveMode := meta.TranslationMode
 	if effectiveMode == "" {
 		effectiveMode = cfg.LLM.Mode
@@ -399,7 +412,7 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 
 	var transCtx *TranslationContext
 	if effectiveMode == TranslationModeRefined {
-		analysed, err := a.runAnalysis(ctx, storyID, *meta, *original, cfg)
+		analysed, err := a.runAnalysis(ctx, storyID, *meta, *original, cfg, tracker)
 		if err != nil {
 			msg := "精翻预读分析失败: " + err.Error()
 			_ = a.setProgress(storyID, func(p Progress) Progress {
@@ -442,7 +455,7 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 			}
 			a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseTranslating, Message: fmt.Sprintf("自动重试第 %d/%d 轮", round, maxRounds)})
 		}
-		if err := a.translatePass(ctx, storyID, cfg, *meta, original, translated, transCtx); err != nil {
+		if err := a.translatePass(ctx, storyID, cfg, *meta, original, translated, transCtx, tracker); err != nil {
 			return err
 		}
 	}
@@ -493,8 +506,11 @@ func resetErrorsToPending(translated *ChapterFile) bool {
 	return reset
 }
 
-func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, meta Meta, original *ChapterFile, translated *ChapterFile, transCtx *TranslationContext) error {
+func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, meta Meta, original *ChapterFile, translated *ChapterFile, transCtx *TranslationContext, tracker *statsTracker) error {
 	for chIdx := 0; chIdx < len(original.Chapters); chIdx++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		orig := original.Chapters[chIdx]
 		if chIdx >= len(translated.Chapters) {
 			translated.Chapters = append(translated.Chapters, Chapter{Index: chIdx, Title: orig.Title})
@@ -561,6 +577,11 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 			go func() {
 				defer wg.Done()
 				for {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
 					cursorMu.Lock()
 					i := cursor
 					cursor++
@@ -577,8 +598,8 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 					}
 					a.markInflight(storyID, ids)
 					_ = a.emitProgress(storyID, *translated, *original)
-					outs, err := withRetry(func() ([]translateOutput, error) {
-						return translateBatch(ctx, cfg, meta, inputs, transCtx, chIdx)
+					outs, err := withRetry(func(attempt int) ([]translateOutput, error) {
+						return translateBatch(ctx, cfg, meta, inputs, transCtx, chIdx, tracker, attempt)
 					}, 2)
 
 					transMu.Lock()
@@ -598,6 +619,9 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 						_ = a.setProgress(storyID, func(p Progress) Progress {
 							for _, input := range inputs {
 								p.Errors = append(p.Errors, ProgressError{ChapterIndex: chIdx, BlockID: input.ID, Message: msg, At: nowISO()})
+							}
+							if len(p.Errors) > maxProgressErrors {
+								p.Errors = p.Errors[len(p.Errors)-maxProgressErrors:]
 							}
 							return p
 						})

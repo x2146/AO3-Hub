@@ -386,6 +386,77 @@ func (a *App) mountStories(mux *http.ServeMux) {
 	mux.HandleFunc("GET /stories/{id}/stream", func(w http.ResponseWriter, r *http.Request) {
 		a.handleStream(w, r)
 	})
+	mux.HandleFunc("GET /stories/{id}/translation-status", func(w http.ResponseWriter, r *http.Request) {
+		a.handleTranslationStatus(w, r)
+	})
+	mux.HandleFunc("POST /stories/{id}/translation-status/reset", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
+		id := r.PathValue("id")
+		if !a.store.StoryExists(id) {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		if err := a.store.ResetStats(id); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}))
+	mux.HandleFunc("POST /stories/{id}/reanalyze", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
+		id := r.PathValue("id")
+		meta, _ := a.store.LoadMeta(id)
+		if meta == nil {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		if err := a.store.DeleteContext(id); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		meta.TranslationMode = TranslationModeRefined
+		if err := a.store.SaveMeta(id, *meta); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		a.queue.Enqueue(Job{StoryID: id, Type: "translate"})
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}))
+}
+
+func (a *App) handleTranslationStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !a.store.StoryExists(id) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	stats, err := a.store.LoadStats(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	transCtx, _ := a.store.LoadContext(id)
+	meta, _ := a.store.LoadMeta(id)
+	mode := TranslationModeNormal
+	if meta != nil && meta.TranslationMode != "" {
+		mode = meta.TranslationMode
+	}
+
+	user := currentUser(r)
+	if user == nil {
+		for stage, sample := range stats.Samples {
+			sample.SystemPrompt = ""
+			sample.UserPayload = truncateString(sample.UserPayload, 256)
+			sample.ResponsePreview = truncateString(sample.ResponsePreview, 256)
+			stats.Samples[stage] = sample
+		}
+	}
+
+	writeJSON(w, http.StatusOK, TranslationStatusView{
+		Stats:   stats.Stats,
+		Events:  stats.Events,
+		Samples: stats.Samples,
+		Context: transCtx,
+		Mode:    mode,
+	})
 }
 
 func readUploadHTML(r *http.Request) (string, TranslationMode, error) {

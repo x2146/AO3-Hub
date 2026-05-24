@@ -301,7 +301,104 @@ export type StreamEvent =
   | { type: "block-done"; chapterIndex: number; blockId: string }
   | { type: "block-error"; chapterIndex: number; blockId: string; message: string }
   | { type: "chapter-done"; chapterIndex: number }
-  | { type: "phase"; phase: ProgressPhase; message?: string };
+  | { type: "phase"; phase: ProgressPhase; message?: string }
+  | { type: "llm-call"; phase?: ProgressPhase; message?: string; chapterIndex?: number };
+
+export const LlmCallStage = z.enum([
+  "analysis-chapter",
+  "analysis-merge",
+  "analysis-full",
+  "translate-batch",
+]);
+export type LlmCallStage = z.infer<typeof LlmCallStage>;
+
+export const LlmCallStatus = z.enum(["success", "error"]);
+export type LlmCallStatus = z.infer<typeof LlmCallStatus>;
+
+export const LlmCallEvent = z.object({
+  id: z.string(),
+  stage: LlmCallStage,
+  status: LlmCallStatus,
+  model: z.string().optional(),
+  startedAt: z.string(),
+  durationMs: z.number().int().nonnegative().default(0),
+  promptTokens: z.number().int().nonnegative().default(0),
+  completionTokens: z.number().int().nonnegative().default(0),
+  totalTokens: z.number().int().nonnegative().default(0),
+  attempt: z.number().int().nonnegative().default(0),
+  chapterIndex: z.number().int().nonnegative().optional(),
+  blockIds: z.array(z.string()).optional(),
+  errorMessage: z.string().optional(),
+  errorStatus: z.number().int().optional(),
+});
+export type LlmCallEvent = z.infer<typeof LlmCallEvent>;
+
+export const StageStats = z.object({
+  calls: z.number().int().nonnegative().default(0),
+  successes: z.number().int().nonnegative().default(0),
+  failures: z.number().int().nonnegative().default(0),
+  retries: z.number().int().nonnegative().default(0),
+  promptTokens: z.number().int().nonnegative().default(0),
+  completionTokens: z.number().int().nonnegative().default(0),
+  totalTokens: z.number().int().nonnegative().default(0),
+  durationMs: z.number().int().nonnegative().default(0),
+});
+export type StageStats = z.infer<typeof StageStats>;
+
+export const TranslationStats = z.object({
+  total: StageStats,
+  byStage: z.record(LlmCallStage, StageStats),
+  startedAt: z.string().optional(),
+  lastCallAt: z.string().optional(),
+});
+export type TranslationStats = z.infer<typeof TranslationStats>;
+
+export const RequestSample = z.object({
+  stage: LlmCallStage,
+  capturedAt: z.string(),
+  model: z.string().optional(),
+  systemPrompt: z.string().default(""),
+  userPayload: z.string().default(""),
+  responsePreview: z.string().optional(),
+  chapterIndex: z.number().int().nonnegative().optional(),
+  blockIds: z.array(z.string()).optional(),
+});
+export type RequestSample = z.infer<typeof RequestSample>;
+
+export const Character = z.object({
+  name: z.string(),
+  zh: z.string().optional(),
+  role: z.string().optional(),
+});
+export type Character = z.infer<typeof Character>;
+
+export const ChapterSummary = z.object({
+  index: z.number().int().nonnegative(),
+  title: z.string().optional(),
+  summary: z.string(),
+});
+export type ChapterSummary = z.infer<typeof ChapterSummary>;
+
+export const TranslationContext = z.object({
+  summary: z.string().optional(),
+  tone: z.string().optional(),
+  ships: z.array(z.string()).default([]),
+  characters: z.array(Character).default([]),
+  glossary: z.record(z.string(), z.string()).default({}),
+  chapterSummaries: z.array(ChapterSummary).default([]),
+  generatedAt: z.string().optional(),
+  chapterCount: z.number().int().nonnegative().optional(),
+});
+export type TranslationContext = z.infer<typeof TranslationContext>;
+
+export const TranslationStatusView = z.object({
+  stats: TranslationStats,
+  events: z.array(LlmCallEvent),
+  samples: z.record(LlmCallStage, RequestSample),
+  context: TranslationContext.nullable().optional(),
+  mode: TranslationMode,
+});
+export type TranslationStatusView = z.infer<typeof TranslationStatusView>;
 
 export const StoryListItem = IndexEntry.extend({
   progress: Progress.optional(),

@@ -10,6 +10,7 @@ import type {
   StoryList,
   StreamEvent,
   TranslationMode,
+  TranslationStatusView,
   VersionInfo,
   ApplyUpdateRequest,
 } from "@ao3hub/shared";
@@ -92,6 +93,15 @@ export const api = {
   remove: (id: string) =>
     http<{ ok: true }>(`/stories/${id}`, { method: "DELETE" }),
 
+  getTranslationStatus: (id: string) =>
+    http<TranslationStatusView>(`/stories/${id}/translation-status`),
+  resetTranslationStats: (id: string) =>
+    http<{ ok: true }>(`/stories/${id}/translation-status/reset`, {
+      method: "POST",
+    }),
+  reanalyze: (id: string) =>
+    http<{ ok: true }>(`/stories/${id}/reanalyze`, { method: "POST" }),
+
   getConfig: () => http<Config & { llm: Config["llm"] & { hasApiKey: boolean }; ao3: Config["ao3"] & { hasCookie: boolean } }>("/config"),
   getPublicConfig: () =>
     http<Pick<Config, "reader" | "ui"> & { llm: { mode: TranslationMode } }>(
@@ -147,7 +157,14 @@ export function subscribeStream(
   onError?: (e: Event) => void,
 ): () => void {
   const es = new EventSource(`${base}/stories/${id}/stream`);
-  const types = ["progress", "phase", "block-done", "block-error", "chapter-done"] as const;
+  const types = [
+    "progress",
+    "phase",
+    "block-done",
+    "block-error",
+    "chapter-done",
+    "llm-call",
+  ] as const;
   for (const t of types) {
     es.addEventListener(t, (raw) => {
       try {

@@ -212,15 +212,15 @@ func parseChapterPartial(content string, index int, title string) (chapterPartia
 	}, nil
 }
 
-func analyzeFullText(ctx context.Context, cfg Config, meta Meta, original ChapterFile) (TranslationContext, error) {
+func analyzeFullText(ctx context.Context, cfg Config, meta Meta, original ChapterFile, tracker *statsTracker) (TranslationContext, error) {
 	payload, err := buildAnalysisFullPayload(meta, original)
 	if err != nil {
 		return TranslationContext{}, err
 	}
-	result, err := chat(ctx, cfg.LLM, []ChatMessage{
+	result, err := tracker.trackedChat(ctx, cfg.LLM, []ChatMessage{
 		{Role: "system", Content: analysisSystemPromptFull},
 		{Role: "user", Content: payload},
-	}, true)
+	}, true, trackedCallContext{stage: StageAnalysisFull})
 	if err != nil {
 		return TranslationContext{}, err
 	}
@@ -234,7 +234,7 @@ func analyzeFullText(ctx context.Context, cfg Config, meta Meta, original Chapte
 	return out, nil
 }
 
-func analyzeByChapters(ctx context.Context, cfg Config, meta Meta, original ChapterFile) (TranslationContext, error) {
+func analyzeByChapters(ctx context.Context, cfg Config, meta Meta, original ChapterFile, tracker *statsTracker) (TranslationContext, error) {
 	chapters := original.Chapters
 	if len(chapters) == 0 {
 		return TranslationContext{}, errors.New("原文章节为空")
@@ -258,6 +258,11 @@ func analyzeByChapters(ctx context.Context, cfg Config, meta Meta, original Chap
 		go func() {
 			defer wg.Done()
 			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 				cursorMu.Lock()
 				idx := cursor
 				cursor++
@@ -271,11 +276,15 @@ func analyzeByChapters(ctx context.Context, cfg Config, meta Meta, original Chap
 					errs[idx] = err
 					continue
 				}
-				partial, callErr := withRetry(func() (chapterPartial, error) {
-					result, err := chat(ctx, cfg.LLM, []ChatMessage{
+				partial, callErr := withRetry(func(attempt int) (chapterPartial, error) {
+					result, err := tracker.trackedChat(ctx, cfg.LLM, []ChatMessage{
 						{Role: "system", Content: analysisSystemPromptChapter},
 						{Role: "user", Content: payload},
-					}, true)
+					}, true, trackedCallContext{
+						stage:        StageAnalysisChapter,
+						chapterIndex: intPtr(chapter.Index),
+						attempt:      attempt,
+					})
 					if err != nil {
 						return chapterPartial{}, err
 					}
@@ -300,10 +309,10 @@ func analyzeByChapters(ctx context.Context, cfg Config, meta Meta, original Chap
 	if err != nil {
 		return TranslationContext{}, err
 	}
-	mergeResult, err := chat(ctx, cfg.LLM, []ChatMessage{
+	mergeResult, err := tracker.trackedChat(ctx, cfg.LLM, []ChatMessage{
 		{Role: "system", Content: analysisSystemPromptMerge},
 		{Role: "user", Content: mergePayload},
-	}, true)
+	}, true, trackedCallContext{stage: StageAnalysisMerge})
 	if err != nil {
 		return TranslationContext{}, err
 	}
@@ -367,7 +376,7 @@ func estimateAnalysisInputTokens(meta Meta, original ChapterFile) int {
 	return total
 }
 
-func (a *App) runAnalysis(ctx context.Context, storyID string, meta Meta, original ChapterFile, cfg Config) (*TranslationContext, error) {
+func (a *App) runAnalysis(ctx context.Context, storyID string, meta Meta, original ChapterFile, cfg Config, tracker *statsTracker) (*TranslationContext, error) {
 	existing, _ := a.store.LoadContext(storyID)
 	if existing != nil && existing.ChapterCount == len(original.Chapters) && len(existing.ChapterSummaries) == len(original.Chapters) {
 		return existing, nil
@@ -394,12 +403,12 @@ func (a *App) runAnalysis(ctx context.Context, storyID string, meta Meta, origin
 	var result TranslationContext
 	var err error
 	if tokens <= threshold {
-		result, err = analyzeFullText(ctx, cfg, meta, original)
+		result, err = analyzeFullText(ctx, cfg, meta, original, tracker)
 		if err != nil {
-			result, err = analyzeByChapters(ctx, cfg, meta, original)
+			result, err = analyzeByChapters(ctx, cfg, meta, original, tracker)
 		}
 	} else {
-		result, err = analyzeByChapters(ctx, cfg, meta, original)
+		result, err = analyzeByChapters(ctx, cfg, meta, original, tracker)
 	}
 	if err != nil {
 		return nil, err

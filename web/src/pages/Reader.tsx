@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Activity,
   ChevronLeft,
   ChevronRight,
   ListOrdered,
@@ -30,6 +31,7 @@ import {
   TranslateProgressLegend,
   breakdownOf,
 } from "../components/TranslateProgress";
+import { TranslationStatusPanel } from "../components/TranslationStatusPanel";
 
 export function Reader() {
   const { id, chapter } = useParams({ from: "/r/$id/$chapter" });
@@ -41,6 +43,7 @@ export function Reader() {
   const [settings, setSettings] = useState<ReaderSettings>(() => loadReaderSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   const [showAllEn, setShowAllEn] = useState(true);
   const [liveProgress, setLiveProgress] = useState<Progress | null>(null);
@@ -201,6 +204,7 @@ export function Reader() {
           setTocOpen((v) => !v);
           setSettingsOpen(false);
         }}
+        onOpenStatus={() => setStatusOpen(true)}
       />
 
       {settingsOpen && (
@@ -229,6 +233,12 @@ export function Reader() {
           onClose={() => setTocOpen(false)}
         />
       )}
+
+      <TranslationStatusPanel
+        storyID={id}
+        open={statusOpen}
+        onClose={() => setStatusOpen(false)}
+      />
 
       <article
         className="mx-auto pt-[120px] pb-32"
@@ -305,6 +315,7 @@ function ReaderTopbar(props: {
   onToggleSettings: () => void;
   tocOpen: boolean;
   onToggleToc: () => void;
+  onOpenStatus: () => void;
 }) {
   return (
     <div className="fixed left-1/2 top-3 z-40 flex w-[min(820px,calc(100vw-24px))] -translate-x-1/2 items-center gap-2 rounded-full border border-border surface px-2 py-1.5 shadow-[0_18px_44px_rgba(17,24,39,0.12)]">
@@ -365,6 +376,16 @@ function ReaderTopbar(props: {
           章节
         </Button>
       )}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="gap-1"
+        onClick={props.onOpenStatus}
+        aria-label="翻译状态"
+      >
+        <Activity className="size-3.5" />
+        状态
+      </Button>
       <Button
         variant="ghost"
         size="sm"

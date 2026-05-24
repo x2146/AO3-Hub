@@ -144,7 +144,7 @@ func TestAnalyzeFullTextSendsExpectedPrompt(t *testing.T) {
 		{Index: 0, Title: "C0", Blocks: []Block{{Type: BlockP, HTML: "<p>hi</p>"}}},
 		{Index: 1, Title: "C1", Blocks: []Block{{Type: BlockP, HTML: "<p>bye</p>"}}},
 	}}
-	got, err := analyzeFullText(context.Background(), cfg, meta, original)
+	got, err := analyzeFullText(context.Background(), cfg, meta, original, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

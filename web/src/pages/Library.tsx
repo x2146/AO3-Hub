@@ -11,6 +11,7 @@ import {
   TranslateProgressLegend,
   breakdownOf,
 } from "../components/TranslateProgress";
+import { TranslationStatusButton } from "../components/TranslationStatusPanel";
 
 export function Library() {
   const qc = useQueryClient();
@@ -128,6 +129,7 @@ export function Library() {
                       {s.chapterCount} ch · {s.wordCount.toLocaleString()} w
                     </span>
                     <StatusPill status={s.status} />
+                    <TranslationStatusButton storyID={s.id} />
                     {canRetry && (
                       <Button
                         variant="outline"
