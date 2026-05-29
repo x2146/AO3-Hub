@@ -132,7 +132,7 @@ export function ImportPage() {
               handleFiles(e.dataTransfer.files);
             }}
             className={cn(
-              "flex flex-col items-center justify-center gap-2 rounded-3xl border-2 border-dashed border-border p-12 text-center transition-colors",
+              "flex flex-col items-center justify-center gap-2 rounded-card border-2 border-dashed border-border p-12 text-center transition-colors",
               dragOver && "border-accent bg-accent/5",
               upload.isPending
                 ? "opacity-60"

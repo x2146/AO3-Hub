@@ -12,6 +12,7 @@ import {
   breakdownOf,
 } from "../components/TranslateProgress";
 import { TranslationStatusButton } from "../components/TranslationStatusPanel";
+import { isInFlight } from "../lib/status";
 
 export function Library() {
   const qc = useQueryClient();
@@ -25,9 +26,7 @@ export function Library() {
     queryFn: () => api.listStories(),
     refetchInterval: (q) => {
       const stories = (q.state.data as StoriesListResponse | undefined)?.stories;
-      const inFlight = stories?.some((s) =>
-        ["queued", "fetching", "parsing", "analyzing", "translating"].includes(s.status),
-      );
+      const inFlight = stories?.some((s) => isInFlight(s.status));
       return inFlight ? config?.ui.libraryRefetchIntervalMs ?? 3000 : false;
     },
   });

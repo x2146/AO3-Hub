@@ -29,18 +29,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { api, subscribeStream } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { STAGE_LABEL } from "../lib/status";
 
 type Props = {
   storyID: string;
   open: boolean;
   onClose: () => void;
-};
-
-const STAGE_LABEL: Record<LlmCallStage, string> = {
-  "analysis-chapter": "分章预读",
-  "analysis-merge": "归并",
-  "analysis-full": "全文预读",
-  "translate-batch": "翻译批次",
 };
 
 const STAGE_COLOR: Record<LlmCallStage, string> = {
@@ -105,7 +99,7 @@ export function TranslationStatusPanel({ storyID, open, onClose }: Props) {
       <aside
         role="dialog"
         aria-label="翻译状态"
-        className="relative h-full w-full max-w-[640px] overflow-y-auto border-l border-border bg-card shadow-[0_28px_60px_rgba(17,24,39,0.18)] surface"
+        className="relative h-full w-full max-w-[640px] overflow-y-auto border-l border-border bg-card shadow-overlay surface"
       >
         <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-card/95 backdrop-blur px-5 py-3">
           <div className="flex items-center gap-2 min-w-0">
@@ -338,7 +332,7 @@ function StatCard({
   sub?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-secondary/40 px-4 py-3">
+    <div className="rounded-card border border-border bg-secondary/40 px-4 py-3">
       <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground">
         {icon}
         <span>{label}</span>
@@ -365,7 +359,7 @@ function StageRow({
   const successRate =
     stats.calls > 0 ? Math.round((stats.successes / stats.calls) * 100) : 0;
   return (
-    <div className="rounded-xl border border-border px-3 py-2 text-[12px]">
+    <div className="rounded-control border border-border px-3 py-2 text-[12px]">
       <div className="flex items-center justify-between">
         <Badge variant="outline" className={cn("font-mono", STAGE_COLOR[stage])}>
           {STAGE_LABEL[stage]}
@@ -390,7 +384,7 @@ function ContextTab({ data }: { data: TranslationStatusView }) {
   const ctx = data.context;
   if (!ctx) {
     return (
-      <div className="rounded-xl border border-dashed border-border p-6 text-center">
+      <div className="rounded-control border border-dashed border-border p-6 text-center">
         <FileText className="size-5 mx-auto text-muted-foreground" />
         <p className="mt-2 text-[13px] text-muted-foreground">
           {data.mode === "refined"
@@ -431,7 +425,7 @@ function ContextTab({ data }: { data: TranslationStatusView }) {
             {ctx.characters.map((c) => (
               <li
                 key={c.name}
-                className="rounded-lg border border-border px-3 py-2 text-[12px]"
+                className="rounded-control border border-border px-3 py-2 text-[12px]"
               >
                 <p className="font-semibold">
                   {c.name}
@@ -472,7 +466,7 @@ function ContextTab({ data }: { data: TranslationStatusView }) {
             {ctx.chapterSummaries.map((c) => (
               <li
                 key={c.index}
-                className="rounded-lg border border-border px-3 py-2 text-[12px]"
+                className="rounded-control border border-border px-3 py-2 text-[12px]"
               >
                 <div className="flex items-baseline gap-2">
                   <span className="font-mono text-muted-foreground">
@@ -505,14 +499,14 @@ function SamplesTab({
   const entries = Object.entries(samples) as [LlmCallStage, RequestSample][];
   if (entries.length === 0) {
     return (
-      <p className="rounded-xl border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
+      <p className="rounded-control border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
         尚无样本。开始翻译后会捕获每个阶段的最新一次请求。
       </p>
     );
   }
   if (!canSeeRaw) {
     return (
-      <p className="rounded-xl border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
+      <p className="rounded-control border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
         请求 ctx 仅登录用户可见。
       </p>
     );
@@ -535,7 +529,7 @@ function SampleCard({
 }) {
   const [showSystem, setShowSystem] = useState(false);
   return (
-    <div className="rounded-xl border border-border overflow-hidden">
+    <div className="rounded-control border border-border overflow-hidden">
       <div className="flex items-center justify-between bg-secondary/40 px-3 py-2 text-[12px]">
         <div className="flex items-center gap-2">
           <Badge variant="outline" className={cn("font-mono", STAGE_COLOR[stage])}>
@@ -600,7 +594,7 @@ function EventsTab({ events }: { events: LlmCallEvent[] }) {
   const recent = useMemo(() => [...events].reverse(), [events]);
   if (recent.length === 0) {
     return (
-      <p className="rounded-xl border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
+      <p className="rounded-control border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
         尚无调用记录。
       </p>
     );
@@ -611,7 +605,7 @@ function EventsTab({ events }: { events: LlmCallEvent[] }) {
         <li
           key={e.id}
           className={cn(
-            "rounded-lg border px-3 py-2 text-[11px] font-mono",
+            "rounded-control border px-3 py-2 text-[11px] font-mono",
             e.status === "error"
               ? "border-destructive/40 bg-destructive/5"
               : "border-border",
@@ -670,7 +664,7 @@ function ErrorsTab({ events }: { events: LlmCallEvent[] }) {
   );
   if (errors.length === 0) {
     return (
-      <div className="rounded-xl border border-success/30 bg-success/5 p-6 text-center">
+      <div className="rounded-control border border-success/30 bg-success/5 p-6 text-center">
         <CheckCircle2 className="size-5 mx-auto text-success" />
         <p className="mt-2 text-[13px] text-success">无错误记录</p>
       </div>
@@ -681,7 +675,7 @@ function ErrorsTab({ events }: { events: LlmCallEvent[] }) {
       {errors.map((e) => (
         <li
           key={e.id}
-          className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2"
+          className="rounded-control border border-destructive/40 bg-destructive/5 px-3 py-2"
         >
           <div className="flex items-center justify-between gap-2 text-[11px] font-mono">
             <div className="flex items-center gap-2">

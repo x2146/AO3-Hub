@@ -84,7 +84,7 @@ export function Version() {
               </p>
             )}
             {latest.notes && (
-              <pre className="whitespace-pre-wrap rounded-2xl border border-border bg-surface/60 p-4 font-mono text-[12px] leading-relaxed">
+              <pre className="whitespace-pre-wrap rounded-card border border-border bg-surface/60 p-4 font-mono text-[12px] leading-relaxed">
                 {latest.notes}
               </pre>
             )}

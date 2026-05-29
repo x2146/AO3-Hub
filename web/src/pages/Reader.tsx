@@ -32,6 +32,7 @@ import {
   breakdownOf,
 } from "../components/TranslateProgress";
 import { TranslationStatusPanel } from "../components/TranslationStatusPanel";
+import { PHASE_LABEL } from "../lib/status";
 
 export function Reader() {
   const { id, chapter } = useParams({ from: "/r/$id/$chapter" });
@@ -318,7 +319,7 @@ function ReaderTopbar(props: {
   onOpenStatus: () => void;
 }) {
   return (
-    <div className="fixed left-1/2 top-3 z-40 flex w-[min(820px,calc(100vw-24px))] -translate-x-1/2 items-center gap-2 rounded-full border border-border surface px-2 py-1.5 shadow-[0_18px_44px_rgba(17,24,39,0.12)]">
+    <div className="fixed left-1/2 top-3 z-40 flex w-[min(820px,calc(100vw-24px))] -translate-x-1/2 items-center gap-2 rounded-full border border-border surface px-2 py-1.5 shadow-float">
       <Button variant="ghost" size="sm" asChild className="gap-1">
         <Link to="/">
           <ChevronLeft className="size-3.5" />
@@ -419,7 +420,7 @@ function SettingsDrawer({
     <div
       role="dialog"
       aria-label="阅读设置"
-      className="fixed top-[64px] left-1/2 z-40 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-3xl border border-border bg-card p-5 shadow-[0_28px_60px_rgba(17,24,39,0.18)] surface"
+      className="fixed top-[64px] left-1/2 z-40 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-card border border-border bg-card p-5 shadow-overlay surface"
     >
       <div className="flex items-center justify-between">
         <p className="text-[13px] font-semibold tracking-wider uppercase text-muted-foreground">
@@ -535,7 +536,7 @@ function TocDrawer({
     <div
       role="dialog"
       aria-label="章节目录"
-      className="fixed top-[64px] left-1/2 z-40 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-3xl border border-border bg-card p-3 shadow-[0_28px_60px_rgba(17,24,39,0.18)] surface max-h-[60vh] overflow-y-auto"
+      className="fixed top-[64px] left-1/2 z-40 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-card border border-border bg-card p-3 shadow-overlay surface max-h-[60vh] overflow-y-auto"
     >
       <div className="flex items-center justify-between px-2 py-1">
         <p className="text-[13px] font-semibold tracking-wider uppercase text-muted-foreground">
@@ -559,7 +560,7 @@ function TocDrawer({
               params={{ id: data.meta.id, chapter: String(i) }}
               onClick={onClose}
               className={cn(
-                "flex items-center justify-between rounded-xl px-3 py-2 text-[13px] transition-colors hover:bg-secondary",
+                "flex items-center justify-between rounded-control px-3 py-2 text-[13px] transition-colors hover:bg-secondary",
                 i === chapterIndex && "bg-accent/10",
               )}
             >
@@ -633,22 +634,9 @@ function ChapterProgress({
   if (!progress || progress.phase === "ready") return null;
   const { total, error } = breakdownOf(progress);
   const hasGlobalErrors = error > chapterErrorCount;
-  const phaseLabel =
-    progress.phase === "translating"
-      ? "翻译中"
-      : progress.phase === "analyzing"
-        ? "预读分析中"
-        : progress.phase === "fetching"
-          ? "抓取中"
-          : progress.phase === "parsing"
-            ? "解析中"
-            : progress.phase === "queued"
-              ? "排队中"
-              : progress.phase === "error"
-                ? "出错"
-                : progress.phase;
+  const phaseLabel = PHASE_LABEL[progress.phase];
   return (
-    <div className="mt-6 rounded-xl border border-border p-3 space-y-2">
+    <div className="mt-6 rounded-control border border-border p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <span className="text-muted-foreground text-[12px]">
           {phaseLabel}
