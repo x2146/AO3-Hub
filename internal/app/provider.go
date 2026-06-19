@@ -251,9 +251,14 @@ func chatOpenAICompatibleStream(ctx context.Context, config LLMConfig, messages 
 
 	var content strings.Builder
 	var usage map[string]any
+	done := false
 	err = scanSSE(res.Body, func(event, data string) error {
 		if data == "[DONE]" {
+			done = true
 			return io.EOF
+		}
+		if event == "error" {
+			return LLMError{Status: 500, Body: "stream error: " + truncate(data, 200)}
 		}
 		var chunk struct {
 			Choices []struct {
@@ -261,10 +266,14 @@ func chatOpenAICompatibleStream(ctx context.Context, config LLMConfig, messages 
 					Content string `json:"content"`
 				} `json:"delta"`
 			} `json:"choices"`
-			Usage map[string]any `json:"usage"`
+			Usage map[string]any  `json:"usage"`
+			Error json.RawMessage `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return nil
+			return LLMError{Status: 500, Body: "non-json stream event: " + truncate(data, 200)}
+		}
+		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
+			return LLMError{Status: 500, Body: "stream error: " + truncate(string(chunk.Error), 200)}
 		}
 		for _, c := range chunk.Choices {
 			content.WriteString(c.Delta.Content)
@@ -276,6 +285,9 @@ func chatOpenAICompatibleStream(ctx context.Context, config LLMConfig, messages 
 	})
 	if err != nil && !errors.Is(err, io.EOF) {
 		return ChatResult{}, err
+	}
+	if !done {
+		return ChatResult{}, LLMError{Status: 500, Body: "stream ended before [DONE]"}
 	}
 	out := content.String()
 	if strings.TrimSpace(out) == "" {
@@ -327,7 +339,11 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 
 	var content strings.Builder
 	usage := map[string]any{}
+	done := false
 	err = scanSSE(res.Body, func(event, data string) error {
+		if event == "error" {
+			return LLMError{Status: 500, Body: "stream error: " + truncate(data, 200)}
+		}
 		var head struct {
 			Type    string `json:"type"`
 			Message struct {
@@ -337,10 +353,11 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"delta"`
-			Usage map[string]any `json:"usage"`
+			Usage map[string]any  `json:"usage"`
+			Error json.RawMessage `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &head); err != nil {
-			return nil
+			return LLMError{Status: 500, Body: "non-json stream event: " + truncate(data, 200)}
 		}
 		switch head.Type {
 		case "message_start":
@@ -355,13 +372,23 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 			for k, v := range head.Usage {
 				usage[k] = v
 			}
+		case "error":
+			body := data
+			if len(head.Error) > 0 && string(head.Error) != "null" {
+				body = string(head.Error)
+			}
+			return LLMError{Status: 500, Body: "stream error: " + truncate(body, 200)}
 		case "message_stop":
+			done = true
 			return io.EOF
 		}
 		return nil
 	})
 	if err != nil && !errors.Is(err, io.EOF) {
 		return ChatResult{}, err
+	}
+	if !done {
+		return ChatResult{}, LLMError{Status: 500, Body: "stream ended before message_stop"}
 	}
 	out := strings.TrimSpace(content.String())
 	if out == "" {

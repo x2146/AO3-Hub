@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -261,6 +262,56 @@ func TestChatOpenAICompatibleStream(t *testing.T) {
 	}
 }
 
+func TestChatOpenAICompatibleStreamRequiresDone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	_, err := chat(context.Background(), LLMConfig{
+		APIType:             LLMAPITypeOpenAICompatible,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "test-model",
+		MaxTokensPerRequest: 1000,
+		Stream:              true,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "stream ended before [DONE]") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestChatOpenAICompatibleStreamReturnsErrorEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n"))
+		_, _ = w.Write([]byte("event: error\n"))
+		_, _ = w.Write([]byte(`data: {"error":{"message":"boom"}}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	_, err := chat(context.Background(), LLMConfig{
+		APIType:             LLMAPITypeOpenAICompatible,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "test-model",
+		MaxTokensPerRequest: 1000,
+		Stream:              true,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
 func TestChatClaudeMessagesStream(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -309,5 +360,61 @@ func TestChatClaudeMessagesStream(t *testing.T) {
 	prompt, completion, _ := extractUsage(result.Usage)
 	if prompt != 5 || completion != 3 {
 		t.Fatalf("usage prompt=%d completion=%d", prompt, completion)
+	}
+}
+
+func TestChatClaudeMessagesStreamRequiresMessageStop(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		events := []struct{ name, data string }{
+			{"message_start", `{"type":"message_start","message":{"usage":{"input_tokens":5}}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`},
+		}
+		for _, ev := range events {
+			_, _ = w.Write([]byte("event: " + ev.name + "\n"))
+			_, _ = w.Write([]byte("data: " + ev.data + "\n\n"))
+		}
+	}))
+	defer server.Close()
+
+	_, err := chat(context.Background(), LLMConfig{
+		APIType:             LLMAPITypeClaudeMessages,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "claude-sonnet-4-5",
+		MaxTokensPerRequest: 1000,
+		Stream:              true,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "stream ended before message_stop") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestChatClaudeMessagesStreamReturnsErrorEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("event: error\n"))
+		_, _ = w.Write([]byte(`data: {"type":"error","error":{"type":"overloaded_error","message":"boom"}}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	_, err := chat(context.Background(), LLMConfig{
+		APIType:             LLMAPITypeClaudeMessages,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "claude-sonnet-4-5",
+		MaxTokensPerRequest: 1000,
+		Stream:              true,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error = %q", err)
 	}
 }
