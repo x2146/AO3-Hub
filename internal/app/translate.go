@@ -10,34 +10,45 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	xhtml "golang.org/x/net/html"
 )
 
 const maxProgressErrors = 100
 
 const systemPrompt = `你是文学翻译。把英文文学作品翻译为中文，要求：
-1) 严格保留输入中的 HTML 内联标签（em/strong/a/i/b/u/s/sup/sub/br/span/code 等），仅翻译文字内容
-2) 每个输入段落必须对应一个输出段落，顺序、数量完全一致
-3) 译文自然流畅，符合中文小说语感，不增不减
-4) 角色名、地名等专有名词在同一作品内保持一致
-5) 输入是一个 JSON 数组，输出也必须是相同长度的 JSON 数组
-6) 仅输出 JSON 对象 { "blocks": [{ "id": "...", "html": "..." }] }，不要任何解释`
+1) 输入不含 HTML 或格式标签；程序会保留 AO3 原始富文本结构，你只负责翻译纯文本
+2) 每个 block 的 text 是整段上下文，runs 是需要翻译的文本片段；结合 text 让 runs 的译文自然连贯
+3) 输出 blocks 必须与输入 blocks 数量、id、顺序一致；每个 block.runs 必须与输入 runs 数量、id、顺序一致
+4) 仅翻译 runs[].text，不增删 run，不输出 HTML、Markdown 或格式标注
+5) 译文自然流畅，符合中文小说语感；角色名、地名等专有名词在同一作品内保持一致
+6) 仅输出 JSON 对象 { "blocks": [{ "id": "...", "runs": [{ "id": "...", "text": "..." }] }] }，不要任何解释`
 
 const refinedSystemPrompt = `你是 AO3 同人文翻译专家，专精英文同人作品的中文本地化。要求：
-1) 严格保留输入中的 HTML 内联标签（em/strong/a/i/b/u/s/sup/sub/br/span/code 等），仅翻译文字内容
-2) 每个输入段落必须对应一个输出段落，顺序、数量完全一致
-3) 译文符合中文同人圈语感：自然、有文学性、不机翻味，保留作者的语气与节奏
-4) 严格遵守 context 中 glossary 的译名；ship 关系动态与基调参考 ships/tone 字段，使角色对白与心理符合既定动态
-5) 同人圈惯用术语（pet name、kink 词汇、ship 行话等）使用圈内通用的中文表达
-6) 仅输出 JSON 对象 { "blocks": [{ "id": "...", "html": "..." }] }，不要任何解释`
+1) 输入不含 HTML 或格式标签；程序会保留 AO3 原始富文本结构，你只负责翻译纯文本
+2) 每个 block 的 text 是整段上下文，runs 是需要翻译的文本片段；结合 text、context、glossary 让 runs 的译文自然连贯
+3) 输出 blocks 必须与输入 blocks 数量、id、顺序一致；每个 block.runs 必须与输入 runs 数量、id、顺序一致
+4) 仅翻译 runs[].text，不增删 run，不输出 HTML、Markdown 或格式标注
+5) 译文符合中文同人圈语感，保留作者语气与节奏；严格遵守 context 中 glossary 的译名
+6) 仅输出 JSON 对象 { "blocks": [{ "id": "...", "runs": [{ "id": "...", "text": "..." }] }] }，不要任何解释`
+
+type translateRun struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
 
 type translateInput struct {
-	ID   string `json:"id"`
-	HTML string `json:"html"`
+	ID   string         `json:"id"`
+	Text string         `json:"text"`
+	Runs []translateRun `json:"runs"`
+	HTML string         `json:"-"`
 }
 
 type translateOutput struct {
-	ID   string `json:"id"`
-	HTML string `json:"html"`
+	ID   string         `json:"id"`
+	Text string         `json:"text,omitempty"`
+	Runs []translateRun `json:"runs,omitempty"`
+	HTML string         `json:"html,omitempty"`
 }
 
 type batch struct {
@@ -49,7 +60,151 @@ func approxTokens(text string) int {
 }
 
 func isTranslatable(block Block) bool {
-	return block.Type != BlockHR && strings.TrimSpace(block.HTML) != ""
+	return block.Type != BlockHR && htmlToPlainText(block.HTML) != ""
+}
+
+func parseHTMLBody(raw string) (*xhtml.Node, error) {
+	doc, err := xhtml.Parse(strings.NewReader("<!doctype html><html><body>" + raw + "</body></html>"))
+	if err != nil {
+		return nil, err
+	}
+	var findBody func(*xhtml.Node) *xhtml.Node
+	findBody = func(n *xhtml.Node) *xhtml.Node {
+		if n.Type == xhtml.ElementNode && n.Data == "body" {
+			return n
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if found := findBody(c); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	body := findBody(doc)
+	if body == nil {
+		return nil, errors.New("parsed html missing body")
+	}
+	return body, nil
+}
+
+func eachTranslatableTextNode(root *xhtml.Node, fn func(*xhtml.Node)) {
+	var walk func(*xhtml.Node)
+	walk = func(n *xhtml.Node) {
+		if n.Type == xhtml.TextNode {
+			if strings.TrimSpace(n.Data) != "" {
+				fn(n)
+			}
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	for c := root.FirstChild; c != nil; c = c.NextSibling {
+		walk(c)
+	}
+}
+
+func plainTextFromRuns(runs []translateRun) string {
+	parts := make([]string, 0, len(runs))
+	for _, run := range runs {
+		text := strings.TrimSpace(whitespaceRE.ReplaceAllString(run.Text, " "))
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func makeTranslateInput(block Block) (translateInput, error) {
+	body, err := parseHTMLBody(block.HTML)
+	if err != nil {
+		return translateInput{}, err
+	}
+	runs := []translateRun{}
+	eachTranslatableTextNode(body, func(n *xhtml.Node) {
+		runs = append(runs, translateRun{
+			ID:   fmt.Sprintf("r%d", len(runs)),
+			Text: n.Data,
+		})
+	})
+	if len(runs) == 0 {
+		return translateInput{}, fmt.Errorf("block %s has no translatable text", block.ID)
+	}
+	return translateInput{
+		ID:   block.ID,
+		Text: plainTextFromRuns(runs),
+		Runs: runs,
+		HTML: block.HTML,
+	}, nil
+}
+
+func renderHTMLBodyContents(body *xhtml.Node) (string, error) {
+	var b strings.Builder
+	for c := body.FirstChild; c != nil; c = c.NextSibling {
+		if err := xhtml.Render(&b, c); err != nil {
+			return "", err
+		}
+	}
+	return b.String(), nil
+}
+
+func outputRunsForInput(input translateInput, output translateOutput) ([]translateRun, error) {
+	if len(output.Runs) == 0 {
+		if len(input.Runs) == 1 && output.Text != "" {
+			return []translateRun{{ID: input.Runs[0].ID, Text: output.Text}}, nil
+		}
+		return nil, fmt.Errorf("段 id=%s 缺少 runs 译文", input.ID)
+	}
+	if len(output.Runs) != len(input.Runs) {
+		return nil, fmt.Errorf("段 id=%s run 数不匹配: 输入 %d，输出 %d", input.ID, len(input.Runs), len(output.Runs))
+	}
+	byID := map[string]translateRun{}
+	for _, run := range output.Runs {
+		byID[run.ID] = run
+	}
+	ordered := make([]translateRun, 0, len(input.Runs))
+	for i, inputRun := range input.Runs {
+		run, ok := byID[inputRun.ID]
+		if !ok {
+			if output.Runs[i].ID == "" {
+				run = translateRun{ID: inputRun.ID, Text: output.Runs[i].Text}
+			} else {
+				return nil, fmt.Errorf("段 id=%s 缺少 run id=%s 的译文", input.ID, inputRun.ID)
+			}
+		}
+		ordered = append(ordered, translateRun{ID: inputRun.ID, Text: run.Text})
+	}
+	return ordered, nil
+}
+
+func translatedHTMLFromRuns(input translateInput, output translateOutput) (string, error) {
+	if output.HTML != "" && len(output.Runs) == 0 && output.Text == "" {
+		return "", fmt.Errorf("段 id=%s 返回了 html 字段；当前翻译接口只接受纯文本 runs", input.ID)
+	}
+	runs, err := outputRunsForInput(input, output)
+	if err != nil {
+		return "", err
+	}
+	body, err := parseHTMLBody(input.HTML)
+	if err != nil {
+		return "", err
+	}
+	i := 0
+	eachTranslatableTextNode(body, func(n *xhtml.Node) {
+		if i < len(runs) {
+			n.Data = runs[i].Text
+			i++
+		}
+	})
+	if i != len(runs) {
+		return "", fmt.Errorf("段 id=%s 回填 run 数不匹配", input.ID)
+	}
+	rendered, err := renderHTMLBodyContents(body)
+	if err != nil {
+		return "", err
+	}
+	return sanitizeHTMLFragment(rendered), nil
 }
 
 func chunkBlocks(blocks []Block, blocksPerRequest, maxTokens int) []batch {
@@ -57,7 +212,7 @@ func chunkBlocks(blocks []Block, blocksPerRequest, maxTokens int) []batch {
 	current := []Block{}
 	currentTokens := 0
 	for _, block := range blocks {
-		tokens := approxTokens(block.HTML)
+		tokens := approxTokens(htmlToPlainText(block.HTML))
 		wouldExceed := len(current) >= blocksPerRequest || (len(current) > 0 && currentTokens+tokens > maxTokens)
 		if wouldExceed {
 			batches = append(batches, batch{Blocks: current})
@@ -199,7 +354,11 @@ func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []transla
 		if !ok {
 			return nil, fmt.Errorf("缺少段 id=%s 的译文", input.ID)
 		}
-		ordered = append(ordered, translateOutput{ID: input.ID, HTML: found.HTML})
+		html, err := translatedHTMLFromRuns(input, found)
+		if err != nil {
+			return nil, err
+		}
+		ordered = append(ordered, translateOutput{ID: input.ID, HTML: html})
 	}
 	return ordered, nil
 }
@@ -230,13 +389,15 @@ func makeBlankTranslated(original ChapterFile) ChapterFile {
 		blocks := make([]Block, len(chapter.Blocks))
 		for j, block := range chapter.Blocks {
 			status := BlockDone
+			html := block.HTML
 			if isTranslatable(block) {
 				status = BlockPending
+				html = ""
 			}
 			blocks[j] = Block{
 				ID:     block.ID,
 				Type:   block.Type,
-				HTML:   "",
+				HTML:   html,
 				Status: status,
 			}
 		}
@@ -519,10 +680,12 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 		for len(transCh.Blocks) < len(orig.Blocks) {
 			ob := orig.Blocks[len(transCh.Blocks)]
 			status := BlockDone
+			html := ob.HTML
 			if isTranslatable(ob) {
 				status = BlockPending
+				html = ""
 			}
-			transCh.Blocks = append(transCh.Blocks, Block{ID: ob.ID, Type: ob.Type, Status: status})
+			transCh.Blocks = append(transCh.Blocks, Block{ID: ob.ID, Type: ob.Type, HTML: html, Status: status})
 		}
 
 		currentChapter := chIdx
@@ -537,8 +700,8 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 		for bi, ob := range orig.Blocks {
 			tb := transCh.Blocks[bi]
 			if !isTranslatable(ob) {
-				if tb.Status != BlockDone {
-					transCh.Blocks[bi] = Block{ID: tb.ID, Type: tb.Type, HTML: ob.HTML, Status: BlockDone}
+				if tb.Status != BlockDone || tb.HTML != ob.HTML || tb.Type != ob.Type {
+					transCh.Blocks[bi] = Block{ID: ob.ID, Type: ob.Type, HTML: ob.HTML, Status: BlockDone}
 				}
 				continue
 			}
@@ -590,11 +753,40 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 						return
 					}
 					b := batches[i]
-					inputs := make([]translateInput, len(b.Blocks))
-					ids := make([]string, len(b.Blocks))
-					for j, block := range b.Blocks {
-						inputs[j] = translateInput{ID: block.ID, HTML: block.HTML}
-						ids[j] = block.ID
+					inputs := make([]translateInput, 0, len(b.Blocks))
+					ids := make([]string, 0, len(b.Blocks))
+					for _, block := range b.Blocks {
+						input, err := makeTranslateInput(block)
+						if err != nil {
+							msg := err.Error()
+							transMu.Lock()
+							bi := findBlockIndex(transCh.Blocks, block.ID)
+							if bi >= 0 {
+								tb := transCh.Blocks[bi]
+								tb.Status = BlockError
+								tb.Error = msg
+								transCh.Blocks[bi] = tb
+							}
+							a.bus.Emit(storyID, StreamEvent{Type: "block-error", ChapterIndex: chIdx, BlockID: block.ID, Message: msg})
+							_ = a.setProgress(storyID, func(p Progress) Progress {
+								p.Errors = append(p.Errors, ProgressError{ChapterIndex: chIdx, BlockID: block.ID, Message: msg, At: nowISO()})
+								if len(p.Errors) > maxProgressErrors {
+									p.Errors = p.Errors[len(p.Errors)-maxProgressErrors:]
+								}
+								return p
+							})
+							transMu.Unlock()
+							continue
+						}
+						inputs = append(inputs, input)
+						ids = append(ids, block.ID)
+					}
+					if len(inputs) == 0 {
+						transMu.Lock()
+						_ = a.store.SaveTranslated(storyID, *translated)
+						_ = a.emitProgress(storyID, *translated, *original)
+						transMu.Unlock()
+						continue
 					}
 					a.markInflight(storyID, ids)
 					_ = a.emitProgress(storyID, *translated, *original)

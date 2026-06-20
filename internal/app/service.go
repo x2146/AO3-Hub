@@ -71,7 +71,7 @@ func (a *App) persistParsed(html string, source struct {
 
 	translated, _ := a.store.LoadTranslated(id)
 	var nextTranslated ChapterFile
-	if translated != nil && len(translated.Chapters) == len(parsed.Original.Chapters) {
+	if translatedMatchesOriginal(translated, parsed.Original) {
 		nextTranslated = *translated
 	} else {
 		nextTranslated = makeBlankTranslated(parsed.Original)
@@ -83,15 +83,18 @@ func (a *App) persistParsed(html string, source struct {
 	total := 0
 	for _, chapter := range parsed.Original.Chapters {
 		for _, block := range chapter.Blocks {
-			if block.Type != BlockHR && block.HTML != "" {
+			if isTranslatable(block) {
 				total++
 			}
 		}
 	}
 	done := 0
-	for _, chapter := range nextTranslated.Chapters {
-		for _, block := range chapter.Blocks {
-			if block.Status == BlockDone {
+	for ci, chapter := range parsed.Original.Chapters {
+		for bi, block := range chapter.Blocks {
+			if !isTranslatable(block) || ci >= len(nextTranslated.Chapters) || bi >= len(nextTranslated.Chapters[ci].Blocks) {
+				continue
+			}
+			if nextTranslated.Chapters[ci].Blocks[bi].Status == BlockDone {
 				done++
 			}
 		}
@@ -108,6 +111,24 @@ func (a *App) persistParsed(html string, source struct {
 	}
 
 	return meta, parsed.Original, isNew, nil
+}
+
+func translatedMatchesOriginal(translated *ChapterFile, original ChapterFile) bool {
+	if translated == nil || len(translated.Chapters) != len(original.Chapters) {
+		return false
+	}
+	for ci, chapter := range original.Chapters {
+		if len(translated.Chapters[ci].Blocks) != len(chapter.Blocks) {
+			return false
+		}
+		for bi, block := range chapter.Blocks {
+			tBlock := translated.Chapters[ci].Blocks[bi]
+			if tBlock.ID != block.ID || tBlock.Type != block.Type {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (a *App) prepareEntry(id, title, author string, status StoryStatus) error {
@@ -229,7 +250,11 @@ func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode T
 				continue
 			}
 			ob := original.Chapters[ci].Blocks[bi]
-			if ob.Type == BlockHR || ob.HTML == "" {
+			if !isTranslatable(ob) {
+				block.Status = BlockDone
+				block.HTML = ob.HTML
+				block.Error = ""
+				translated.Chapters[ci].Blocks[bi] = block
 				continue
 			}
 			block.Status = BlockPending

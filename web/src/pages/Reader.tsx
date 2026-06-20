@@ -34,6 +34,9 @@ import {
 import { TranslationStatusPanel } from "../components/TranslationStatusPanel";
 import { PHASE_LABEL } from "../lib/status";
 
+const BLOCK_ROOT_RE =
+  /^\s*<(?:p|div|blockquote|pre|h[1-6]|ul|ol|li|center|figure|figcaption|table|hr)(?:\s|>|\/)/i;
+
 export function Reader() {
   const { id, chapter } = useParams({ from: "/r/$id/$chapter" });
   const chapterIndex = Number(chapter);
@@ -689,7 +692,6 @@ function Pair({
   onRetry: (blockId: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const Tag = pair.type === "h2" ? "h2" : pair.type === "h3" ? "h3" : "div";
   const heading = pair.type === "h2" || pair.type === "h3";
   if (pair.type === "hr")
     return <hr className="my-8 border-t border-border" />;
@@ -702,19 +704,13 @@ function Pair({
       className={cn("group", heading && "mt-12 mb-6")}
     >
       {showEn && (
-        <Tag
-          className={
-            heading
-              ? "font-sans text-[clamp(1.3rem,5vw,2rem)] font-semibold leading-tight tracking-tight"
-              : ""
-          }
-          dangerouslySetInnerHTML={{ __html: pair.en }}
-        />
+        <RichHTML type={pair.type} html={pair.en} />
       )}
       {pair.status === "done" && pair.zh && (
-        <div
+        <RichHTML
+          type={pair.type}
+          html={pair.zh}
           className={cn("zh-shadow", showEn && "mt-1.5")}
-          dangerouslySetInnerHTML={{ __html: pair.zh }}
         />
       )}
       {pair.status === "pending" && (
@@ -738,5 +734,52 @@ function Pair({
         </div>
       )}
     </div>
+  );
+}
+
+type RichHTMLTag = "p" | "h2" | "h3" | "blockquote" | "pre" | "div" | "ul" | "ol";
+
+function legacyTagFor(type: ChapterView["chapter"]["pairs"][number]["type"]): RichHTMLTag {
+  switch (type) {
+    case "h2":
+      return "h2";
+    case "h3":
+      return "h3";
+    case "blockquote":
+      return "blockquote";
+    case "pre":
+      return "pre";
+    case "ul":
+      return "ul";
+    case "ol":
+      return "ol";
+    default:
+      return "p";
+  }
+}
+
+function RichHTML({
+  type,
+  html,
+  className,
+}: {
+  type: ChapterView["chapter"]["pairs"][number]["type"];
+  html: string;
+  className?: string;
+}) {
+  if (BLOCK_ROOT_RE.test(html)) {
+    return (
+      <div
+        className={cn("rich-html", className)}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    );
+  }
+  const Tag = legacyTagFor(type);
+  return (
+    <Tag
+      className={cn("rich-html", className)}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   );
 }

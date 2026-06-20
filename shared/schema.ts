@@ -61,7 +61,16 @@ export const Meta = z.object({
 });
 export type Meta = z.infer<typeof Meta>;
 
-export const BlockType = z.enum(["p", "h2", "h3", "blockquote", "hr", "pre"]);
+export const BlockType = z.enum([
+  "p",
+  "h2",
+  "h3",
+  "blockquote",
+  "hr",
+  "pre",
+  "ul",
+  "ol",
+]);
 export type BlockType = z.infer<typeof BlockType>;
 
 export const BlockStatus = z.enum(["pending", "done", "error"]);

@@ -11,12 +11,12 @@ import (
 
 func TestHTMLToPlainText(t *testing.T) {
 	cases := map[string]string{
-		`<p>Hello <em>world</em></p>`:           "Hello world",
-		`<p>&quot;OK&quot; said Lando.</p>`:     `"OK" said Lando.`,
-		`<p>Line<br/>break</p>`:                 "Linebreak",
-		`<p>  spaced  </p>`:                     "spaced",
-		`<center><p>☂</p></center>`:             "☂",
-		`A &amp; B`:                             "A & B",
+		`<p>Hello <em>world</em></p>`:       "Hello world",
+		`<p>&quot;OK&quot; said Lando.</p>`: `"OK" said Lando.`,
+		`<p>Line<br/>break</p>`:             "Linebreak",
+		`<p>  spaced  </p>`:                 "spaced",
+		`<center><p>☂</p></center>`:         "☂",
+		`A &amp; B`:                         "A & B",
 	}
 	for input, want := range cases {
 		if got := htmlToPlainText(input); got != want {
@@ -171,7 +171,7 @@ func TestBuildUserPayloadIncludesContextWhenRefined(t *testing.T) {
 		Title: "Work",
 		Tags:  Tags{Fandom: []string{"F"}, Rating: "Explicit", Relationship: []string{"A/B"}, Warnings: []string{"None"}, Additional: []string{"AU"}},
 	}
-	out, err := buildUserPayload(meta, []translateInput{{ID: "x", HTML: "<p>hi</p>"}}, transCtx, 1)
+	out, err := buildUserPayload(meta, []translateInput{{ID: "x", Text: "hi", Runs: []translateRun{{ID: "r0", Text: "hi"}}, HTML: "<p>hi</p>"}}, transCtx, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestBuildUserPayloadIncludesContextWhenRefined(t *testing.T) {
 }
 
 func TestBuildUserPayloadNormalModeOmitsContext(t *testing.T) {
-	out, err := buildUserPayload(Meta{Title: "Work", Tags: Tags{Fandom: []string{"F"}}}, []translateInput{{ID: "x", HTML: "<p>hi</p>"}}, nil, 0)
+	out, err := buildUserPayload(Meta{Title: "Work", Tags: Tags{Fandom: []string{"F"}}}, []translateInput{{ID: "x", Text: "hi", Runs: []translateRun{{ID: "r0", Text: "hi"}}, HTML: "<p>hi</p>"}}, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

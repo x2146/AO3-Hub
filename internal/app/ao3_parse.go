@@ -36,11 +36,237 @@ func selectionText(sel *goquery.Selection) string {
 	return strings.TrimSpace(whitespaceRE.ReplaceAllString(sel.Text(), " "))
 }
 
-func sanitizeInline(sel *goquery.Selection) string {
+var (
+	blockTagRE        = regexp.MustCompile(`^(p|div|blockquote|pre|h[1-6]|ul|ol|li|center|figure|figcaption|table|thead|tbody|tr|td|th)$`)
+	classTokenRE      = regexp.MustCompile(`^[A-Za-z0-9_:-]+$`)
+	safeCSSValueRE    = regexp.MustCompile(`^[A-Za-z0-9\s.,#%()+/_-]+$`)
+	unsafeCSSValueRE  = regexp.MustCompile(`(?i)(url\s*\(|expression\s*\(|javascript:|data:)`)
+	allowedStyleProps = map[string]bool{
+		"direction":       true,
+		"font-style":      true,
+		"font-weight":     true,
+		"list-style-type": true,
+		"margin-left":     true,
+		"margin-right":    true,
+		"padding-left":    true,
+		"padding-right":   true,
+		"text-align":      true,
+		"text-decoration": true,
+		"unicode-bidi":    true,
+		"vertical-align":  true,
+		"white-space":     true,
+	}
+	allowedGlobalAttrs = map[string]bool{
+		"align": true,
+		"class": true,
+		"dir":   true,
+		"lang":  true,
+		"style": true,
+		"title": true,
+	}
+	allowedAttrsByTag = map[string]map[string]bool{
+		"a": {
+			"href":   true,
+			"name":   true,
+			"rel":    true,
+			"target": true,
+		},
+		"img": {
+			"alt":    true,
+			"height": true,
+			"src":    true,
+			"width":  true,
+		},
+		"ol": {
+			"start": true,
+			"type":  true,
+		},
+		"ul": {
+			"type": true,
+		},
+		"li": {
+			"type":  true,
+			"value": true,
+		},
+	}
+)
+
+func isRemovedHTMLTag(tag string) bool {
+	switch tag {
+	case "script", "style", "iframe", "object", "embed":
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeClass(value string) string {
+	tokens := []string{}
+	for _, token := range strings.Fields(value) {
+		if classTokenRE.MatchString(token) {
+			tokens = append(tokens, token)
+		}
+	}
+	return strings.Join(tokens, " ")
+}
+
+func sanitizeAlign(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "left", "right", "center", "justify":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func sanitizeURL(value string) string {
+	v := strings.TrimSpace(value)
+	lower := strings.ToLower(v)
+	if v == "" {
+		return ""
+	}
+	if strings.HasPrefix(lower, "http://") ||
+		strings.HasPrefix(lower, "https://") ||
+		strings.HasPrefix(lower, "mailto:") ||
+		strings.HasPrefix(v, "/") ||
+		strings.HasPrefix(v, "#") {
+		return v
+	}
+	head := strings.FieldsFunc(v, func(r rune) bool {
+		return r == '/' || r == '?' || r == '#'
+	})
+	if len(head) > 0 && strings.Contains(head[0], ":") {
+		return ""
+	}
+	return v
+}
+
+func sanitizeStyle(value string) string {
+	parts := []string{}
+	for _, raw := range strings.Split(value, ";") {
+		prop, val, ok := strings.Cut(raw, ":")
+		if !ok {
+			continue
+		}
+		prop = strings.ToLower(strings.TrimSpace(prop))
+		val = strings.TrimSpace(val)
+		if !allowedStyleProps[prop] || val == "" {
+			continue
+		}
+		if unsafeCSSValueRE.MatchString(val) || !safeCSSValueRE.MatchString(val) {
+			continue
+		}
+		if prop == "text-align" {
+			if align := sanitizeAlign(val); align != "" {
+				parts = append(parts, prop+": "+align)
+			}
+			continue
+		}
+		parts = append(parts, prop+": "+val)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func sanitizeAttr(tag, name, value string) (string, string, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if strings.HasPrefix(name, "on") || strings.HasPrefix(name, "data-") || name == "" {
+		return "", "", false
+	}
+	allowed := allowedGlobalAttrs[name]
+	if tagAttrs := allowedAttrsByTag[tag]; tagAttrs != nil && tagAttrs[name] {
+		allowed = true
+	}
+	if !allowed {
+		return "", "", false
+	}
+	switch name {
+	case "align":
+		value = sanitizeAlign(value)
+	case "class":
+		value = sanitizeClass(value)
+	case "dir":
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "ltr" && value != "rtl" && value != "auto" {
+			value = ""
+		}
+	case "href", "src":
+		value = sanitizeURL(value)
+	case "rel":
+		value = sanitizeClass(value)
+	case "style":
+		value = sanitizeStyle(value)
+	case "target":
+		value = strings.TrimSpace(value)
+		if value != "_blank" && value != "_self" && value != "_parent" && value != "_top" {
+			value = ""
+		}
+	default:
+		value = strings.TrimSpace(value)
+	}
+	return name, value, value != ""
+}
+
+func sanitizeElement(sel *goquery.Selection) {
+	if len(sel.Nodes) == 0 {
+		return
+	}
+	node := sel.Nodes[0]
+	tag := strings.ToLower(goquery.NodeName(sel))
+	attrs := node.Attr[:0:0]
+	for _, attr := range node.Attr {
+		name, value, ok := sanitizeAttr(tag, attr.Key, attr.Val)
+		if ok {
+			attr.Key = name
+			attr.Val = value
+			attrs = append(attrs, attr)
+		}
+	}
+	node.Attr = attrs
+	if tag == "a" {
+		if href, ok := sel.Attr("href"); ok {
+			lower := strings.ToLower(href)
+			if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+				sel.SetAttr("rel", "nofollow noopener noreferrer")
+			}
+		}
+	}
+}
+
+func sanitizeSelection(sel *goquery.Selection) {
+	sel.Find("script, style, iframe, object, embed").Remove()
+	sel.Each(func(_ int, el *goquery.Selection) {
+		sanitizeElement(el)
+	})
+	sel.Find("*").Each(func(_ int, el *goquery.Selection) {
+		sanitizeElement(el)
+	})
+}
+
+func sanitizeBlock(sel *goquery.Selection) string {
+	if isRemovedHTMLTag(strings.ToLower(goquery.NodeName(sel))) {
+		return ""
+	}
 	clone := sel.Clone()
-	clone.Find("script, style").Remove()
-	html, _ := clone.Html()
-	return html
+	sanitizeSelection(clone)
+	var b strings.Builder
+	if err := goquery.Render(&b, clone); err != nil {
+		return ""
+	}
+	return b.String()
+}
+
+func sanitizeHTMLFragment(raw string) string {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader("<!doctype html><html><body>" + raw + "</body></html>"))
+	if err != nil {
+		return ""
+	}
+	contents := doc.Find("body").First().Contents()
+	sanitizeSelection(contents)
+	var b strings.Builder
+	contents.Each(func(_ int, el *goquery.Selection) {
+		_ = goquery.Render(&b, el)
+	})
+	return b.String()
 }
 
 func stripImmersiveCruft(doc *goquery.Document) {
@@ -61,7 +287,7 @@ func findChapterUserstuff(root *goquery.Selection) *goquery.Selection {
 		if cand.Find(".userstuff").Length() > 0 {
 			continue
 		}
-		score := cand.ChildrenFiltered("p, blockquote").Length()
+		score := cand.ChildrenFiltered("p, div, blockquote, pre, ul, ol, center, figure, table, hr, h1, h2, h3, h4, h5, h6").Length()
 		if score > bestScore {
 			best = cand
 			bestScore = score
@@ -228,6 +454,10 @@ func pickBlockType(tag string) BlockType {
 		return BlockHR
 	case "pre":
 		return BlockPre
+	case "ul":
+		return BlockUL
+	case "ol":
+		return BlockOL
 	default:
 		return BlockP
 	}
@@ -251,7 +481,10 @@ func extractBlocks(root *goquery.Selection, chapterIndex int) []Block {
 			})
 			return
 		}
-		html := strings.TrimSpace(sanitizeInline(el))
+		if !blockTagRE.MatchString(tag) {
+			tag = "p"
+		}
+		html := strings.TrimSpace(sanitizeBlock(el))
 		if html == "" {
 			return
 		}

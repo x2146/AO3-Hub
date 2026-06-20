@@ -83,6 +83,8 @@ const (
 	BlockBlockquote BlockType = "blockquote"
 	BlockHR         BlockType = "hr"
 	BlockPre        BlockType = "pre"
+	BlockUL         BlockType = "ul"
+	BlockOL         BlockType = "ol"
 )
 
 type BlockStatus string

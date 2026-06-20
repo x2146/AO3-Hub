@@ -137,9 +137,12 @@
   line-height: var(--reader-line);
 }
 
-.prose-reader p,
-.prose-reader blockquote {
+.prose-reader :where(p, blockquote, pre, ul, ol, h1, h2, h3, h4, h5, h6, figure) {
   margin: 0;
+}
+
+.prose-reader .rich-html {
+  min-height: 1lh;
 }
 
 .prose-reader a {
@@ -156,6 +159,144 @@
 .prose-reader strong,
 .prose-reader b {
   font-weight: 600;
+}
+
+.prose-reader u {
+  text-decoration: underline;
+  text-underline-offset: 0.14em;
+}
+
+.prose-reader s,
+.prose-reader strike,
+.prose-reader del {
+  text-decoration: line-through;
+}
+
+.prose-reader sup,
+.prose-reader sub {
+  font-size: 0.72em;
+  line-height: 0;
+}
+
+.prose-reader sup {
+  vertical-align: super;
+}
+
+.prose-reader sub {
+  vertical-align: sub;
+}
+
+.prose-reader h1,
+.prose-reader h2,
+.prose-reader h3,
+.prose-reader h4,
+.prose-reader h5,
+.prose-reader h6 {
+  font-family: var(--font-sans);
+  font-weight: 650;
+  line-height: 1.12;
+}
+
+.prose-reader h1 {
+  font-size: 1.8em;
+}
+
+.prose-reader h2 {
+  font-size: 1.45em;
+}
+
+.prose-reader h3 {
+  font-size: 1.18em;
+}
+
+.prose-reader h4,
+.prose-reader h5,
+.prose-reader h6 {
+  font-size: 1em;
+}
+
+.prose-reader blockquote {
+  border-left: 2px solid rgb(var(--border));
+  padding-left: 1.1em;
+  color: rgb(var(--ink-muted));
+}
+
+.prose-reader ul,
+.prose-reader ol {
+  padding-left: 1.4em;
+}
+
+.prose-reader ul {
+  list-style: disc;
+}
+
+.prose-reader ol {
+  list-style: decimal;
+}
+
+.prose-reader li + li {
+  margin-top: 0.35em;
+}
+
+.prose-reader pre {
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  background: rgb(var(--surface));
+  padding: 0.9em 1em;
+  white-space: pre-wrap;
+}
+
+.prose-reader code,
+.prose-reader pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+}
+
+.prose-reader img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.prose-reader table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.prose-reader th,
+.prose-reader td {
+  border: 1px solid rgb(var(--border));
+  padding: 0.4em 0.55em;
+  vertical-align: top;
+}
+
+.prose-reader center,
+.prose-reader [align="center"],
+.prose-reader .align-center,
+.prose-reader .rtecenter,
+.prose-reader .text-center {
+  text-align: center;
+}
+
+.prose-reader [align="right"],
+.prose-reader .align-right,
+.prose-reader .rteright,
+.prose-reader .text-right {
+  text-align: right;
+}
+
+.prose-reader [align="left"],
+.prose-reader .align-left,
+.prose-reader .rteleft,
+.prose-reader .text-left {
+  text-align: left;
+}
+
+.prose-reader [align="justify"],
+.prose-reader .align-justify,
+.prose-reader .rtejustify,
+.prose-reader .text-justify {
+  text-align: justify;
 }
 
 .zh-shadow {
