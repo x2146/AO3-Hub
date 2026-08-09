@@ -63,7 +63,7 @@ export function TranslationStatusPanel({
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["translation-status", storyID],
-    queryFn: () => api.getTranslationStatus(storyID),
+    queryFn: ({ signal }) => api.getTranslationStatus(storyID, signal),
     enabled: open,
     refetchInterval: autoRefresh && open ? 2500 : false,
   });

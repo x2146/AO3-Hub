@@ -24,7 +24,7 @@ export function ImportPage() {
 
   const { data: cfg } = useQuery({
     queryKey: ["config", "public"],
-    queryFn: () => api.getPublicConfig(),
+    queryFn: ({ signal }) => api.getPublicConfig(signal),
   });
   const defaultMode: TranslationMode = (cfg?.llm?.mode ?? "normal") as TranslationMode;
   const effectiveMode: TranslationMode =

@@ -19,11 +19,11 @@ export function Library() {
   const { user } = useAuth();
   const { data: config } = useQuery({
     queryKey: ["config", "public"],
-    queryFn: () => api.getPublicConfig(),
+    queryFn: ({ signal }) => api.getPublicConfig(signal),
   });
   const { data, isLoading, error } = useQuery({
     queryKey: ["stories"],
-    queryFn: () => api.listStories(),
+    queryFn: ({ signal }) => api.listStories(signal),
     refetchInterval: (q) => {
       const stories = (q.state.data as StoriesListResponse | undefined)
         ?.stories;

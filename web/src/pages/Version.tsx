@@ -12,7 +12,7 @@ export function Version() {
   const { user } = useAuth();
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["version"],
-    queryFn: () => api.version(),
+    queryFn: ({ signal }) => api.version(signal),
   });
   const apply = useMutation({
     mutationFn: (body: ApplyUpdateRequest) => api.applyUpdate(body),

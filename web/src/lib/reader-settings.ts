@@ -1,3 +1,5 @@
+import { CONFIG_LIMITS } from "@ao3hub/shared";
+
 const KEY_PREFIX = "aohub.reader.";
 
 export type ReaderSettings = {
@@ -16,21 +18,42 @@ export function loadReaderSettings(
   defaults = DEFAULT_READER_SETTINGS,
 ): ReaderSettings {
   return {
-    font: readNumber(KEY_PREFIX + "font", defaults.font),
-    zh: readNumber(KEY_PREFIX + "zh", defaults.zh),
-    measure: readNumber(KEY_PREFIX + "measure", defaults.measure),
+    font: readNumber(KEY_PREFIX + "font", defaults.font, READER_LIMITS.font),
+    zh: readNumber(KEY_PREFIX + "zh", defaults.zh, READER_LIMITS.zh),
+    measure: readNumber(
+      KEY_PREFIX + "measure",
+      defaults.measure,
+      READER_LIMITS.measure,
+    ),
   };
 }
 
-function readNumber(key: string, fallback: number): number {
-  const raw = localStorage.getItem(key);
-  return raw == null ? fallback : Number(raw);
+function readNumber(
+  key: string,
+  fallback: number,
+  limits: { readonly min: number; readonly max: number },
+): number {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(key);
+  } catch {
+    return Math.min(limits.max, Math.max(limits.min, fallback));
+  }
+  const value = raw == null || raw.trim() === "" ? fallback : Number(raw);
+  if (!Number.isFinite(value)) {
+    return Math.min(limits.max, Math.max(limits.min, fallback));
+  }
+  return Math.min(limits.max, Math.max(limits.min, value));
 }
 
 export function saveReaderSettings(s: ReaderSettings): void {
-  localStorage.setItem(KEY_PREFIX + "font", String(s.font));
-  localStorage.setItem(KEY_PREFIX + "zh", String(s.zh));
-  localStorage.setItem(KEY_PREFIX + "measure", String(s.measure));
+  try {
+    localStorage.setItem(KEY_PREFIX + "font", String(s.font));
+    localStorage.setItem(KEY_PREFIX + "zh", String(s.zh));
+    localStorage.setItem(KEY_PREFIX + "measure", String(s.measure));
+  } catch {
+    // Storage may be unavailable in restricted browsing contexts.
+  }
 }
 
 export function applyReaderSettings(s: ReaderSettings): void {
@@ -45,4 +68,3 @@ export const READER_LIMITS = {
   zh: CONFIG_LIMITS.reader.defaultZhScale,
   measure: CONFIG_LIMITS.reader.defaultMeasure,
 };
-import { CONFIG_LIMITS } from "@ao3hub/shared";

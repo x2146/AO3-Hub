@@ -94,7 +94,7 @@ export function Settings() {
   const configKey = ["config", "admin", user?.id] as const;
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: configKey,
-    queryFn: () => api.getConfig(),
+    queryFn: ({ signal }) => api.getConfig(signal),
     enabled: isAdmin,
   });
 

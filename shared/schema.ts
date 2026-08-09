@@ -17,7 +17,7 @@ export const CONFIG_LIMITS = {
   reader: {
     defaultFont: { min: 14, max: 24, step: 1 },
     defaultZhScale: { min: 0.84, max: 1.1, step: 0.02 },
-    defaultMeasure: { min: 600, max: 980, step: 40 },
+    defaultMeasure: { min: 600, max: 980, step: 20 },
   },
   update: { restartDelayMs: { min: 0, max: 60000 } },
 } as const;

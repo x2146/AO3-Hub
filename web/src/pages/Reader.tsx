@@ -60,7 +60,7 @@ export function Reader() {
   const statusTriggerRef = useRef<HTMLButtonElement>(null);
   const { data: config, isFetched: configFetched } = useQuery({
     queryKey: ["config", "public"],
-    queryFn: () => api.getPublicConfig(),
+    queryFn: ({ signal }) => api.getPublicConfig(signal),
   });
 
   useEffect(() => {
@@ -96,7 +96,7 @@ export function Reader() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["chapter", id, chapterIndex],
-    queryFn: () => api.getChapter(id, chapterIndex),
+    queryFn: ({ signal }) => api.getChapter(id, chapterIndex, signal),
   });
 
   useEffect(() => {

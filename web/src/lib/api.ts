@@ -49,6 +49,10 @@ export function markAuthStateFresh(): void {
   authInvalidationPending = false;
 }
 
+export function isAuthStateEpochCurrent(epoch: unknown): boolean {
+  return typeof epoch === "number" && epoch === authStateEpoch;
+}
+
 function notifyAuthInvalid(path: string, requestEpoch: number): void {
   if (
     path === "/auth/login" ||
@@ -59,7 +63,9 @@ function notifyAuthInvalid(path: string, requestEpoch: number): void {
     return;
   }
   authInvalidationPending = true;
-  window.dispatchEvent(new Event(AUTH_INVALID_EVENT));
+  window.dispatchEvent(
+    new CustomEvent(AUTH_INVALID_EVENT, { detail: requestEpoch }),
+  );
 }
 
 async function responseBody(res: Response): Promise<unknown> {
@@ -123,18 +129,18 @@ export type StoriesListResponse = StoryList;
 export type StoryDetail = { meta: Meta; progress: Progress };
 
 export const api = {
-  listStories: () =>
-    http<StoriesListResponse>("/stories", undefined, Schema.StoryList),
-  getStory: (id: string) =>
+  listStories: (signal?: AbortSignal) =>
+    http<StoriesListResponse>("/stories", { signal }, Schema.StoryList),
+  getStory: (id: string, signal?: AbortSignal) =>
     http<StoryDetail>(
       `/stories/${pathSegment(id)}`,
-      undefined,
+      { signal },
       StoryDetailSchema,
     ),
-  getChapter: (id: string, n: number) =>
+  getChapter: (id: string, n: number, signal?: AbortSignal) =>
     http<ChapterView>(
       `/stories/${pathSegment(id)}/chapters/${pathSegment(n)}`,
-      undefined,
+      { signal },
       Schema.ChapterView,
     ),
   createFromUrl: (url: string, mode?: TranslationMode) =>
@@ -182,10 +188,10 @@ export const api = {
   remove: (id: string) =>
     http<{ ok: true }>(`/stories/${pathSegment(id)}`, { method: "DELETE" }),
 
-  getTranslationStatus: (id: string) =>
+  getTranslationStatus: (id: string, signal?: AbortSignal) =>
     http<TranslationStatusView>(
       `/stories/${pathSegment(id)}/translation-status`,
-      undefined,
+      { signal },
       Schema.TranslationStatusView,
     ),
   resetTranslationStats: (id: string) =>
@@ -197,8 +203,10 @@ export const api = {
       method: "POST",
     }),
 
-  getConfig: () => http("/config", undefined, ConfigResponseSchema),
-  getPublicConfig: () => http("/config/public", undefined, PublicConfigSchema),
+  getConfig: (signal?: AbortSignal) =>
+    http("/config", { signal }, ConfigResponseSchema),
+  getPublicConfig: (signal?: AbortSignal) =>
+    http("/config/public", { signal }, PublicConfigSchema),
   saveConfig: (body: any) =>
     http<{ ok: true }>("/config", {
       method: "PUT",
@@ -209,8 +217,8 @@ export const api = {
       method: "POST",
     }),
 
-  version: () =>
-    http<VersionInfo>("/update/version", undefined, Schema.VersionInfo),
+  version: (signal?: AbortSignal) =>
+    http<VersionInfo>("/update/version", { signal }, Schema.VersionInfo),
   checkUpdate: () => http<VersionInfo>("/update/check", { method: "POST" }),
   applyUpdate: (body: ApplyUpdateRequest = {}) =>
     http<{ ok: boolean; message: string; version?: string }>("/update/apply", {
@@ -231,7 +239,8 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
 
-  listUsers: () => http<{ users: PublicUser[] }>("/users"),
+  listUsers: (signal?: AbortSignal) =>
+    http<{ users: PublicUser[] }>("/users", { signal }),
   createUser: (body: CreateUserRequest) =>
     http<{ user: PublicUser }>("/users", {
       method: "POST",
@@ -267,6 +276,11 @@ export function subscribeStream(
           JSON.parse((raw as MessageEvent).data),
         );
         if (!parsed.success) throw parsed.error;
+        if (parsed.data.type !== t) {
+          throw new Error(
+            `SSE event type mismatch: listener ${t}, payload ${parsed.data.type}`,
+          );
+        }
         onEvent(parsed.data);
       } catch (error) {
         console.error(`Invalid SSE ${t} event for story ${id}`, error);

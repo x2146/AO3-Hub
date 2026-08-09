@@ -25,7 +25,7 @@ export function UsersPage() {
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["users"],
-    queryFn: () => api.listUsers(),
+    queryFn: ({ signal }) => api.listUsers(signal),
     enabled: !!me && me.role === "admin",
   });
 

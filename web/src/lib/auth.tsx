@@ -9,7 +9,12 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { PublicUser } from "@ao3hub/shared";
-import { api, AUTH_INVALID_EVENT, markAuthStateFresh } from "./api";
+import {
+  api,
+  AUTH_INVALID_EVENT,
+  isAuthStateEpochCurrent,
+  markAuthStateFresh,
+} from "./api";
 
 type AuthState = {
   user: PublicUser | null;
@@ -56,8 +61,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   useEffect(() => {
-    const onAuthInvalid = () => {
+    const onAuthInvalid = (event: Event) => {
+      const requestEpoch = (event as CustomEvent<unknown>).detail;
       void clearCachedData().finally(() => {
+        if (!isAuthStateEpochCurrent(requestEpoch)) return;
         setState((current) => ({ ...current, user: null, loading: false }));
       });
     };
