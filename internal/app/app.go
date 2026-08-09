@@ -63,7 +63,15 @@ func (a *App) Run() error {
 	}
 	addr := fmt.Sprintf("%s:%d", host, port)
 	fmt.Printf("[ao3-hub] %s listening on http://%s\n", versionLabel(Version), addr)
-	return http.ListenAndServe(addr, a.routes())
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           a.routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
+	}
+	return server.ListenAndServe()
 }
 
 func (a *App) routes() http.Handler {
@@ -86,10 +94,18 @@ func (a *App) routes() http.Handler {
 
 func (a *App) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("access-control-allow-origin", r.Header.Get("origin"))
-		w.Header().Set("access-control-allow-credentials", "true")
-		w.Header().Set("access-control-allow-headers", "content-type, authorization")
-		w.Header().Set("access-control-allow-methods", "GET,POST,PUT,DELETE,OPTIONS")
+		origin := strings.TrimSpace(r.Header.Get("origin"))
+		if origin != "" {
+			w.Header().Add("vary", "Origin")
+			if !allowedRequestOrigin(origin, r.Host) {
+				writeError(w, http.StatusForbidden, "cross-origin request denied")
+				return
+			}
+			w.Header().Set("access-control-allow-origin", origin)
+			w.Header().Set("access-control-allow-credentials", "true")
+			w.Header().Set("access-control-allow-headers", "content-type, authorization")
+			w.Header().Set("access-control-allow-methods", "GET,POST,PUT,DELETE,OPTIONS")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -98,20 +114,46 @@ func (a *App) cors(next http.Handler) http.Handler {
 	})
 }
 
+func allowedRequestOrigin(origin, requestHost string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	if strings.EqualFold(parsed.Host, requestHost) {
+		return true
+	}
+	return false
+}
+
 func (a *App) mountAuth(mux *http.ServeMux) {
 	mux.HandleFunc("GET /auth/me", func(w http.ResponseWriter, r *http.Request) {
+		count, err := a.store.UserCount()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "数据存储不可用")
+			return
+		}
 		var user *PublicUser
 		if cur := currentUser(r); cur != nil {
 			pub := publicUser(*cur)
 			user = &pub
 		}
-		writeJSON(w, http.StatusOK, AuthMe{User: user, NeedsSetup: a.store.UserCount() == 0})
+		writeJSON(w, http.StatusOK, AuthMe{User: user, NeedsSetup: count == 0})
 	})
 	mux.HandleFunc("GET /auth/setup-status", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]bool{"needsSetup": a.store.UserCount() == 0})
+		count, err := a.store.UserCount()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "数据存储不可用")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"needsSetup": count == 0})
 	})
 	mux.HandleFunc("POST /auth/setup", func(w http.ResponseWriter, r *http.Request) {
-		if a.store.UserCount() > 0 {
+		count, err := a.store.UserCount()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "数据存储不可用")
+			return
+		}
+		if count > 0 {
 			writeError(w, http.StatusConflict, "已完成初始化")
 			return
 		}
@@ -128,9 +170,13 @@ func (a *App) mountAuth(mux *http.ServeMux) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		record, err := a.store.CreateUser(body.Username, hash, RoleAdmin)
+		record, err := a.store.CreateInitialAdmin(body.Username, hash)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			if errors.Is(err, errSetupComplete) {
+				writeError(w, http.StatusConflict, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, "数据存储不可用")
+			}
 			return
 		}
 		if err := a.startSession(w, r, record.ID); err != nil {
@@ -148,7 +194,11 @@ func (a *App) mountAuth(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "用户名或密码无效")
 			return
 		}
-		record := a.store.FindUserByUsername(body.Username)
+		record, err := a.store.FindUserByUsername(body.Username)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "数据存储不可用")
+			return
+		}
 		if record == nil || !verifyPassword(body.Password, record.PasswordHash) {
 			writeError(w, http.StatusUnauthorized, "用户名或密码错误")
 			return
@@ -160,16 +210,24 @@ func (a *App) mountAuth(mux *http.ServeMux) {
 		writeJSON(w, http.StatusOK, map[string]PublicUser{"user": publicUser(*record)})
 	})
 	mux.HandleFunc("POST /auth/logout", func(w http.ResponseWriter, r *http.Request) {
-		a.endSession(w, r)
+		if err := a.endSession(w, r); err != nil {
+			writeError(w, http.StatusInternalServerError, "数据存储不可用")
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 }
 
 func (a *App) mountUsers(mux *http.ServeMux) {
 	mux.HandleFunc("GET /users", requireAdmin(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
-		writeJSON(w, http.StatusOK, map[string][]PublicUser{"users": a.store.ListPublicUsers()})
+		users, err := a.store.ListPublicUsers()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "数据存储不可用")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string][]PublicUser{"users": users})
 	}))
-	mux.HandleFunc("POST /users", requireAdmin(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
+	mux.HandleFunc("POST /users", requireAdmin(func(w http.ResponseWriter, r *http.Request, me *UserRecord) {
 		var body struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
@@ -191,20 +249,15 @@ func (a *App) mountUsers(mux *http.ServeMux) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		record, err := a.store.CreateUser(body.Username, hash, body.Role)
+		record, err := a.store.CreateUserAsAdmin(me.ID, body.Username, hash, body.Role)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]PublicUser{"user": publicUser(*record)})
 	}))
-	mux.HandleFunc("PUT /users/{id}", requireAdmin(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
+	mux.HandleFunc("PUT /users/{id}", requireAdmin(func(w http.ResponseWriter, r *http.Request, me *UserRecord) {
 		id := r.PathValue("id")
-		target := a.store.FindUserByID(id)
-		if target == nil {
-			writeError(w, http.StatusNotFound, "用户不存在")
-			return
-		}
 		var body struct {
 			Password string `json:"password"`
 			Role     Role   `json:"role"`
@@ -222,10 +275,6 @@ func (a *App) mountUsers(mux *http.ServeMux) {
 				writeError(w, http.StatusBadRequest, "参数无效")
 				return
 			}
-			if body.Role != target.Role && target.Role == RoleAdmin && a.store.AdminCount() <= 1 {
-				writeError(w, http.StatusBadRequest, "至少保留一个 admin")
-				return
-			}
 		}
 		hash := ""
 		if body.Password != "" {
@@ -236,44 +285,37 @@ func (a *App) mountUsers(mux *http.ServeMux) {
 				return
 			}
 		}
-		next, err := a.store.UpdateUser(id, func(u *UserRecord) {
-			if hash != "" {
-				u.PasswordHash = hash
-			}
-			if body.Role != "" {
-				u.Role = body.Role
-			}
-		})
+		next, err := a.store.UpdateUserAsAdmin(me.ID, id, hash, body.Role)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if hash != "" {
-			a.store.RemoveSessionsByUser(id)
-		}
-		if next == nil {
-			writeJSON(w, http.StatusOK, map[string]any{"user": nil})
+			switch {
+			case errors.Is(err, errUserNotFound):
+				writeError(w, http.StatusNotFound, err.Error())
+			case errors.Is(err, errCannotModifySelf), errors.Is(err, errLastAdmin):
+				writeError(w, http.StatusBadRequest, err.Error())
+			case errors.Is(err, errAdminRequired):
+				writeError(w, http.StatusForbidden, err.Error())
+			default:
+				writeError(w, http.StatusInternalServerError, "用户更新失败")
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]PublicUser{"user": publicUser(*next)})
 	}))
 	mux.HandleFunc("DELETE /users/{id}", requireAdmin(func(w http.ResponseWriter, r *http.Request, me *UserRecord) {
 		id := r.PathValue("id")
-		if me.ID == id {
-			writeError(w, http.StatusBadRequest, "不能删除自己")
+		if err := a.store.DeleteUserAsAdmin(me.ID, id); err != nil {
+			switch {
+			case errors.Is(err, errUserNotFound):
+				writeError(w, http.StatusNotFound, err.Error())
+			case errors.Is(err, errCannotDeleteSelf), errors.Is(err, errLastAdmin):
+				writeError(w, http.StatusBadRequest, err.Error())
+			case errors.Is(err, errAdminRequired):
+				writeError(w, http.StatusForbidden, err.Error())
+			default:
+				writeError(w, http.StatusInternalServerError, "用户删除失败")
+			}
 			return
 		}
-		target := a.store.FindUserByID(id)
-		if target == nil {
-			writeError(w, http.StatusNotFound, "用户不存在")
-			return
-		}
-		if target.Role == RoleAdmin && a.store.AdminCount() <= 1 {
-			writeError(w, http.StatusBadRequest, "至少保留一个 admin")
-			return
-		}
-		a.store.RemoveUser(id)
-		a.store.RemoveSessionsByUser(id)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}))
 }
@@ -468,6 +510,7 @@ func readUploadHTML(r *http.Request) (string, TranslationMode, error) {
 		}
 		var html string
 		var mode TranslationMode
+		seenFile := false
 		for {
 			part, err := reader.NextPart()
 			if errors.Is(err, io.EOF) {
@@ -478,13 +521,18 @@ func readUploadHTML(r *http.Request) (string, TranslationMode, error) {
 			}
 			switch part.FormName() {
 			case "file", "html":
-				data, err := readMultipartPart(part)
+				if seenFile {
+					_ = part.Close()
+					return "", "", errors.New("multiple html files")
+				}
+				data, err := readMultipartPart(part, maxUploadHTMLBytes)
 				if err != nil {
 					return "", "", err
 				}
+				seenFile = true
 				html = string(data)
 			case "mode":
-				data, err := readMultipartPart(part)
+				data, err := readMultipartPart(part, 128)
 				if err != nil {
 					return "", "", err
 				}
@@ -498,16 +546,27 @@ func readUploadHTML(r *http.Request) (string, TranslationMode, error) {
 		}
 		return html, mode, nil
 	}
-	data, err := io.ReadAll(r.Body)
+	data, err := readLimited(r.Body, maxUploadHTMLBytes)
 	if err != nil {
 		return "", "", err
 	}
 	return string(data), TranslationMode(strings.TrimSpace(r.URL.Query().Get("mode"))), nil
 }
 
-func readMultipartPart(part *multipart.Part) ([]byte, error) {
+func readMultipartPart(part *multipart.Part, maxBytes int64) ([]byte, error) {
 	defer part.Close()
-	return io.ReadAll(part)
+	return readLimited(part, maxBytes)
+}
+
+func readLimited(reader io.Reader, maxBytes int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, errors.New("request body too large")
+	}
+	return data, nil
 }
 
 func (a *App) handleChapter(w http.ResponseWriter, r *http.Request) {

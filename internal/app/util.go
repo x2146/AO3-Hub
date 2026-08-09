@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,11 +26,14 @@ const (
 	DefaultOpenAICompatibleModel   = "deepseek-chat"
 	DefaultClaudeMessagesBaseURL   = "https://api.anthropic.com/v1"
 	DefaultClaudeMessagesModel     = "claude-sonnet-4-5"
+	maxJSONBodyBytes               = 1 << 20
+	maxUploadHTMLBytes             = 64 << 20
 )
 
 var (
-	Version = "dev-local"
-	BuiltAt = ""
+	Version   = "dev-local"
+	BuiltAt   = ""
+	storyIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 )
 
 func init() {
@@ -81,7 +85,7 @@ func resolveHost(configHost string) string {
 		return raw
 	}
 	if strings.TrimSpace(configHost) == "" {
-		return "0.0.0.0"
+		return "127.0.0.1"
 	}
 	return configHost
 }
@@ -129,6 +133,13 @@ func randomStoryID() string {
 	return "u" + token + strconv.FormatInt(time.Now().UnixMilli(), 36)
 }
 
+func validateStoryID(id string) error {
+	if !storyIDRE.MatchString(id) {
+		return errors.New("invalid story id")
+	}
+	return nil
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("content-type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -141,9 +152,26 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func decodeJSON(r *http.Request, dst any) error {
 	defer r.Body.Close()
-	dec := json.NewDecoder(r.Body)
+	limited := &io.LimitedReader{R: r.Body, N: maxJSONBodyBytes + 1}
+	dec := json.NewDecoder(limited)
 	if err := dec.Decode(dst); err != nil {
+		if limited.N <= 0 {
+			return errors.New("request body too large")
+		}
 		return err
+	}
+	if dec.InputOffset() > maxJSONBodyBytes {
+		return errors.New("request body too large")
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("request body must contain one JSON value")
+		}
+		return err
+	}
+	if limited.N <= 0 {
+		return errors.New("request body too large")
 	}
 	return nil
 }
@@ -222,7 +250,7 @@ func normalizeProgress(p Progress) Progress {
 func defaultConfig() Config {
 	return Config{
 		Server: ServerConfig{
-			Host: "0.0.0.0",
+			Host: "127.0.0.1",
 			Port: 3000,
 		},
 		Auth: AuthConfig{

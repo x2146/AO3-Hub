@@ -84,16 +84,22 @@ func verifyPassword(plain, encoded string) bool {
 	return subtle.ConstantTimeCompare(actual, expected) == 1
 }
 
-func (a *App) sessionTTL() time.Duration {
+func (a *App) sessionTTL() (time.Duration, error) {
 	cfg, err := a.store.LoadConfig()
-	if err != nil || cfg.Auth.SessionTTLDays <= 0 {
-		return 30 * 24 * time.Hour
+	if err != nil {
+		return 0, err
 	}
-	return time.Duration(cfg.Auth.SessionTTLDays) * 24 * time.Hour
+	if cfg.Auth.SessionTTLDays <= 0 {
+		return 30 * 24 * time.Hour, nil
+	}
+	return time.Duration(cfg.Auth.SessionTTLDays) * 24 * time.Hour, nil
 }
 
 func (a *App) startSession(w http.ResponseWriter, r *http.Request, userID string) error {
-	ttl := a.sessionTTL()
+	ttl, err := a.sessionTTL()
+	if err != nil {
+		return err
+	}
 	session, err := a.store.CreateSession(userID, ttl)
 	if err != nil {
 		return err
@@ -102,9 +108,11 @@ func (a *App) startSession(w http.ResponseWriter, r *http.Request, userID string
 	return nil
 }
 
-func (a *App) endSession(w http.ResponseWriter, r *http.Request) {
+func (a *App) endSession(w http.ResponseWriter, r *http.Request) error {
 	if cookie, err := r.Cookie(cookieName); err == nil {
-		a.store.RemoveSession(cookie.Value)
+		if err := a.store.RemoveSession(cookie.Value); err != nil {
+			return err
+		}
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieName,
@@ -114,6 +122,7 @@ func (a *App) endSession(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
+	return nil
 }
 
 func (a *App) writeSessionCookie(w http.ResponseWriter, r *http.Request, token string, ttl time.Duration) {
@@ -136,26 +145,39 @@ func isSecureRequest(r *http.Request) bool {
 	return strings.TrimSpace(xf) == "https"
 }
 
-func (a *App) resolveUser(w http.ResponseWriter, r *http.Request) *UserRecord {
+func (a *App) resolveUser(w http.ResponseWriter, r *http.Request) (*UserRecord, error) {
 	cookie, err := r.Cookie(cookieName)
 	if err != nil || cookie.Value == "" {
-		return nil
+		return nil, nil
 	}
-	session := a.store.FindValidSession(cookie.Value)
+	session, err := a.store.FindValidSession(cookie.Value)
+	if err != nil {
+		return nil, err
+	}
 	if session == nil {
 		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1})
-		return nil
+		return nil, nil
 	}
-	user := a.store.FindUserByID(session.UserID)
+	user, err := a.store.FindUserByID(session.UserID)
+	if err != nil {
+		return nil, err
+	}
 	if user == nil {
-		a.store.RemoveSession(cookie.Value)
+		if err := a.store.RemoveSession(cookie.Value); err != nil {
+			return nil, err
+		}
 		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1})
-		return nil
+		return nil, nil
 	}
-	ttl := a.sessionTTL()
-	a.store.TouchSession(cookie.Value, ttl)
+	ttl, err := a.sessionTTL()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := a.store.TouchSession(cookie.Value, ttl); err != nil {
+		return nil, err
+	}
 	a.writeSessionCookie(w, r, cookie.Value, ttl)
-	return user
+	return user, nil
 }
 
 func withUser(r *http.Request, user *UserRecord) *http.Request {
@@ -169,7 +191,11 @@ func currentUser(r *http.Request) *UserRecord {
 
 func (a *App) attachUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := a.resolveUser(w, r)
+		user, err := a.resolveUser(w, r)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "数据存储不可用")
+			return
+		}
 		next.ServeHTTP(w, withUser(r, user))
 	})
 }

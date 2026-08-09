@@ -1,8 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,8 +18,20 @@ type Store struct {
 	mu  sync.Mutex
 }
 
+var (
+	errSetupComplete    = errors.New("已完成初始化")
+	errUserNotFound     = errors.New("用户不存在")
+	errAdminRequired    = errors.New("需要管理员权限")
+	errCannotModifySelf = errors.New("不能修改自己的角色")
+	errCannotDeleteSelf = errors.New("不能删除自己")
+	errLastAdmin        = errors.New("至少保留一个 admin")
+)
+
 func NewStore(dir string) (*Store, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, err
 	}
 	return &Store{dir: dir}, nil
@@ -28,8 +42,12 @@ func (s *Store) path(parts ...string) string {
 	return filepath.Join(all...)
 }
 
-func (s *Store) storyDir(id string) string {
-	return s.path("stories", id)
+func (s *Store) storyPath(id string, parts ...string) (string, error) {
+	if err := validateStoryID(id); err != nil {
+		return "", err
+	}
+	all := append([]string{"stories", id}, parts...)
+	return s.path(all...), nil
 }
 
 func (s *Store) readJSON(path string, dst any) (bool, error) {
@@ -40,14 +58,17 @@ func (s *Store) readJSON(path string, dst any) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if len(bytes.TrimSpace(data)) == 0 || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return false, fmt.Errorf("decode %s: empty or null JSON", filepath.Base(path))
+	}
 	if err := json.Unmarshal(data, dst); err != nil {
-		return false, nil
+		return false, fmt.Errorf("decode %s: %w", filepath.Base(path), err)
 	}
 	return true, nil
 }
 
 func (s *Store) writeJSON(path string, data any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	buf, err := json.MarshalIndent(data, "", "  ")
@@ -56,17 +77,24 @@ func (s *Store) writeJSON(path string, data any) error {
 	}
 	buf = append(buf, '\n')
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, buf, 0o644); err != nil {
+	if err := os.WriteFile(tmp, buf, 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)
 }
 
 func (s *Store) writeText(path string, data string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(data), 0o644)
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func (s *Store) readText(path string) (string, bool, error) {
@@ -136,7 +164,9 @@ func (s *Store) UpsertIndex(entry IndexEntry) error {
 	defer s.mu.Unlock()
 
 	var idx IndexFile
-	_, _ = s.readJSON(s.path("index.json"), &idx)
+	if _, err := s.readJSON(s.path("index.json"), &idx); err != nil {
+		return err
+	}
 	if idx.Stories == nil {
 		idx.Stories = []IndexEntry{}
 	}
@@ -155,7 +185,9 @@ func (s *Store) PatchIndex(id string, patch func(*IndexEntry)) (*IndexEntry, err
 	defer s.mu.Unlock()
 
 	var idx IndexFile
-	_, _ = s.readJSON(s.path("index.json"), &idx)
+	if _, err := s.readJSON(s.path("index.json"), &idx); err != nil {
+		return nil, err
+	}
 	for i := range idx.Stories {
 		if idx.Stories[i].ID != id {
 			continue
@@ -172,15 +204,23 @@ func (s *Store) PatchIndex(id string, patch func(*IndexEntry)) (*IndexEntry, err
 }
 
 func (s *Store) StoryExists(id string) bool {
-	info, err := os.Stat(s.storyDir(id))
+	path, err := s.storyPath(id)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
 }
 
 func (s *Store) LoadMeta(id string) (*Meta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	path, err := s.storyPath(id, "meta.json")
+	if err != nil {
+		return nil, err
+	}
 	var meta Meta
-	ok, err := s.readJSON(s.path("stories", id, "meta.json"), &meta)
+	ok, err := s.readJSON(path, &meta)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -191,23 +231,43 @@ func (s *Store) LoadMeta(id string) (*Meta, error) {
 func (s *Store) SaveMeta(id string, meta Meta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.writeJSON(s.path("stories", id, "meta.json"), normalizeMeta(meta))
+	path, err := s.storyPath(id, "meta.json")
+	if err != nil {
+		return err
+	}
+	return s.writeJSON(path, normalizeMeta(meta))
 }
 
 func (s *Store) LoadOriginal(id string) (*ChapterFile, error) {
-	return s.loadChapterFile(s.path("stories", id, "original.json"))
+	path, err := s.storyPath(id, "original.json")
+	if err != nil {
+		return nil, err
+	}
+	return s.loadChapterFile(path)
 }
 
 func (s *Store) SaveOriginal(id string, file ChapterFile) error {
-	return s.saveChapterFile(s.path("stories", id, "original.json"), file)
+	path, err := s.storyPath(id, "original.json")
+	if err != nil {
+		return err
+	}
+	return s.saveChapterFile(path, file)
 }
 
 func (s *Store) LoadTranslated(id string) (*ChapterFile, error) {
-	return s.loadChapterFile(s.path("stories", id, "translated.json"))
+	path, err := s.storyPath(id, "translated.json")
+	if err != nil {
+		return nil, err
+	}
+	return s.loadChapterFile(path)
 }
 
 func (s *Store) SaveTranslated(id string, file ChapterFile) error {
-	return s.saveChapterFile(s.path("stories", id, "translated.json"), file)
+	path, err := s.storyPath(id, "translated.json")
+	if err != nil {
+		return err
+	}
+	return s.saveChapterFile(path, file)
 }
 
 func (s *Store) loadChapterFile(path string) (*ChapterFile, error) {
@@ -241,8 +301,12 @@ func (s *Store) saveChapterFile(path string, file ChapterFile) error {
 func (s *Store) LoadProgress(id string) (*Progress, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	path, err := s.storyPath(id, "progress.json")
+	if err != nil {
+		return nil, err
+	}
 	var progress Progress
-	ok, err := s.readJSON(s.path("stories", id, "progress.json"), &progress)
+	ok, err := s.readJSON(path, &progress)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -253,26 +317,42 @@ func (s *Store) LoadProgress(id string) (*Progress, error) {
 func (s *Store) SaveProgress(id string, progress Progress) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.writeJSON(s.path("stories", id, "progress.json"), normalizeProgress(progress))
+	path, err := s.storyPath(id, "progress.json")
+	if err != nil {
+		return err
+	}
+	return s.writeJSON(path, normalizeProgress(progress))
 }
 
 func (s *Store) SaveSource(id string, html string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.writeText(s.path("stories", id, "source.html"), html)
+	path, err := s.storyPath(id, "source.html")
+	if err != nil {
+		return err
+	}
+	return s.writeText(path, html)
 }
 
 func (s *Store) LoadSource(id string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.readText(s.path("stories", id, "source.html"))
+	path, err := s.storyPath(id, "source.html")
+	if err != nil {
+		return "", false, err
+	}
+	return s.readText(path)
 }
 
 func (s *Store) LoadContext(id string) (*TranslationContext, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	path, err := s.storyPath(id, "context.json")
+	if err != nil {
+		return nil, err
+	}
 	var ctx TranslationContext
-	ok, err := s.readJSON(s.path("stories", id, "context.json"), &ctx)
+	ok, err := s.readJSON(path, &ctx)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -294,6 +374,10 @@ func (s *Store) LoadContext(id string) (*TranslationContext, error) {
 func (s *Store) SaveContext(id string, ctx TranslationContext) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	path, err := s.storyPath(id, "context.json")
+	if err != nil {
+		return err
+	}
 	if ctx.Ships == nil {
 		ctx.Ships = []string{}
 	}
@@ -306,14 +390,17 @@ func (s *Store) SaveContext(id string, ctx TranslationContext) error {
 	if ctx.ChapterSummaries == nil {
 		ctx.ChapterSummaries = []ChapterSummary{}
 	}
-	return s.writeJSON(s.path("stories", id, "context.json"), ctx)
+	return s.writeJSON(path, ctx)
 }
 
 func (s *Store) DeleteContext(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path := s.path("stories", id, "context.json")
-	err := os.Remove(path)
+	path, err := s.storyPath(id, "context.json")
+	if err != nil {
+		return err
+	}
+	err = os.Remove(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -323,16 +410,23 @@ func (s *Store) DeleteContext(id string) error {
 func (s *Store) RemoveStory(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return os.RemoveAll(s.storyDir(id))
+	path, err := s.storyPath(id)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
 }
 
-func (s *Store) loadUsersLocked() UsersFile {
+func (s *Store) loadUsersLocked() (UsersFile, error) {
 	var file UsersFile
-	_, _ = s.readJSON(s.path("users.json"), &file)
+	_, err := s.readJSON(s.path("users.json"), &file)
+	if err != nil {
+		return UsersFile{}, err
+	}
 	if file.Users == nil {
 		file.Users = []UserRecord{}
 	}
-	return file
+	return file, nil
 }
 
 func (s *Store) saveUsersLocked(file UsersFile) error {
@@ -342,16 +436,23 @@ func (s *Store) saveUsersLocked(file UsersFile) error {
 	return s.writeJSON(s.path("users.json"), file)
 }
 
-func (s *Store) UserCount() int {
+func (s *Store) UserCount() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.loadUsersLocked().Users)
+	file, err := s.loadUsersLocked()
+	if err != nil {
+		return 0, err
+	}
+	return len(file.Users), nil
 }
 
-func (s *Store) ListPublicUsers() []PublicUser {
+func (s *Store) ListPublicUsers() ([]PublicUser, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file := s.loadUsersLocked()
+	file, err := s.loadUsersLocked()
+	if err != nil {
+		return nil, err
+	}
 	out := make([]PublicUser, 0, len(file.Users))
 	for _, u := range file.Users {
 		out = append(out, publicUser(u))
@@ -359,40 +460,80 @@ func (s *Store) ListPublicUsers() []PublicUser {
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].CreatedAt < out[j].CreatedAt
 	})
-	return out
+	return out, nil
 }
 
-func (s *Store) FindUserByID(id string) *UserRecord {
+func (s *Store) FindUserByID(id string) (*UserRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file := s.loadUsersLocked()
+	file, err := s.loadUsersLocked()
+	if err != nil {
+		return nil, err
+	}
 	for _, u := range file.Users {
 		if u.ID == id {
 			out := u
-			return &out
+			return &out, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
-func (s *Store) FindUserByUsername(username string) *UserRecord {
+func (s *Store) FindUserByUsername(username string) (*UserRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file := s.loadUsersLocked()
+	file, err := s.loadUsersLocked()
+	if err != nil {
+		return nil, err
+	}
 	lower := strings.ToLower(username)
 	for _, u := range file.Users {
 		if strings.ToLower(u.Username) == lower {
 			out := u
-			return &out
+			return &out, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 func (s *Store) CreateUser(username, passwordHash string, role Role) (*UserRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file := s.loadUsersLocked()
+	file, err := s.loadUsersLocked()
+	if err != nil {
+		return nil, err
+	}
+	return s.createUserLocked(file, username, passwordHash, role)
+}
+
+func (s *Store) CreateUserAsAdmin(actorID, username, passwordHash string, role Role) (*UserRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, err := s.loadUsersLocked()
+	if err != nil {
+		return nil, err
+	}
+	actorIndex := userIndex(file, actorID)
+	if actorIndex < 0 || file.Users[actorIndex].Role != RoleAdmin {
+		return nil, errAdminRequired
+	}
+	return s.createUserLocked(file, username, passwordHash, role)
+}
+
+func (s *Store) CreateInitialAdmin(username, passwordHash string) (*UserRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, err := s.loadUsersLocked()
+	if err != nil {
+		return nil, err
+	}
+	if len(file.Users) != 0 {
+		return nil, errSetupComplete
+	}
+	return s.createUserLocked(file, username, passwordHash, RoleAdmin)
+}
+
+func (s *Store) createUserLocked(file UsersFile, username, passwordHash string, role Role) (*UserRecord, error) {
 	lower := strings.ToLower(username)
 	for _, u := range file.Users {
 		if strings.ToLower(u.Username) == lower {
@@ -419,66 +560,124 @@ func (s *Store) CreateUser(username, passwordHash string, role Role) (*UserRecor
 	return &record, nil
 }
 
-func (s *Store) UpdateUser(id string, patch func(*UserRecord)) (*UserRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	file := s.loadUsersLocked()
+func userIndex(file UsersFile, id string) int {
 	for i := range file.Users {
-		if file.Users[i].ID != id {
-			continue
+		if file.Users[i].ID == id {
+			return i
 		}
-		patch(&file.Users[i])
-		file.Users[i].UpdatedAt = nowISO()
-		if err := s.saveUsersLocked(file); err != nil {
-			return nil, err
-		}
-		out := file.Users[i]
-		return &out, nil
 	}
-	return nil, nil
+	return -1
 }
 
-func (s *Store) RemoveUser(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	file := s.loadUsersLocked()
-	next := file.Users[:0]
-	removed := false
-	for _, u := range file.Users {
-		if u.ID == id {
-			removed = true
-			continue
-		}
-		next = append(next, u)
-	}
-	if !removed {
-		return false
-	}
-	file.Users = next
-	_ = s.saveUsersLocked(file)
-	return true
-}
-
-func (s *Store) AdminCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	file := s.loadUsersLocked()
+func adminCount(file UsersFile) int {
 	count := 0
-	for _, u := range file.Users {
-		if u.Role == RoleAdmin {
+	for _, user := range file.Users {
+		if user.Role == RoleAdmin {
 			count++
 		}
 	}
 	return count
 }
 
-func (s *Store) loadSessionsLocked() SessionsFile {
+func removeUserSessions(file SessionsFile, userID string) SessionsFile {
+	next := file.Sessions[:0]
+	for _, session := range file.Sessions {
+		if session.UserID != userID {
+			next = append(next, session)
+		}
+	}
+	file.Sessions = next
+	return file
+}
+
+func (s *Store) UpdateUserAsAdmin(actorID, targetID, passwordHash string, role Role) (*UserRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, err := s.loadUsersLocked()
+	if err != nil {
+		return nil, err
+	}
+	actorIndex := userIndex(file, actorID)
+	if actorIndex < 0 || file.Users[actorIndex].Role != RoleAdmin {
+		return nil, errAdminRequired
+	}
+	targetIndex := userIndex(file, targetID)
+	if targetIndex < 0 {
+		return nil, errUserNotFound
+	}
+	target := &file.Users[targetIndex]
+	if role != "" && role != target.Role {
+		if actorID == targetID {
+			return nil, errCannotModifySelf
+		}
+		if target.Role == RoleAdmin && adminCount(file) <= 1 {
+			return nil, errLastAdmin
+		}
+		target.Role = role
+	}
+	var sessions SessionsFile
+	if passwordHash != "" {
+		sessions, err = s.loadSessionsLocked()
+		if err != nil {
+			return nil, err
+		}
+		target.PasswordHash = passwordHash
+	}
+	target.UpdatedAt = nowISO()
+	if passwordHash != "" {
+		if err := s.saveSessionsLocked(removeUserSessions(sessions, targetID)); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.saveUsersLocked(file); err != nil {
+		return nil, err
+	}
+	out := *target
+	return &out, nil
+}
+
+func (s *Store) DeleteUserAsAdmin(actorID, targetID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, err := s.loadUsersLocked()
+	if err != nil {
+		return err
+	}
+	actorIndex := userIndex(file, actorID)
+	if actorIndex < 0 || file.Users[actorIndex].Role != RoleAdmin {
+		return errAdminRequired
+	}
+	if actorID == targetID {
+		return errCannotDeleteSelf
+	}
+	targetIndex := userIndex(file, targetID)
+	if targetIndex < 0 {
+		return errUserNotFound
+	}
+	if file.Users[targetIndex].Role == RoleAdmin && adminCount(file) <= 1 {
+		return errLastAdmin
+	}
+	sessions, err := s.loadSessionsLocked()
+	if err != nil {
+		return err
+	}
+	file.Users = append(file.Users[:targetIndex], file.Users[targetIndex+1:]...)
+	if err := s.saveUsersLocked(file); err != nil {
+		return err
+	}
+	return s.saveSessionsLocked(removeUserSessions(sessions, targetID))
+}
+
+func (s *Store) loadSessionsLocked() (SessionsFile, error) {
 	var file SessionsFile
-	_, _ = s.readJSON(s.path("sessions.json"), &file)
+	_, err := s.readJSON(s.path("sessions.json"), &file)
+	if err != nil {
+		return SessionsFile{}, err
+	}
 	if file.Sessions == nil {
 		file.Sessions = []SessionRecord{}
 	}
-	return file
+	return file, nil
 }
 
 func (s *Store) saveSessionsLocked(file SessionsFile) error {
@@ -499,7 +698,10 @@ func sessionExpired(session SessionRecord, now time.Time) bool {
 func (s *Store) CreateSession(userID string, ttl time.Duration) (*SessionRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file := s.loadSessionsLocked()
+	file, err := s.loadSessionsLocked()
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	active := file.Sessions[:0]
 	for _, session := range file.Sessions {
@@ -526,27 +728,33 @@ func (s *Store) CreateSession(userID string, ttl time.Duration) (*SessionRecord,
 	return &record, nil
 }
 
-func (s *Store) FindValidSession(token string) *SessionRecord {
+func (s *Store) FindValidSession(token string) (*SessionRecord, error) {
 	if token == "" {
-		return nil
+		return nil, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file := s.loadSessionsLocked()
+	file, err := s.loadSessionsLocked()
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	for _, session := range file.Sessions {
 		if session.Token == token && !sessionExpired(session, now) {
 			out := session
-			return &out
+			return &out, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
-func (s *Store) TouchSession(token string, ttl time.Duration) *SessionRecord {
+func (s *Store) TouchSession(token string, ttl time.Duration) (*SessionRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file := s.loadSessionsLocked()
+	file, err := s.loadSessionsLocked()
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	active := file.Sessions[:0]
 	var touched *SessionRecord
@@ -563,14 +771,19 @@ func (s *Store) TouchSession(token string, ttl time.Duration) *SessionRecord {
 		active = append(active, session)
 	}
 	file.Sessions = active
-	_ = s.saveSessionsLocked(file)
-	return touched
+	if err := s.saveSessionsLocked(file); err != nil {
+		return nil, err
+	}
+	return touched, nil
 }
 
-func (s *Store) RemoveSession(token string) {
+func (s *Store) RemoveSession(token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file := s.loadSessionsLocked()
+	file, err := s.loadSessionsLocked()
+	if err != nil {
+		return err
+	}
 	next := file.Sessions[:0]
 	for _, session := range file.Sessions {
 		if session.Token != token {
@@ -578,13 +791,16 @@ func (s *Store) RemoveSession(token string) {
 		}
 	}
 	file.Sessions = next
-	_ = s.saveSessionsLocked(file)
+	return s.saveSessionsLocked(file)
 }
 
-func (s *Store) RemoveSessionsByUser(userID string) {
+func (s *Store) RemoveSessionsByUser(userID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file := s.loadSessionsLocked()
+	file, err := s.loadSessionsLocked()
+	if err != nil {
+		return err
+	}
 	next := file.Sessions[:0]
 	for _, session := range file.Sessions {
 		if session.UserID != userID {
@@ -592,5 +808,5 @@ func (s *Store) RemoveSessionsByUser(userID string) {
 		}
 	}
 	file.Sessions = next
-	_ = s.saveSessionsLocked(file)
+	return s.saveSessionsLocked(file)
 }

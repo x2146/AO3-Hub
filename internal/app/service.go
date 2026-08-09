@@ -37,6 +37,9 @@ func (a *App) persistParsed(html string, source struct {
 	if id == "" {
 		id = randomStoryID()
 	}
+	if err := validateStoryID(id); err != nil {
+		return Meta{}, ChapterFile{}, false, err
+	}
 	url := source.URL
 	if url == "" {
 		url = parsed.Meta.WorkURLGuess
@@ -211,6 +214,9 @@ func (a *App) CreateFromHTML(html string, mode TranslationMode) (map[string]stri
 }
 
 func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode TranslationMode) error {
+	if err := validateStoryID(id); err != nil {
+		return err
+	}
 	translated, err := a.store.LoadTranslated(id)
 	if err != nil || translated == nil {
 		return errors.New("story not found")
@@ -274,6 +280,9 @@ func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode T
 }
 
 func (a *App) DeleteStory(id string) error {
+	if err := validateStoryID(id); err != nil {
+		return err
+	}
 	idx, err := a.store.LoadIndex()
 	if err != nil {
 		return err

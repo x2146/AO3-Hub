@@ -52,7 +52,7 @@ npm run dev:web               # 起 vite，:5173，/api 代理到配置的 serve
 ```
 
 数据默认存 `./data/`，可用 `AO3HUB_DATA_DIR=/some/path` 覆盖。
-监听地址默认从 `data/config.json` 的 `server.host` / `server.port` 读取；
+监听地址默认从 `data/config.json` 的 `server.host` / `server.port` 读取，新安装默认仅监听 `127.0.0.1`；
 启动时也可用 `HOST` / `PORT` 临时覆盖。
 
 ## Build（单文件）
@@ -205,7 +205,7 @@ Release workflow 会自动用 Go 生成并上传 `manifest.json`。也可以手�
 ```jsonc
 {
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 3000
   },
   "auth": {

@@ -20,8 +20,12 @@ func (s *Store) LoadStats(id string) (*StatsFile, error) {
 }
 
 func (s *Store) loadStatsLocked(id string) (*StatsFile, error) {
+	path, err := s.storyPath(id, "stats.json")
+	if err != nil {
+		return nil, err
+	}
 	var file StatsFile
-	ok, err := s.readJSON(s.path("stories", id, "stats.json"), &file)
+	ok, err := s.readJSON(path, &file)
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +49,10 @@ func (s *Store) loadStatsLocked(id string) (*StatsFile, error) {
 }
 
 func (s *Store) saveStatsLocked(id string, file StatsFile) error {
+	path, err := s.storyPath(id, "stats.json")
+	if err != nil {
+		return err
+	}
 	if file.Stats.ByStage == nil {
 		file.Stats.ByStage = map[LLMCallStage]StageStats{}
 	}
@@ -54,7 +62,7 @@ func (s *Store) saveStatsLocked(id string, file StatsFile) error {
 	if file.Samples == nil {
 		file.Samples = map[LLMCallStage]RequestSample{}
 	}
-	return s.writeJSON(s.path("stories", id, "stats.json"), file)
+	return s.writeJSON(path, file)
 }
 
 func (s *Store) AppendStatsEvent(id string, event LLMCallEvent) error {
@@ -89,8 +97,11 @@ func (s *Store) SaveStatsSample(id string, sample RequestSample) error {
 func (s *Store) ResetStats(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path := s.path("stories", id, "stats.json")
-	err := os.Remove(path)
+	path, err := s.storyPath(id, "stats.json")
+	if err != nil {
+		return err
+	}
+	err = os.Remove(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
