@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,6 +25,7 @@ const (
 	maxSSEEventBytes               = 1 << 20
 	maxSSEStreamBytes        int64 = 32 << 20
 	maxLLMStreamContentBytes       = 16 << 20
+	maxProviderRetryAfter          = 5 * time.Minute
 )
 
 var llmHTTPClient = &http.Client{
@@ -51,8 +53,9 @@ type ChatResult struct {
 }
 
 type LLMError struct {
-	Status int
-	Body   string
+	Status     int
+	Body       string
+	RetryAfter time.Duration
 }
 
 func (e LLMError) Error() string {
@@ -138,10 +141,10 @@ func chatOpenAICompatible(ctx context.Context, config LLMConfig, messages []Chat
 		Usage map[string]any `json:"usage"`
 	}
 	if err := json.Unmarshal(textBytes, &raw); err != nil {
-		return ChatResult{}, LLMError{Status: 500, Body: "non-json response: " + truncate(text, 200)}
+		return ChatResult{}, fmt.Errorf("non-json LLM response: %s", truncate(text, 200))
 	}
 	if len(raw.Choices) == 0 || raw.Choices[0].Message.Content == "" {
-		return ChatResult{}, LLMError{Status: 500, Body: "missing message.content: " + truncate(text, 200)}
+		return ChatResult{}, fmt.Errorf("LLM response missing message.content: %s", truncate(text, 200))
 	}
 	return ChatResult{Content: raw.Choices[0].Message.Content, Usage: raw.Usage}, nil
 }
@@ -196,7 +199,7 @@ func chatClaudeMessages(ctx context.Context, config LLMConfig, messages []ChatMe
 		Usage map[string]any `json:"usage"`
 	}
 	if err := json.Unmarshal(textBytes, &raw); err != nil {
-		return ChatResult{}, LLMError{Status: 500, Body: "non-json response: " + truncate(text, 200)}
+		return ChatResult{}, fmt.Errorf("non-json LLM response: %s", truncate(text, 200))
 	}
 	parts := []string{}
 	for _, block := range raw.Content {
@@ -206,7 +209,7 @@ func chatClaudeMessages(ctx context.Context, config LLMConfig, messages []ChatMe
 	}
 	content := strings.TrimSpace(strings.Join(parts, ""))
 	if content == "" {
-		return ChatResult{}, LLMError{Status: 500, Body: "missing content text: " + truncate(text, 200)}
+		return ChatResult{}, fmt.Errorf("LLM response missing content text: %s", truncate(text, 200))
 	}
 	return ChatResult{Content: content, Usage: raw.Usage}, nil
 }
@@ -272,16 +275,54 @@ func readLLMResponse(res *http.Response) ([]byte, error) {
 		limit = maxLLMErrorBytes
 	}
 	body, err := readBoundedResponse(res, limit, "LLM provider response")
+	retryAfter := parseRetryAfter(res.Header.Get("retry-after"), time.Now())
 	if err != nil {
 		if res.StatusCode < 200 || res.StatusCode >= 300 {
-			return nil, LLMError{Status: res.StatusCode, Body: err.Error()}
+			return nil, LLMError{Status: res.StatusCode, Body: err.Error(), RetryAfter: retryAfter}
 		}
 		return nil, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, LLMError{Status: res.StatusCode, Body: string(body)}
+		return nil, LLMError{Status: res.StatusCode, Body: string(body), RetryAfter: retryAfter}
 	}
 	return body, nil
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	digitsOnly := true
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			digitsOnly = false
+			break
+		}
+	}
+	if digitsOnly {
+		seconds, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0
+		}
+		maxSeconds := int64(maxProviderRetryAfter / time.Second)
+		if seconds > maxSeconds {
+			seconds = maxSeconds
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0
+	}
+	delay := when.Sub(now)
+	if delay <= 0 {
+		return 0
+	}
+	if delay > maxProviderRetryAfter {
+		return maxProviderRetryAfter
+	}
+	return delay
 }
 
 func validateSSEContentType(res *http.Response) error {
@@ -349,7 +390,7 @@ func chatOpenAICompatibleStream(ctx context.Context, config LLMConfig, messages 
 			return io.EOF
 		}
 		if event == "error" {
-			return LLMError{Status: 500, Body: "stream error: " + truncate(data, 200)}
+			return fmt.Errorf("LLM stream error: %s", truncate(data, 200))
 		}
 		var chunk struct {
 			Choices []struct {
@@ -361,10 +402,10 @@ func chatOpenAICompatibleStream(ctx context.Context, config LLMConfig, messages 
 			Error json.RawMessage `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return LLMError{Status: 500, Body: "non-json stream event: " + truncate(data, 200)}
+			return fmt.Errorf("non-json LLM stream event: %s", truncate(data, 200))
 		}
 		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
-			return LLMError{Status: 500, Body: "stream error: " + truncate(string(chunk.Error), 200)}
+			return fmt.Errorf("LLM stream error: %s", truncate(string(chunk.Error), 200))
 		}
 		for _, c := range chunk.Choices {
 			if err := appendBounded(&content, c.Delta.Content, maxLLMStreamContentBytes); err != nil {
@@ -380,11 +421,11 @@ func chatOpenAICompatibleStream(ctx context.Context, config LLMConfig, messages 
 		return ChatResult{}, err
 	}
 	if !done {
-		return ChatResult{}, LLMError{Status: 500, Body: "stream ended before [DONE]"}
+		return ChatResult{}, errors.New("LLM stream ended before [DONE]")
 	}
 	out := content.String()
 	if strings.TrimSpace(out) == "" {
-		return ChatResult{}, LLMError{Status: 500, Body: "empty stream response"}
+		return ChatResult{}, errors.New("empty LLM stream response")
 	}
 	return ChatResult{Content: out, Usage: usage}, nil
 }
@@ -441,7 +482,7 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 	done := false
 	err = scanSSE(ctx, res.Body, defaultSSELimits(), func(event, data string) error {
 		if event == "error" {
-			return LLMError{Status: 500, Body: "stream error: " + truncate(data, 200)}
+			return fmt.Errorf("LLM stream error: %s", truncate(data, 200))
 		}
 		var head struct {
 			Type    string `json:"type"`
@@ -456,7 +497,7 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 			Error json.RawMessage `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &head); err != nil {
-			return LLMError{Status: 500, Body: "non-json stream event: " + truncate(data, 200)}
+			return fmt.Errorf("non-json LLM stream event: %s", truncate(data, 200))
 		}
 		switch head.Type {
 		case "message_start":
@@ -478,7 +519,7 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 			if len(head.Error) > 0 && string(head.Error) != "null" {
 				body = string(head.Error)
 			}
-			return LLMError{Status: 500, Body: "stream error: " + truncate(body, 200)}
+			return fmt.Errorf("LLM stream error: %s", truncate(body, 200))
 		case "message_stop":
 			done = true
 			return io.EOF
@@ -489,11 +530,11 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 		return ChatResult{}, err
 	}
 	if !done {
-		return ChatResult{}, LLMError{Status: 500, Body: "stream ended before message_stop"}
+		return ChatResult{}, errors.New("LLM stream ended before message_stop")
 	}
 	out := strings.TrimSpace(content.String())
 	if out == "" {
-		return ChatResult{}, LLMError{Status: 500, Body: "empty stream response"}
+		return ChatResult{}, errors.New("empty LLM stream response")
 	}
 	var usageOut map[string]any
 	if len(usage) > 0 {

@@ -276,7 +276,7 @@ func analyzeByChapters(ctx context.Context, cfg Config, meta Meta, original Chap
 					errs[idx] = err
 					continue
 				}
-				partial, callErr := withRetry(func(attempt int) (chapterPartial, error) {
+				partial, callErr := withRetry(ctx, func(attempt int) (chapterPartial, error) {
 					result, err := tracker.trackedChat(ctx, cfg.LLM, []ChatMessage{
 						{Role: "system", Content: analysisSystemPromptChapter},
 						{Role: "user", Content: payload},

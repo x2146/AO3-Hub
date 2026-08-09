@@ -6,7 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
+	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +15,11 @@ import (
 	xhtml "golang.org/x/net/html"
 )
 
-const maxProgressErrors = 100
+const (
+	maxProgressErrors = 100
+	retryBaseDelay    = 600 * time.Millisecond
+	retryMaxDelay     = 5 * time.Minute
+)
 
 const systemPrompt = `你是文学翻译。把英文文学作品翻译为中文，要求：
 1) 输入不含 HTML 或格式标签；程序会保留 AO3 原始富文本结构，你只负责翻译纯文本
@@ -172,6 +177,9 @@ func outputRunsForInput(input translateInput, output translateOutput) ([]transla
 			} else {
 				return nil, fmt.Errorf("段 id=%s 缺少 run id=%s 的译文", input.ID, inputRun.ID)
 			}
+		}
+		if strings.TrimSpace(run.Text) == "" {
+			return nil, fmt.Errorf("段 id=%s 的 run id=%s 译文为空", input.ID, inputRun.ID)
 		}
 		ordered = append(ordered, translateRun{ID: inputRun.ID, Text: run.Text})
 	}
@@ -363,24 +371,75 @@ func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []transla
 	return ordered, nil
 }
 
-func withRetry[T any](fn func(attempt int) (T, error), retries int) (T, error) {
+func withRetry[T any](ctx context.Context, fn func(attempt int) (T, error), retries int) (T, error) {
+	return withRetrySleep(ctx, fn, retries, sleepWithContext)
+}
+
+func withRetrySleep[T any](ctx context.Context, fn func(attempt int) (T, error), retries int, sleep func(context.Context, time.Duration) error) (T, error) {
 	var zero T
-	var last error
+	if retries < 0 {
+		retries = 0
+	}
 	for i := 0; i <= retries; i++ {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
 		out, err := fn(i)
 		if err == nil {
 			return out, nil
 		}
-		last = err
-		var llmErr LLMError
-		if errors.As(err, &llmErr) && (llmErr.Status == 400 || llmErr.Status == 401) {
+		retryAfter, retryable := retryableLLMError(err)
+		if !retryable || i == retries {
 			return zero, err
 		}
-		backoff := time.Duration(600*math.Pow(2, float64(i))) * time.Millisecond
-		backoff += time.Duration(rand.Intn(300)) * time.Millisecond
-		time.Sleep(backoff)
+		delay := retryBaseDelay
+		for n := 0; n < i && delay < retryMaxDelay; n++ {
+			delay *= 2
+			if delay > retryMaxDelay {
+				delay = retryMaxDelay
+			}
+		}
+		if retryAfter > delay {
+			delay = retryAfter
+		}
+		if delay > retryMaxDelay {
+			delay = retryMaxDelay
+		}
+		if err := sleep(ctx, delay); err != nil {
+			return zero, err
+		}
 	}
-	return zero, last
+	return zero, errors.New("retry loop exhausted")
+}
+
+func retryableLLMError(err error) (time.Duration, bool) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return 0, false
+	}
+	var llmErr LLMError
+	if errors.As(err, &llmErr) {
+		return llmErr.RetryAfter, llmErr.Status == http.StatusRequestTimeout || llmErr.Status == http.StatusTooManyRequests || llmErr.Status >= 500
+	}
+	var llmErrPtr *LLMError
+	if errors.As(err, &llmErrPtr) && llmErrPtr != nil {
+		return llmErrPtr.RetryAfter, llmErrPtr.Status == http.StatusRequestTimeout || llmErrPtr.Status == http.StatusTooManyRequests || llmErrPtr.Status >= 500
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) {
+		return 0, networkError.Timeout() || networkError.Temporary()
+	}
+	return 0, false
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func makeBlankTranslated(original ChapterFile) ChapterFile {
@@ -450,7 +509,7 @@ func (a *App) inflightCount(storyID string) int {
 	return len(a.inflight[storyID])
 }
 
-func (a *App) emitProgress(storyID string, translated ChapterFile, original ChapterFile) error {
+func (a *App) emitProgress(storyID string, translated ChapterFile, original ChapterFile, progressErrors ...ProgressError) error {
 	total := 0
 	done := 0
 	errs := 0
@@ -477,6 +536,10 @@ func (a *App) emitProgress(storyID string, translated ChapterFile, original Chap
 		p.DoneBlocks = done
 		p.ErrorBlocks = errs
 		p.InflightBlocks = inflight
+		p.Errors = append(p.Errors, progressErrors...)
+		if len(p.Errors) > maxProgressErrors {
+			p.Errors = p.Errors[len(p.Errors)-maxProgressErrors:]
+		}
 		return p
 	}); err != nil {
 		return err
@@ -493,15 +556,7 @@ func (a *App) emitProgress(storyID string, translated ChapterFile, original Chap
 }
 
 func (a *App) setProgress(storyID string, mutator func(Progress) Progress) error {
-	current, err := a.store.LoadProgress(storyID)
-	if err != nil {
-		return err
-	}
-	if current == nil {
-		return errors.New("progress not found")
-	}
-	next := mutator(*current)
-	return a.store.SaveProgress(storyID, next)
+	return a.store.UpdateProgress(storyID, mutator)
 }
 
 func (a *App) updateStoryStatus(storyID string, status StoryStatus) error {
@@ -538,13 +593,17 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 	}
 	if strings.TrimSpace(cfg.LLM.APIKey) == "" {
 		msg := "未配置 LLM apiKey，请到 Settings 填好后再 retry"
-		_ = a.setProgress(storyID, func(p Progress) Progress {
+		if err := a.setProgress(storyID, func(p Progress) Progress {
 			p.Phase = PhaseError
 			p.Message = msg
 			p.FinishedAt = nowISO()
 			return p
-		})
-		_ = a.updateStoryStatus(storyID, StatusError)
+		}); err != nil {
+			return err
+		}
+		if err := a.updateStoryStatus(storyID, StatusError); err != nil {
+			return err
+		}
 		a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseError, Message: msg})
 		return nil
 	}
@@ -576,13 +635,17 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 		analysed, err := a.runAnalysis(ctx, storyID, *meta, *original, cfg, tracker)
 		if err != nil {
 			msg := "精翻预读分析失败: " + err.Error()
-			_ = a.setProgress(storyID, func(p Progress) Progress {
+			if err := a.setProgress(storyID, func(p Progress) Progress {
 				p.Phase = PhaseError
 				p.Message = msg
 				p.FinishedAt = nowISO()
 				return p
-			})
-			_ = a.updateStoryStatus(storyID, StatusError)
+			}); err != nil {
+				return err
+			}
+			if err := a.updateStoryStatus(storyID, StatusError); err != nil {
+				return err
+			}
 			a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseError, Message: msg})
 			return nil
 		}
@@ -599,26 +662,8 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 		a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseTranslating})
 	}
 
-	maxRounds := cfg.LLM.MaxAutoRetries
-	if maxRounds < 0 {
-		maxRounds = 0
-	}
-	for round := 0; round <= maxRounds; round++ {
-		if round > 0 {
-			if !resetErrorsToPending(translated) {
-				break
-			}
-			if err := a.store.SaveTranslated(storyID, *translated); err != nil {
-				return err
-			}
-			if err := a.emitProgress(storyID, *translated, *original); err != nil {
-				return err
-			}
-			a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseTranslating, Message: fmt.Sprintf("自动重试第 %d/%d 轮", round, maxRounds)})
-		}
-		if err := a.translatePass(ctx, storyID, cfg, *meta, original, translated, transCtx, tracker); err != nil {
-			return err
-		}
+	if err := a.translatePass(ctx, storyID, cfg, *meta, original, translated, transCtx, tracker); err != nil {
+		return err
 	}
 
 	hasErrors := false
@@ -650,21 +695,6 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 	}
 	a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: phase})
 	return nil
-}
-
-func resetErrorsToPending(translated *ChapterFile) bool {
-	reset := false
-	for ci := range translated.Chapters {
-		for bi := range translated.Chapters[ci].Blocks {
-			if translated.Chapters[ci].Blocks[bi].Status == BlockError {
-				translated.Chapters[ci].Blocks[bi].Status = BlockPending
-				translated.Chapters[ci].Blocks[bi].HTML = ""
-				translated.Chapters[ci].Blocks[bi].Error = ""
-				reset = true
-			}
-		}
-	}
-	return reset
 }
 
 func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, meta Meta, original *ChapterFile, translated *ChapterFile, transCtx *TranslationContext, tracker *statsTracker) error {
@@ -731,19 +761,31 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 			concurrency = len(batches)
 		}
 
+		passCtx, cancel := context.WithCancel(ctx)
 		var cursor int
 		var cursorMu sync.Mutex
-		var transMu sync.Mutex
+		var stateMu sync.Mutex
+		var firstErr error
+		setFirstErrorLocked := func(err error) {
+			if err != nil && firstErr == nil {
+				firstErr = err
+				cancel()
+			}
+		}
 		var wg sync.WaitGroup
 		for worker := 0; worker < concurrency; worker++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for {
-					select {
-					case <-ctx.Done():
+					if err := passCtx.Err(); err != nil {
 						return
-					default:
+					}
+					stateMu.Lock()
+					stopped := firstErr != nil
+					stateMu.Unlock()
+					if stopped {
+						return
 					}
 					cursorMu.Lock()
 					i := cursor
@@ -752,51 +794,91 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 					if i >= len(batches) {
 						return
 					}
+
 					b := batches[i]
 					inputs := make([]translateInput, 0, len(b.Blocks))
-					ids := make([]string, 0, len(b.Blocks))
+					failures := make([]ProgressError, 0)
 					for _, block := range b.Blocks {
 						input, err := makeTranslateInput(block)
-						if err != nil {
-							msg := err.Error()
-							transMu.Lock()
-							bi := findBlockIndex(transCh.Blocks, block.ID)
-							if bi >= 0 {
-								tb := transCh.Blocks[bi]
-								tb.Status = BlockError
-								tb.Error = msg
-								transCh.Blocks[bi] = tb
+						if err == nil && cfg.LLM.MaxTokensPerRequest > 0 {
+							tokens := approxTokens(input.Text)
+							if tokens > cfg.LLM.MaxTokensPerRequest {
+								err = fmt.Errorf("段 id=%s 预计 %d tokens，超过单次请求上限 %d", block.ID, tokens, cfg.LLM.MaxTokensPerRequest)
 							}
-							a.bus.Emit(storyID, StreamEvent{Type: "block-error", ChapterIndex: chIdx, BlockID: block.ID, Message: msg})
-							_ = a.setProgress(storyID, func(p Progress) Progress {
-								p.Errors = append(p.Errors, ProgressError{ChapterIndex: chIdx, BlockID: block.ID, Message: msg, At: nowISO()})
-								if len(p.Errors) > maxProgressErrors {
-									p.Errors = p.Errors[len(p.Errors)-maxProgressErrors:]
-								}
-								return p
-							})
-							transMu.Unlock()
+						}
+						if err != nil {
+							failures = append(failures, ProgressError{ChapterIndex: chIdx, BlockID: block.ID, Message: err.Error(), At: nowISO()})
 							continue
 						}
 						inputs = append(inputs, input)
-						ids = append(ids, block.ID)
 					}
+
+					if len(failures) > 0 {
+						stateMu.Lock()
+						persisted := firstErr == nil
+						if persisted {
+							for _, failure := range failures {
+								bi := findBlockIndex(transCh.Blocks, failure.BlockID)
+								if bi >= 0 {
+									block := transCh.Blocks[bi]
+									block.Status = BlockError
+									block.Error = failure.Message
+									transCh.Blocks[bi] = block
+								}
+							}
+							if err := a.store.SaveTranslated(storyID, *translated); err != nil {
+								setFirstErrorLocked(err)
+								persisted = false
+							} else if err := a.emitProgress(storyID, *translated, *original, failures...); err != nil {
+								setFirstErrorLocked(err)
+								persisted = false
+							}
+						}
+						stateMu.Unlock()
+						if !persisted {
+							return
+						}
+						for _, failure := range failures {
+							a.bus.Emit(storyID, StreamEvent{Type: "block-error", ChapterIndex: chIdx, BlockID: failure.BlockID, Message: failure.Message})
+						}
+					}
+
 					if len(inputs) == 0 {
-						transMu.Lock()
-						_ = a.store.SaveTranslated(storyID, *translated)
-						_ = a.emitProgress(storyID, *translated, *original)
-						transMu.Unlock()
 						continue
 					}
+					ids := make([]string, len(inputs))
+					for i, input := range inputs {
+						ids[i] = input.ID
+					}
 					a.markInflight(storyID, ids)
-					_ = a.emitProgress(storyID, *translated, *original)
-					outs, err := withRetry(func(attempt int) ([]translateOutput, error) {
-						return translateBatch(ctx, cfg, meta, inputs, transCtx, chIdx, tracker, attempt)
-					}, 2)
+					stateMu.Lock()
+					if firstErr != nil {
+						a.clearInflight(storyID, ids)
+						stateMu.Unlock()
+						return
+					}
+					if err := a.emitProgress(storyID, *translated, *original); err != nil {
+						a.clearInflight(storyID, ids)
+						setFirstErrorLocked(err)
+						stateMu.Unlock()
+						return
+					}
+					stateMu.Unlock()
 
-					transMu.Lock()
-					if err != nil {
-						msg := err.Error()
+					outs, callErr := withRetry(passCtx, func(attempt int) ([]translateOutput, error) {
+						return translateBatch(passCtx, cfg, meta, inputs, transCtx, chIdx, tracker, attempt)
+					}, cfg.LLM.MaxAutoRetries)
+
+					stateMu.Lock()
+					a.clearInflight(storyID, ids)
+					if firstErr != nil || (callErr != nil && passCtx.Err() != nil) {
+						stateMu.Unlock()
+						return
+					}
+					events := make([]StreamEvent, 0, len(inputs))
+					progressErrors := make([]ProgressError, 0)
+					if callErr != nil {
+						msg := callErr.Error()
 						for _, input := range inputs {
 							bi := findBlockIndex(transCh.Blocks, input.ID)
 							if bi < 0 {
@@ -806,17 +888,9 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 							block.Status = BlockError
 							block.Error = msg
 							transCh.Blocks[bi] = block
-							a.bus.Emit(storyID, StreamEvent{Type: "block-error", ChapterIndex: chIdx, BlockID: input.ID, Message: msg})
+							progressErrors = append(progressErrors, ProgressError{ChapterIndex: chIdx, BlockID: input.ID, Message: msg, At: nowISO()})
+							events = append(events, StreamEvent{Type: "block-error", ChapterIndex: chIdx, BlockID: input.ID, Message: msg})
 						}
-						_ = a.setProgress(storyID, func(p Progress) Progress {
-							for _, input := range inputs {
-								p.Errors = append(p.Errors, ProgressError{ChapterIndex: chIdx, BlockID: input.ID, Message: msg, At: nowISO()})
-							}
-							if len(p.Errors) > maxProgressErrors {
-								p.Errors = p.Errors[len(p.Errors)-maxProgressErrors:]
-							}
-							return p
-						})
 					} else {
 						for _, out := range outs {
 							bi := findBlockIndex(transCh.Blocks, out.ID)
@@ -828,17 +902,37 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 							block.Status = BlockDone
 							block.Error = ""
 							transCh.Blocks[bi] = block
-							a.bus.Emit(storyID, StreamEvent{Type: "block-done", ChapterIndex: chIdx, BlockID: out.ID})
+							events = append(events, StreamEvent{Type: "block-done", ChapterIndex: chIdx, BlockID: out.ID})
 						}
 					}
-					_ = a.store.SaveTranslated(storyID, *translated)
-					a.clearInflight(storyID, ids)
-					_ = a.emitProgress(storyID, *translated, *original)
-					transMu.Unlock()
+					if err := a.store.SaveTranslated(storyID, *translated); err != nil {
+						setFirstErrorLocked(err)
+						stateMu.Unlock()
+						return
+					}
+					if err := a.emitProgress(storyID, *translated, *original, progressErrors...); err != nil {
+						setFirstErrorLocked(err)
+						stateMu.Unlock()
+						return
+					}
+					stateMu.Unlock()
+					for _, event := range events {
+						a.bus.Emit(storyID, event)
+					}
 				}
 			}()
 		}
 		wg.Wait()
+		cancel()
+		stateMu.Lock()
+		persistErr := firstErr
+		stateMu.Unlock()
+		if persistErr != nil {
+			return persistErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		a.bus.Emit(storyID, StreamEvent{Type: "chapter-done", ChapterIndex: chIdx})
 	}
 	return nil

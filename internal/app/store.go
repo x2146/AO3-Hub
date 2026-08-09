@@ -333,6 +333,25 @@ func (s *Store) SaveProgress(id string, progress Progress) error {
 	return s.writeJSON(path, normalizeProgress(progress))
 }
 
+func (s *Store) UpdateProgress(id string, update func(Progress) Progress) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, err := s.storyPath(id, "progress.json")
+	if err != nil {
+		return err
+	}
+	var progress Progress
+	ok, err := s.readJSON(path, &progress)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("progress not found")
+	}
+	progress = normalizeProgress(progress)
+	return s.writeJSON(path, normalizeProgress(update(progress)))
+}
+
 func (s *Store) SaveSource(id string, html string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

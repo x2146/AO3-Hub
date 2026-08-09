@@ -583,6 +583,52 @@ func TestChatResponseSizeLimits(t *testing.T) {
 	}
 }
 
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{name: "delta seconds", value: "12", want: 12 * time.Second},
+		{name: "http date", value: now.Add(45 * time.Second).Format(http.TimeFormat), want: 45 * time.Second},
+		{name: "negative", value: "-1"},
+		{name: "past date", value: now.Add(-time.Second).Format(http.TimeFormat)},
+		{name: "invalid", value: "later"},
+		{name: "capped", value: "999999", want: maxProviderRetryAfter},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := parseRetryAfter(test.value, now); got != test.want {
+				t.Fatalf("parseRetryAfter(%q) = %s, want %s", test.value, got, test.want)
+			}
+		})
+	}
+}
+
+func TestChatPropagatesRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("retry-after", "3")
+		http.Error(w, "busy", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	_, err := chat(context.Background(), LLMConfig{
+		APIType:             LLMAPITypeOpenAICompatible,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "test-model",
+		MaxTokensPerRequest: 1000,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	var providerErr LLMError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %v, want LLMError", err)
+	}
+	if providerErr.Status != http.StatusTooManyRequests || providerErr.RetryAfter != 3*time.Second {
+		t.Fatalf("provider error = %+v", providerErr)
+	}
+}
+
 func TestChatStreamCanBeCanceled(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
