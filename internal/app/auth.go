@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +16,8 @@ import (
 )
 
 const cookieName = "ao3hub_session"
+
+const dummyPasswordHash = "$argon2id$v=19$m=65536,t=2,p=1$9Gh1wrVfGclAkVQCJJXAh1BDCdF9R+CGKEDhBb3cGuQ$Oo+nmvbwbz/X960SLZrw6nLFeroEzz3DU+Uz3YLNk4k"
 
 type contextKey string
 
@@ -46,7 +49,7 @@ func verifyPassword(plain, encoded string) bool {
 		return false
 	}
 	parts := strings.Split(encoded, "$")
-	if len(parts) != 6 || parts[1] != "argon2id" {
+	if len(parts) != 6 || parts[1] != "argon2id" || parts[2] != "v=19" {
 		return false
 	}
 	params := strings.Split(parts[3], ",")
@@ -71,13 +74,16 @@ func verifyPassword(plain, encoded string) bool {
 			threads = n
 		}
 	}
+	if memory < 8*1024 || memory > 256*1024 || timeCost < 1 || timeCost > 10 || threads < 1 || threads > 16 {
+		return false
+	}
 	b64 := base64.RawStdEncoding
 	salt, err := b64.DecodeString(parts[4])
-	if err != nil {
+	if err != nil || len(salt) < 8 || len(salt) > 64 {
 		return false
 	}
 	expected, err := b64.DecodeString(parts[5])
-	if err != nil {
+	if err != nil || len(expected) < 16 || len(expected) > 64 {
 		return false
 	}
 	actual := argon2.IDKey([]byte(plain), salt, uint32(timeCost), uint32(memory), uint8(threads), uint32(len(expected)))
@@ -187,6 +193,20 @@ func withUser(r *http.Request, user *UserRecord) *http.Request {
 func currentUser(r *http.Request) *UserRecord {
 	user, _ := r.Context().Value(userContextKey).(*UserRecord)
 	return user
+}
+
+func writeLoginGuardError(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	retryAfter := "300"
+	message := "登录尝试过多，请稍后再试"
+	if errors.Is(err, errPasswordCheckBusy) {
+		retryAfter = "1"
+		message = "登录服务繁忙，请稍后再试"
+	}
+	w.Header().Set("retry-after", retryAfter)
+	writeError(w, http.StatusTooManyRequests, message)
 }
 
 func (a *App) attachUser(next http.Handler) http.Handler {

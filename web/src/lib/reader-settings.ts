@@ -12,7 +12,9 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   measure: 760,
 };
 
-export function loadReaderSettings(defaults = DEFAULT_READER_SETTINGS): ReaderSettings {
+export function loadReaderSettings(
+  defaults = DEFAULT_READER_SETTINGS,
+): ReaderSettings {
   return {
     font: readNumber(KEY_PREFIX + "font", defaults.font),
     zh: readNumber(KEY_PREFIX + "zh", defaults.zh),
@@ -39,7 +41,8 @@ export function applyReaderSettings(s: ReaderSettings): void {
 }
 
 export const READER_LIMITS = {
-  font: { min: 14, max: 24, step: 1 },
-  zh: { min: 0.84, max: 1.1, step: 0.02 },
-  measure: { min: 600, max: 980, step: 40 },
+  font: CONFIG_LIMITS.reader.defaultFont,
+  zh: CONFIG_LIMITS.reader.defaultZhScale,
+  measure: CONFIG_LIMITS.reader.defaultMeasure,
 };
+import { CONFIG_LIMITS } from "@ao3hub/shared";

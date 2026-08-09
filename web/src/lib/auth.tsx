@@ -1,7 +1,15 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { PublicUser } from "@ao3hub/shared";
-import { api } from "./api";
+import { api, AUTH_INVALID_EVENT, markAuthStateFresh } from "./api";
 
 type AuthState = {
   user: PublicUser | null;
@@ -19,42 +27,70 @@ type AuthContextValue = AuthState & {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [state, setState] = useState<AuthState>({
     user: null,
     needsSetup: false,
     loading: true,
   });
 
+  const clearCachedData = useCallback(async () => {
+    await queryClient.cancelQueries();
+    queryClient.clear();
+  }, [queryClient]);
+
   const refresh = useCallback(async () => {
     try {
       const me = await api.me();
+      await clearCachedData();
+      markAuthStateFresh();
       setState({ user: me.user, needsSetup: me.needsSetup, loading: false });
     } catch {
+      await clearCachedData();
       setState({ user: null, needsSetup: false, loading: false });
     }
-  }, []);
+  }, [clearCachedData]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const onAuthInvalid = () => {
+      void clearCachedData().finally(() => {
+        setState((current) => ({ ...current, user: null, loading: false }));
+      });
+    };
+    window.addEventListener(AUTH_INVALID_EVENT, onAuthInvalid);
+    return () => window.removeEventListener(AUTH_INVALID_EVENT, onAuthInvalid);
+  }, [clearCachedData]);
+
   const login = useCallback(
     async (username: string, password: string) => {
       const { user } = await api.login(username, password);
+      await clearCachedData();
+      markAuthStateFresh();
       setState({ user, needsSetup: false, loading: false });
     },
-    [],
+    [clearCachedData],
   );
 
   const logout = useCallback(async () => {
     await api.logout();
+    await clearCachedData();
+    markAuthStateFresh();
     setState((s) => ({ ...s, user: null }));
-  }, []);
+  }, [clearCachedData]);
 
-  const setup = useCallback(async (username: string, password: string) => {
-    const { user } = await api.setup(username, password);
-    setState({ user, needsSetup: false, loading: false });
-  }, []);
+  const setup = useCallback(
+    async (username: string, password: string) => {
+      const { user } = await api.setup(username, password);
+      await clearCachedData();
+      markAuthStateFresh();
+      setState({ user, needsSetup: false, loading: false });
+    },
+    [clearCachedData],
+  );
 
   const value = useMemo<AuthContextValue>(
     () => ({ ...state, refresh, login, logout, setup }),

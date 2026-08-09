@@ -382,17 +382,17 @@ func validateConfig(c Config) error {
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return errors.New("server.port out of range")
 	}
-	if c.Auth.SessionTTLDays <= 0 {
-		return errors.New("auth.sessionTtlDays must be positive")
+	if c.Auth.SessionTTLDays < 1 || c.Auth.SessionTTLDays > 365 {
+		return errors.New("auth.sessionTtlDays must be between 1 and 365")
 	}
-	if c.Stream.HeartbeatMS <= 0 {
-		return errors.New("stream.heartbeatMs must be positive")
+	if c.Stream.HeartbeatMS < 1000 || c.Stream.HeartbeatMS > 300000 {
+		return errors.New("stream.heartbeatMs must be between 1000 and 300000")
 	}
-	if c.Import.MinHTMLLength < 0 {
-		return errors.New("import.minHtmlLength must be nonnegative")
+	if c.Import.MinHTMLLength < 0 || c.Import.MinHTMLLength > maxUploadHTMLBytes {
+		return errors.New("import.minHtmlLength out of range")
 	}
-	if c.UI.LibraryRefetchIntervalMS <= 0 {
-		return errors.New("ui.libraryRefetchIntervalMs must be positive")
+	if c.UI.LibraryRefetchIntervalMS < 1000 || c.UI.LibraryRefetchIntervalMS > 3600000 {
+		return errors.New("ui.libraryRefetchIntervalMs must be between 1000 and 3600000")
 	}
 	if !validLLMAPIType(normalizeLLMAPIType(c.LLM.APIType)) {
 		return errors.New("llm.apiType is invalid")
@@ -403,32 +403,35 @@ func validateConfig(c Config) error {
 	if strings.TrimSpace(c.LLM.Model) == "" {
 		return errors.New("llm.model is required")
 	}
-	if c.LLM.Concurrency <= 0 {
-		return errors.New("llm.concurrency must be positive")
+	if c.LLM.Temperature < 0 || c.LLM.Temperature > 2 {
+		return errors.New("llm.temperature must be between 0 and 2")
 	}
-	if c.LLM.BlocksPerRequest <= 0 {
-		return errors.New("llm.blocksPerRequest must be positive")
+	if c.LLM.Concurrency < 1 || c.LLM.Concurrency > 16 {
+		return errors.New("llm.concurrency must be between 1 and 16")
 	}
-	if c.LLM.MaxTokensPerRequest <= 0 {
-		return errors.New("llm.maxTokensPerRequest must be positive")
+	if c.LLM.BlocksPerRequest < 1 || c.LLM.BlocksPerRequest > 100 {
+		return errors.New("llm.blocksPerRequest must be between 1 and 100")
 	}
-	if c.LLM.MaxAutoRetries < 0 {
-		return errors.New("llm.maxAutoRetries must be nonnegative")
+	if c.LLM.MaxTokensPerRequest < 1 || c.LLM.MaxTokensPerRequest > 200000 {
+		return errors.New("llm.maxTokensPerRequest must be between 1 and 200000")
+	}
+	if c.LLM.MaxAutoRetries < 0 || c.LLM.MaxAutoRetries > 10 {
+		return errors.New("llm.maxAutoRetries must be between 0 and 10")
 	}
 	if !validTranslationMode(c.LLM.Mode) {
 		return errors.New("llm.mode is invalid")
 	}
-	if c.LLM.AnalysisMaxInputTokens <= 0 {
-		return errors.New("llm.analysisMaxInputTokens must be positive")
+	if c.LLM.AnalysisMaxInputTokens < 1000 || c.LLM.AnalysisMaxInputTokens > 1000000 {
+		return errors.New("llm.analysisMaxInputTokens must be between 1000 and 1000000")
 	}
-	if c.Reader.DefaultMeasure <= 0 {
-		return errors.New("reader.defaultMeasure must be positive")
+	if c.Reader.DefaultMeasure < 600 || c.Reader.DefaultMeasure > 980 {
+		return errors.New("reader.defaultMeasure must be between 600 and 980")
 	}
-	if c.Reader.DefaultFont <= 0 {
-		return errors.New("reader.defaultFont must be positive")
+	if c.Reader.DefaultFont < 14 || c.Reader.DefaultFont > 24 {
+		return errors.New("reader.defaultFont must be between 14 and 24")
 	}
-	if c.Reader.DefaultZHScale <= 0 {
-		return errors.New("reader.defaultZhScale must be positive")
+	if c.Reader.DefaultZHScale < 0.84 || c.Reader.DefaultZHScale > 1.1 {
+		return errors.New("reader.defaultZhScale must be between 0.84 and 1.1")
 	}
 	if strings.TrimSpace(c.Update.ManifestURL) == "" {
 		return errors.New("update.manifestURL is required")
@@ -436,8 +439,8 @@ func validateConfig(c Config) error {
 	if strings.TrimSpace(c.Update.Channel) == "" {
 		return errors.New("update.channel is required")
 	}
-	if c.Update.RestartDelayMS < 0 {
-		return errors.New("update.restartDelayMs must be nonnegative")
+	if c.Update.RestartDelayMS < 0 || c.Update.RestartDelayMS > 60000 {
+		return errors.New("update.restartDelayMs must be between 0 and 60000")
 	}
 	return nil
 }

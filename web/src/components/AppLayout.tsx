@@ -1,6 +1,14 @@
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Info, LogIn, LogOut, Monitor, Moon, Sun, UserCircle } from "lucide-react";
+import {
+  Info,
+  LogIn,
+  LogOut,
+  Monitor,
+  Moon,
+  Sun,
+  UserCircle,
+} from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +39,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const isReader = location.pathname.startsWith("/r/");
   const [theme, setThemeState] = useState<Theme>(getTheme());
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const { user, logout } = useAuth();
 
   useEffect(() => {
@@ -40,7 +49,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const ThemeIcon = themeIcon[theme];
 
   const nav = useMemo(() => {
-    const items: { to: string; label: string }[] = [{ to: "/", label: "Library" }];
+    const items: { to: string; label: string }[] = [
+      { to: "/", label: "Library" },
+    ];
     if (user) {
       items.push({ to: "/import", label: "Import" });
     }
@@ -52,8 +63,13 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   const onLogout = async () => {
-    await logout();
-    navigate({ to: "/", replace: true });
+    setLogoutError(null);
+    try {
+      await logout();
+      navigate({ to: "/", replace: true });
+    } catch (error) {
+      setLogoutError(error instanceof Error ? error.message : "登出失败");
+    }
   };
 
   return (
@@ -97,7 +113,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     aria-label="切换主题"
                   >
                     <ThemeIcon className="size-3.5" />
-                    <span className="hidden sm:inline">{themeLabel[theme]}</span>
+                    <span className="hidden sm:inline">
+                      {themeLabel[theme]}
+                    </span>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[8rem]">
@@ -165,6 +183,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </header>
+      )}
+      {logoutError && !isReader && (
+        <p
+          role="alert"
+          className="mx-auto max-w-[1180px] px-5 pt-4 text-[13px] text-destructive"
+        >
+          登出失败：{logoutError}
+        </p>
       )}
       <main className={isReader ? "" : "mx-auto max-w-[1180px] px-5 py-10"}>
         {children}

@@ -1,5 +1,27 @@
 import { z } from "zod";
 
+export const CONFIG_LIMITS = {
+  server: { port: { min: 1, max: 65535 } },
+  auth: { sessionTtlDays: { min: 1, max: 365 } },
+  stream: { heartbeatMs: { min: 1000, max: 300000 } },
+  import: { minHtmlLength: { min: 0, max: 64 << 20 } },
+  ui: { libraryRefetchIntervalMs: { min: 1000, max: 3600000 } },
+  llm: {
+    temperature: { min: 0, max: 2, step: 0.1 },
+    concurrency: { min: 1, max: 16 },
+    blocksPerRequest: { min: 1, max: 100 },
+    maxTokensPerRequest: { min: 1, max: 200000 },
+    maxAutoRetries: { min: 0, max: 10 },
+    analysisMaxInputTokens: { min: 1000, max: 1000000 },
+  },
+  reader: {
+    defaultFont: { min: 14, max: 24, step: 1 },
+    defaultZhScale: { min: 0.84, max: 1.1, step: 0.02 },
+    defaultMeasure: { min: 600, max: 980, step: 40 },
+  },
+  update: { restartDelayMs: { min: 0, max: 60000 } },
+} as const;
+
 export const StoryStatus = z.enum([
   "queued",
   "fetching",
@@ -137,13 +159,42 @@ export const LlmConfig = z.object({
   baseURL: z.string().default("https://api.deepseek.com/v1"),
   apiKey: z.string().default(""),
   model: z.string().default("deepseek-chat"),
-  temperature: z.number().default(0.3),
-  concurrency: z.number().int().positive().default(3),
-  blocksPerRequest: z.number().int().positive().default(8),
-  maxTokensPerRequest: z.number().int().positive().default(3500),
-  maxAutoRetries: z.number().int().nonnegative().default(2),
+  temperature: z
+    .number()
+    .min(CONFIG_LIMITS.llm.temperature.min)
+    .max(CONFIG_LIMITS.llm.temperature.max)
+    .default(0.3),
+  concurrency: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.llm.concurrency.min)
+    .max(CONFIG_LIMITS.llm.concurrency.max)
+    .default(3),
+  blocksPerRequest: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.llm.blocksPerRequest.min)
+    .max(CONFIG_LIMITS.llm.blocksPerRequest.max)
+    .default(8),
+  maxTokensPerRequest: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.llm.maxTokensPerRequest.min)
+    .max(CONFIG_LIMITS.llm.maxTokensPerRequest.max)
+    .default(3500),
+  maxAutoRetries: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.llm.maxAutoRetries.min)
+    .max(CONFIG_LIMITS.llm.maxAutoRetries.max)
+    .default(2),
   mode: TranslationMode.default("normal"),
-  analysisMaxInputTokens: z.number().int().positive().default(60000),
+  analysisMaxInputTokens: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.llm.analysisMaxInputTokens.min)
+    .max(CONFIG_LIMITS.llm.analysisMaxInputTokens.max)
+    .default(60000),
   stream: z.boolean().default(false),
 });
 export type LlmConfig = z.infer<typeof LlmConfig>;
@@ -159,35 +210,74 @@ export const Ao3Config = z.object({
 export type Ao3Config = z.infer<typeof Ao3Config>;
 
 export const ReaderConfig = z.object({
-  defaultMeasure: z.number().int().positive().default(780),
-  defaultFont: z.number().int().positive().default(17),
-  defaultZhScale: z.number().positive().default(0.96),
+  defaultMeasure: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.reader.defaultMeasure.min)
+    .max(CONFIG_LIMITS.reader.defaultMeasure.max)
+    .default(780),
+  defaultFont: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.reader.defaultFont.min)
+    .max(CONFIG_LIMITS.reader.defaultFont.max)
+    .default(17),
+  defaultZhScale: z
+    .number()
+    .min(CONFIG_LIMITS.reader.defaultZhScale.min)
+    .max(CONFIG_LIMITS.reader.defaultZhScale.max)
+    .default(0.96),
 });
 export type ReaderConfig = z.infer<typeof ReaderConfig>;
 
 export const ServerConfig = z.object({
   host: z.string().trim().min(1).default("127.0.0.1"),
-  port: z.coerce.number().int().min(1).max(65535).default(3000),
+  port: z.coerce
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.server.port.min)
+    .max(CONFIG_LIMITS.server.port.max)
+    .default(3000),
 });
 export type ServerConfig = z.infer<typeof ServerConfig>;
 
 export const AuthConfig = z.object({
-  sessionTtlDays: z.number().int().positive().default(30),
+  sessionTtlDays: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.auth.sessionTtlDays.min)
+    .max(CONFIG_LIMITS.auth.sessionTtlDays.max)
+    .default(30),
 });
 export type AuthConfig = z.infer<typeof AuthConfig>;
 
 export const StreamConfig = z.object({
-  heartbeatMs: z.number().int().positive().default(15000),
+  heartbeatMs: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.stream.heartbeatMs.min)
+    .max(CONFIG_LIMITS.stream.heartbeatMs.max)
+    .default(15000),
 });
 export type StreamConfig = z.infer<typeof StreamConfig>;
 
 export const ImportConfig = z.object({
-  minHtmlLength: z.number().int().nonnegative().default(100),
+  minHtmlLength: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.import.minHtmlLength.min)
+    .max(CONFIG_LIMITS.import.minHtmlLength.max)
+    .default(100),
 });
 export type ImportConfig = z.infer<typeof ImportConfig>;
 
 export const UiConfig = z.object({
-  libraryRefetchIntervalMs: z.number().int().positive().default(3000),
+  libraryRefetchIntervalMs: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.ui.libraryRefetchIntervalMs.min)
+    .max(CONFIG_LIMITS.ui.libraryRefetchIntervalMs.max)
+    .default(3000),
 });
 export type UiConfig = z.infer<typeof UiConfig>;
 
@@ -200,7 +290,12 @@ export const UpdateConfig = z.object({
   manifestURL: z.string().default(DEFAULT_UPDATE_MANIFEST_URL),
   channel: z.string().default("stable"),
   autoCheck: z.boolean().default(false),
-  restartDelayMs: z.number().int().nonnegative().default(600),
+  restartDelayMs: z
+    .number()
+    .int()
+    .min(CONFIG_LIMITS.update.restartDelayMs.min)
+    .max(CONFIG_LIMITS.update.restartDelayMs.max)
+    .default(600),
 });
 export type UpdateConfig = z.infer<typeof UpdateConfig>;
 
@@ -299,20 +394,43 @@ export const RetryRequest = z.object({
 });
 export type RetryRequest = z.infer<typeof RetryRequest>;
 
-export type StreamEvent =
-  | {
-      type: "progress";
-      doneBlocks: number;
-      totalBlocks: number;
-      errorBlocks?: number;
-      inflightBlocks?: number;
-      phase: ProgressPhase;
-    }
-  | { type: "block-done"; chapterIndex: number; blockId: string }
-  | { type: "block-error"; chapterIndex: number; blockId: string; message: string }
-  | { type: "chapter-done"; chapterIndex: number }
-  | { type: "phase"; phase: ProgressPhase; message?: string }
-  | { type: "llm-call"; phase?: ProgressPhase; message?: string; chapterIndex?: number };
+export const StreamEvent = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("progress"),
+    doneBlocks: z.number().int().nonnegative(),
+    totalBlocks: z.number().int().nonnegative(),
+    errorBlocks: z.number().int().nonnegative().optional(),
+    inflightBlocks: z.number().int().nonnegative().optional(),
+    phase: ProgressPhase,
+  }),
+  z.object({
+    type: z.literal("block-done"),
+    chapterIndex: z.number().int().nonnegative(),
+    blockId: z.string(),
+  }),
+  z.object({
+    type: z.literal("block-error"),
+    chapterIndex: z.number().int().nonnegative(),
+    blockId: z.string(),
+    message: z.string(),
+  }),
+  z.object({
+    type: z.literal("chapter-done"),
+    chapterIndex: z.number().int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal("phase"),
+    phase: ProgressPhase,
+    message: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("llm-call"),
+    phase: ProgressPhase.optional(),
+    message: z.string().optional(),
+    chapterIndex: z.number().int().nonnegative().optional(),
+  }),
+]);
+export type StreamEvent = z.infer<typeof StreamEvent>;
 
 export const LlmCallStage = z.enum([
   "analysis-chapter",
@@ -431,7 +549,10 @@ const usernameSchema = z
   .min(3, "用户名至少 3 个字符")
   .max(32, "用户名最多 32 个字符")
   .regex(USERNAME_RE, "用户名只允许字母、数字、下划线、短横线");
-const passwordSchema = z.string().min(PASSWORD_MIN, `密码至少 ${PASSWORD_MIN} 个字符`).max(200);
+const passwordSchema = z
+  .string()
+  .min(PASSWORD_MIN, `密码至少 ${PASSWORD_MIN} 个字符`)
+  .max(200);
 
 export const PublicUser = z.object({
   id: z.string(),

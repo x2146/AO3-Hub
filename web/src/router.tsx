@@ -22,6 +22,20 @@ import { AuthProvider, useAuth } from "./lib/auth";
 
 const PUBLIC_PATHS = ["/login", "/setup"];
 const ANON_OK_PATHS = ["/", "/version"];
+const ADMIN_PATHS = ["/settings", "/users"];
+
+function safeRedirectPath(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("\\") ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    return undefined;
+  }
+  return value;
+}
 
 function RootShell() {
   const { loading, user, needsSetup } = useAuth();
@@ -41,7 +55,10 @@ function RootShell() {
     }
     if (!user) {
       const isReader = pathname.startsWith("/r/");
-      const isPublic = PUBLIC_PATHS.includes(pathname) || ANON_OK_PATHS.includes(pathname) || isReader;
+      const isPublic =
+        PUBLIC_PATHS.includes(pathname) ||
+        ANON_OK_PATHS.includes(pathname) ||
+        isReader;
       if (!isPublic) {
         router.navigate({
           to: "/login",
@@ -49,6 +66,10 @@ function RootShell() {
           replace: true,
         });
       }
+      return;
+    }
+    if (ADMIN_PATHS.includes(pathname) && user.role !== "admin") {
+      router.navigate({ to: "/", replace: true });
     }
   }, [loading, user, needsSetup, pathname, router]);
 
@@ -56,6 +77,21 @@ function RootShell() {
     return (
       <AppLayout>
         <p className="text-muted-foreground">载入中…</p>
+      </AppLayout>
+    );
+  }
+  const isReader = pathname.startsWith("/r/");
+  const isPublic =
+    PUBLIC_PATHS.includes(pathname) ||
+    ANON_OK_PATHS.includes(pathname) ||
+    isReader;
+  const unauthorized =
+    (!user && !isPublic) ||
+    (ADMIN_PATHS.includes(pathname) && user?.role !== "admin");
+  if (unauthorized || (needsSetup && pathname !== "/setup")) {
+    return (
+      <AppLayout>
+        <p className="text-muted-foreground">正在跳转…</p>
       </AppLayout>
     );
   }
@@ -86,7 +122,7 @@ const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
   validateSearch: (search: Record<string, unknown>) => ({
-    redirect: typeof search.redirect === "string" ? search.redirect : undefined,
+    redirect: safeRedirectPath(search.redirect),
   }),
   component: LoginPage,
 });
@@ -131,7 +167,11 @@ const readerEntry = createRoute({
   getParentRoute: () => rootRoute,
   path: "/r/$id",
   beforeLoad: ({ params }) => {
-    throw redirect({ to: "/r/$id/$chapter", params: { id: params.id, chapter: "0" }, replace: true });
+    throw redirect({
+      to: "/r/$id/$chapter",
+      params: { id: params.id, chapter: "0" },
+      replace: true,
+    });
   },
   component: () => null,
 });

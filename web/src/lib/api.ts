@@ -1,3 +1,5 @@
+import { z } from "zod";
+import * as Schema from "@ao3hub/shared";
 import type {
   AuthMe,
   ChapterView,
@@ -16,51 +18,139 @@ import type {
 } from "@ao3hub/shared";
 
 const base = "/api";
+export const AUTH_INVALID_EVENT = "ao3hub:auth-invalid";
+let authInvalidationPending = false;
+let authStateEpoch = 0;
 
+const StoryDetailSchema = z.object({
+  meta: Schema.Meta,
+  progress: Schema.Progress,
+});
+const ConfigResponseSchema = Schema.Config.extend({
+  llm: Schema.LlmConfig.extend({ hasApiKey: z.boolean() }),
+  ao3: Schema.Ao3Config.extend({ hasCookie: z.boolean() }),
+});
+const PublicConfigSchema = z.object({
+  reader: Schema.ReaderConfig,
+  ui: Schema.UiConfig,
+  llm: z.object({ mode: Schema.TranslationMode }),
+});
 export class HttpError extends Error {
   status: number;
   constructor(status: number, message: string) {
     super(message);
+    this.name = "HttpError";
     this.status = status;
   }
 }
 
-async function http<T>(path: string, init?: RequestInit): Promise<T> {
+export function markAuthStateFresh(): void {
+  authStateEpoch += 1;
+  authInvalidationPending = false;
+}
+
+function notifyAuthInvalid(path: string, requestEpoch: number): void {
+  if (
+    path === "/auth/login" ||
+    path === "/auth/setup" ||
+    requestEpoch !== authStateEpoch ||
+    authInvalidationPending
+  ) {
+    return;
+  }
+  authInvalidationPending = true;
+  window.dispatchEvent(new Event(AUTH_INVALID_EVENT));
+}
+
+async function responseBody(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function errorMessage(body: unknown, status: number): string {
+  if (typeof body === "string") return body || String(status);
+  if (body && typeof body === "object" && "error" in body) {
+    const error = (body as { error?: unknown }).error;
+    if (typeof error === "string" && error) return error;
+  }
+  return body == null ? String(status) : JSON.stringify(body);
+}
+
+async function parseResponse<T>(
+  res: Response,
+  path: string,
+  schema?: z.ZodType<T, z.ZodTypeDef, unknown>,
+  requestEpoch = authStateEpoch,
+): Promise<T> {
+  const body = await responseBody(res);
+  if (!res.ok) {
+    if (res.status === 401) notifyAuthInvalid(path, requestEpoch);
+    throw new HttpError(res.status, errorMessage(body, res.status));
+  }
+  if (!schema) return body as T;
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    throw new Error(
+      `API response schema mismatch for ${path}: ${parsed.error.message}`,
+    );
+  }
+  return parsed.data;
+}
+
+async function http<T>(
+  path: string,
+  init?: RequestInit,
+  schema?: z.ZodType<T, z.ZodTypeDef, unknown>,
+): Promise<T> {
+  const requestEpoch = authStateEpoch;
   const res = await fetch(base + path, {
+    ...init,
     credentials: "same-origin",
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
-    ...init,
   });
-  if (!res.ok) {
-    let msg: string;
-    try {
-      const body = await res.json();
-      msg = body?.error ?? JSON.stringify(body);
-    } catch {
-      msg = await res.text();
-    }
-    throw new HttpError(res.status, msg || `${res.status}`);
-  }
-  return (await res.json()) as T;
+  return parseResponse(res, path, schema, requestEpoch);
 }
+
+const pathSegment = (value: string | number) =>
+  encodeURIComponent(String(value));
 
 export type StoriesListResponse = StoryList;
 export type StoryDetail = { meta: Meta; progress: Progress };
 
 export const api = {
-  listStories: () => http<StoriesListResponse>("/stories"),
-  getStory: (id: string) => http<StoryDetail>(`/stories/${id}`),
+  listStories: () =>
+    http<StoriesListResponse>("/stories", undefined, Schema.StoryList),
+  getStory: (id: string) =>
+    http<StoryDetail>(
+      `/stories/${pathSegment(id)}`,
+      undefined,
+      StoryDetailSchema,
+    ),
   getChapter: (id: string, n: number) =>
-    http<ChapterView>(`/stories/${id}/chapters/${n}`),
+    http<ChapterView>(
+      `/stories/${pathSegment(id)}/chapters/${pathSegment(n)}`,
+      undefined,
+      Schema.ChapterView,
+    ),
   createFromUrl: (url: string, mode?: TranslationMode) =>
     http<{ id: string; status: string }>("/stories", {
       method: "POST",
       body: JSON.stringify(mode ? { url, mode } : { url }),
     }),
   uploadHtml: async (file: File | string, mode?: TranslationMode) => {
+    const requestEpoch = authStateEpoch;
     const form = new FormData();
     if (typeof file === "string") {
-      form.append("file", new Blob([file], { type: "text/html" }), "upload.html");
+      form.append(
+        "file",
+        new Blob([file], { type: "text/html" }),
+        "upload.html",
+      );
     } else {
       form.append("file", file);
     }
@@ -70,60 +160,65 @@ export const api = {
       credentials: "same-origin",
       body: form,
     });
-    if (!res.ok) {
-      let msg: string;
-      try {
-        const body = await res.json();
-        msg = body?.error ?? JSON.stringify(body);
-      } catch {
-        msg = await res.text();
-      }
-      throw new HttpError(res.status, msg || `${res.status}`);
-    }
-    return (await res.json()) as { id: string; status: string };
+    return parseResponse<{ id: string; status: string }>(
+      res,
+      "/stories/upload",
+      undefined,
+      requestEpoch,
+    );
   },
   retry: (
     id: string,
-    body: { blockIds?: string[]; chapterIndex?: number; mode?: TranslationMode } = {},
+    body: {
+      blockIds?: string[];
+      chapterIndex?: number;
+      mode?: TranslationMode;
+    } = {},
   ) =>
-    http<{ ok: true }>(`/stories/${id}/retry`, {
+    http<{ ok: true }>(`/stories/${pathSegment(id)}/retry`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
   remove: (id: string) =>
-    http<{ ok: true }>(`/stories/${id}`, { method: "DELETE" }),
+    http<{ ok: true }>(`/stories/${pathSegment(id)}`, { method: "DELETE" }),
 
   getTranslationStatus: (id: string) =>
-    http<TranslationStatusView>(`/stories/${id}/translation-status`),
+    http<TranslationStatusView>(
+      `/stories/${pathSegment(id)}/translation-status`,
+      undefined,
+      Schema.TranslationStatusView,
+    ),
   resetTranslationStats: (id: string) =>
-    http<{ ok: true }>(`/stories/${id}/translation-status/reset`, {
+    http<{ ok: true }>(`/stories/${pathSegment(id)}/translation-status/reset`, {
       method: "POST",
     }),
   reanalyze: (id: string) =>
-    http<{ ok: true }>(`/stories/${id}/reanalyze`, { method: "POST" }),
+    http<{ ok: true }>(`/stories/${pathSegment(id)}/reanalyze`, {
+      method: "POST",
+    }),
 
-  getConfig: () => http<Config & { llm: Config["llm"] & { hasApiKey: boolean }; ao3: Config["ao3"] & { hasCookie: boolean } }>("/config"),
-  getPublicConfig: () =>
-    http<Pick<Config, "reader" | "ui"> & { llm: { mode: TranslationMode } }>(
-      "/config/public",
-    ),
+  getConfig: () => http("/config", undefined, ConfigResponseSchema),
+  getPublicConfig: () => http("/config/public", undefined, PublicConfigSchema),
   saveConfig: (body: any) =>
-    http<{ ok: true }>("/config", { method: "PUT", body: JSON.stringify(body) }),
+    http<{ ok: true }>("/config", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   testConfig: () =>
     http<{ ok: boolean; content?: string; error?: string }>("/config/test", {
       method: "POST",
     }),
 
-  version: () => http<VersionInfo>("/update/version"),
-  checkUpdate: () =>
-    http<VersionInfo>("/update/check", { method: "POST" }),
+  version: () =>
+    http<VersionInfo>("/update/version", undefined, Schema.VersionInfo),
+  checkUpdate: () => http<VersionInfo>("/update/check", { method: "POST" }),
   applyUpdate: (body: ApplyUpdateRequest = {}) =>
     http<{ ok: boolean; message: string; version?: string }>("/update/apply", {
       method: "POST",
       body: JSON.stringify(body),
     }),
 
-  me: () => http<AuthMe>("/auth/me"),
+  me: () => http<AuthMe>("/auth/me", undefined, Schema.AuthMe),
   login: (username: string, password: string) =>
     http<{ user: PublicUser }>("/auth/login", {
       method: "POST",
@@ -143,12 +238,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
   updateUser: (id: string, body: { password?: string; role?: Role }) =>
-    http<{ user: PublicUser }>(`/users/${id}`, {
+    http<{ user: PublicUser }>(`/users/${pathSegment(id)}`, {
       method: "PUT",
       body: JSON.stringify(body),
     }),
   deleteUser: (id: string) =>
-    http<{ ok: true }>(`/users/${id}`, { method: "DELETE" }),
+    http<{ ok: true }>(`/users/${pathSegment(id)}`, { method: "DELETE" }),
 };
 
 export function subscribeStream(
@@ -156,7 +251,7 @@ export function subscribeStream(
   onEvent: (e: StreamEvent) => void,
   onError?: (e: Event) => void,
 ): () => void {
-  const es = new EventSource(`${base}/stories/${id}/stream`);
+  const es = new EventSource(`${base}/stories/${pathSegment(id)}/stream`);
   const types = [
     "progress",
     "phase",
@@ -168,8 +263,15 @@ export function subscribeStream(
   for (const t of types) {
     es.addEventListener(t, (raw) => {
       try {
-        onEvent(JSON.parse((raw as MessageEvent).data) as StreamEvent);
-      } catch {}
+        const parsed = Schema.StreamEvent.safeParse(
+          JSON.parse((raw as MessageEvent).data),
+        );
+        if (!parsed.success) throw parsed.error;
+        onEvent(parsed.data);
+      } catch (error) {
+        console.error(`Invalid SSE ${t} event for story ${id}`, error);
+        onError?.(new CustomEvent("protocol-error", { detail: error }));
+      }
     });
   }
   if (onError) es.onerror = onError;

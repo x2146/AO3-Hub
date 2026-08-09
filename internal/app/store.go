@@ -18,6 +18,12 @@ type Store struct {
 	mu  sync.Mutex
 }
 
+const (
+	maxSessionsPerUser    = 20
+	minSessionTouchWindow = time.Minute
+	maxSessionTouchWindow = time.Hour
+)
+
 var (
 	errSetupComplete    = errors.New("已完成初始化")
 	errUserNotFound     = errors.New("用户不存在")
@@ -122,6 +128,9 @@ func (s *Store) LoadConfig() (Config, error) {
 		return cfg, s.writeJSON(s.path("config.json"), cfg)
 	}
 	cfg = normalizeConfig(cfg)
+	if err := validateConfig(cfg); err != nil {
+		return Config{}, fmt.Errorf("invalid config.json: %w", err)
+	}
 	_ = s.writeJSON(s.path("config.json"), cfg)
 	return cfg, nil
 }
@@ -704,9 +713,22 @@ func (s *Store) CreateSession(userID string, ttl time.Duration) (*SessionRecord,
 	}
 	now := time.Now().UTC()
 	active := file.Sessions[:0]
+	userSessions := 0
 	for _, session := range file.Sessions {
 		if !sessionExpired(session, now) {
 			active = append(active, session)
+			if session.UserID == userID {
+				userSessions++
+			}
+		}
+	}
+	for userSessions >= maxSessionsPerUser {
+		for i, session := range active {
+			if session.UserID == userID {
+				active = append(active[:i], active[i+1:]...)
+				userSessions--
+				break
+			}
 		}
 	}
 	token, err := randomHex(32)
@@ -758,21 +780,36 @@ func (s *Store) TouchSession(token string, ttl time.Duration) (*SessionRecord, e
 	now := time.Now().UTC()
 	active := file.Sessions[:0]
 	var touched *SessionRecord
+	changed := false
+	touchWindow := ttl / 10
+	if touchWindow < minSessionTouchWindow {
+		touchWindow = minSessionTouchWindow
+	}
+	if touchWindow > maxSessionTouchWindow {
+		touchWindow = maxSessionTouchWindow
+	}
 	for _, session := range file.Sessions {
 		if sessionExpired(session, now) {
+			changed = true
 			continue
 		}
 		if session.Token == token {
-			session.LastUsedAt = now.Format(time.RFC3339Nano)
-			session.ExpiresAt = now.Add(ttl).Format(time.RFC3339Nano)
+			lastUsed, err := time.Parse(time.RFC3339Nano, session.LastUsedAt)
+			if err != nil || now.Sub(lastUsed) >= touchWindow {
+				session.LastUsedAt = now.Format(time.RFC3339Nano)
+				session.ExpiresAt = now.Add(ttl).Format(time.RFC3339Nano)
+				changed = true
+			}
 			out := session
 			touched = &out
 		}
 		active = append(active, session)
 	}
 	file.Sessions = active
-	if err := s.saveSessionsLocked(file); err != nil {
-		return nil, err
+	if changed {
+		if err := s.saveSessionsLocked(file); err != nil {
+			return nil, err
+		}
 	}
 	return touched, nil
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -218,6 +219,192 @@ func TestAdminCannotChangeOwnRole(t *testing.T) {
 	}
 	if _, err := store.UpdateUserAsAdmin(admin.ID, admin.ID, "", RoleUser); !errors.Is(err, errCannotModifySelf) {
 		t.Fatalf("self role change error = %v", err)
+	}
+}
+
+func TestMergeConfigNeverPersistsSecretMasks(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.LLM.APIKey = "shortkey"
+	cfg.AO3.Cookie = "session=value"
+	raw := map[string]json.RawMessage{
+		"llm": json.RawMessage(`{"apiKey":"********","concurrency":4}`),
+		"ao3": json.RawMessage(`{"cookie":"***","userAgent":"test-agent"}`),
+	}
+	mergeConfig(&cfg, raw)
+	if cfg.LLM.APIKey != "shortkey" {
+		t.Fatalf("API key = %q, want original short key", cfg.LLM.APIKey)
+	}
+	if cfg.AO3.Cookie != "session=value" {
+		t.Fatalf("AO3 cookie = %q, want original cookie", cfg.AO3.Cookie)
+	}
+	if cfg.LLM.Concurrency != 4 || cfg.AO3.UserAgent != "test-agent" {
+		t.Fatal("non-secret config fields were not updated")
+	}
+	raw = map[string]json.RawMessage{
+		"llm": json.RawMessage(`{"apiKey":""}`),
+		"ao3": json.RawMessage(`{"cookie":""}`),
+	}
+	mergeConfig(&cfg, raw)
+	if cfg.LLM.APIKey != "" || cfg.AO3.Cookie != "" {
+		t.Fatal("explicitly cleared secrets were unexpectedly retained")
+	}
+}
+
+func TestAnonymousTranslationStatusOmitsRawLLMData(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const storyID = "12345"
+	if err := store.SaveStatsSample(storyID, RequestSample{
+		Stage:           StageTranslateBatch,
+		CapturedAt:      nowISO(),
+		SystemPrompt:    "secret system prompt",
+		UserPayload:     "private story payload",
+		ResponsePreview: "provider response",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendStatsEvent(storyID, LLMCallEvent{
+		ID:           "event-1",
+		Stage:        StageTranslateBatch,
+		Status:       LLMCallError,
+		StartedAt:    nowISO(),
+		ErrorMessage: "upstream response body",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{store: store}
+	request := httptest.NewRequest(http.MethodGet, "/api/stories/12345/translation-status", nil)
+	request.SetPathValue("id", storyID)
+	response := httptest.NewRecorder()
+	app.handleTranslationStatus(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	var view TranslationStatusView
+	if err := json.NewDecoder(response.Body).Decode(&view); err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Events) != 0 || len(view.Samples) != 0 {
+		t.Fatalf("anonymous response leaked raw data: events=%d samples=%d", len(view.Events), len(view.Samples))
+	}
+}
+
+func TestValidateConfigRejectsResourceExhaustionValues(t *testing.T) {
+	tests := []func(*Config){
+		func(cfg *Config) { cfg.Auth.SessionTTLDays = 1000000 },
+		func(cfg *Config) { cfg.Stream.HeartbeatMS = 1 },
+		func(cfg *Config) { cfg.LLM.Concurrency = 10000 },
+		func(cfg *Config) { cfg.LLM.MaxAutoRetries = 10000 },
+		func(cfg *Config) { cfg.LLM.MaxTokensPerRequest = 1000000000 },
+		func(cfg *Config) { cfg.Update.RestartDelayMS = 1000000000 },
+	}
+	for i, mutate := range tests {
+		cfg := defaultConfig()
+		mutate(&cfg)
+		if err := validateConfig(cfg); err == nil {
+			t.Fatalf("case %d: expected unsafe config to be rejected", i)
+		}
+	}
+}
+
+func TestLoadConfigRejectsUnsafeValuesWithoutOverwriting(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := NewStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultConfig()
+	cfg.LLM.Concurrency = 10000
+	original, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original = append(original, '\n')
+	configPath := filepath.Join(dataDir, "config.json")
+	if err := os.WriteFile(configPath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadConfig(); err == nil {
+		t.Fatal("expected unsafe config to be rejected")
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatal("unsafe config was overwritten while being rejected")
+	}
+}
+
+func TestCreateSessionEvictsOldestSessionPerUser(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tokens []string
+	for i := 0; i < maxSessionsPerUser+3; i++ {
+		session, err := store.CreateSession("user-1", time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens = append(tokens, session.Token)
+	}
+	if session, err := store.FindValidSession(tokens[0]); err != nil || session != nil {
+		t.Fatalf("oldest session was not evicted: session=%v err=%v", session, err)
+	}
+	if session, err := store.FindValidSession(tokens[len(tokens)-1]); err != nil || session == nil {
+		t.Fatalf("newest session missing: session=%v err=%v", session, err)
+	}
+	store.mu.Lock()
+	file, err := store.loadSessionsLocked()
+	store.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Sessions) != maxSessionsPerUser {
+		t.Fatalf("stored sessions = %d, want %d", len(file.Sessions), maxSessionsPerUser)
+	}
+}
+
+func TestLoginGuardBoundsConcurrencyAndFailures(t *testing.T) {
+	guard := newLoginAttemptGuard()
+	first, err := guard.Begin(context.Background(), "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := guard.Begin(context.Background(), "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guard.Begin(context.Background(), "third"); !errors.Is(err, errPasswordCheckBusy) {
+		t.Fatalf("third concurrent check error = %v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := guard.Begin(canceled, "third"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled check error = %v", err)
+	}
+	first(true)
+	second(true)
+
+	for i := 0; i < maxFailedLoginAttempts; i++ {
+		finish, err := guard.Begin(context.Background(), "same-client")
+		if err != nil {
+			t.Fatalf("attempt %d unexpectedly blocked: %v", i, err)
+		}
+		finish(false)
+	}
+	if _, err := guard.Begin(context.Background(), "same-client"); !errors.Is(err, errLoginRateLimited) {
+		t.Fatalf("rate limit error = %v", err)
+	}
+}
+
+func TestVerifyPasswordRejectsUnsafeArgonParameters(t *testing.T) {
+	unsafe := "$argon2id$v=19$m=4294967295,t=2,p=1$c2FsdHNhbHRzYWx0$MDEyMzQ1Njc4OWFiY2RlZg"
+	if verifyPassword("password", unsafe) {
+		t.Fatal("unsafe Argon2 parameters were accepted")
 	}
 }
 

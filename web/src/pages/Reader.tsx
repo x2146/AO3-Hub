@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { api, subscribeStream } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -44,53 +45,63 @@ export function Reader() {
   const qc = useQueryClient();
   const { user } = useAuth();
 
-  const [settings, setSettings] = useState<ReaderSettings>(() => loadReaderSettings());
+  const [settings, setSettings] = useState<ReaderSettings>(() =>
+    loadReaderSettings(),
+  );
+  const [settingsInitialized, setSettingsInitialized] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   const [showAllEn, setShowAllEn] = useState(true);
   const [liveProgress, setLiveProgress] = useState<Progress | null>(null);
-  const { data: config } = useQuery({
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
+  const tocTriggerRef = useRef<HTMLButtonElement>(null);
+  const statusTriggerRef = useRef<HTMLButtonElement>(null);
+  const { data: config, isFetched: configFetched } = useQuery({
     queryKey: ["config", "public"],
     queryFn: () => api.getPublicConfig(),
   });
 
   useEffect(() => {
-    if (!config) return;
-    setSettings(
-      loadReaderSettings({
-        font: config.reader.defaultFont,
-        zh: config.reader.defaultZhScale,
-        measure: config.reader.defaultMeasure,
-      }),
-    );
-  }, [config]);
+    if (!configFetched) return;
+    if (config) {
+      setSettings(
+        loadReaderSettings({
+          font: config.reader.defaultFont,
+          zh: config.reader.defaultZhScale,
+          measure: config.reader.defaultMeasure,
+        }),
+      );
+    }
+    setSettingsInitialized(true);
+  }, [config, configFetched]);
 
   useEffect(() => {
     applyReaderSettings(settings);
-    saveReaderSettings(settings);
-  }, [settings]);
+    if (settingsInitialized) saveReaderSettings(settings);
+  }, [settings, settingsInitialized]);
 
   useEffect(() => {
     const onScroll = () => {
       const h = document.documentElement.scrollHeight - window.innerHeight;
-      setScrollProgress(h > 0 ? Math.min(1, Math.max(0, window.scrollY / h)) : 0);
+      setScrollProgress(
+        h > 0 ? Math.min(1, Math.max(0, window.scrollY / h)) : 0,
+      );
     };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, [chapterIndex]);
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["chapter", id, chapterIndex],
     queryFn: () => api.getChapter(id, chapterIndex),
   });
 
   useEffect(() => {
-    if (!data) return;
-    setLiveProgress((cur) => cur ?? data.progress);
-  }, [data]);
+    setLiveProgress(data?.progress ?? null);
+  }, [id, data?.progress]);
 
   const total = data?.nav.total;
   const totalDigits = useMemo(
@@ -115,7 +126,10 @@ export function Reader() {
           errors: cur?.errors ?? [],
           currentChapter: cur?.currentChapter,
         }));
-      } else if (event.type === "block-done" && event.chapterIndex === chapterIndex) {
+      } else if (
+        event.type === "block-done" &&
+        event.chapterIndex === chapterIndex
+      ) {
         qc.invalidateQueries({ queryKey: ["chapter", id, chapterIndex] });
       } else if (event.type === "phase") {
         setLiveProgress((cur) =>
@@ -167,9 +181,13 @@ export function Reader() {
   const chineseTitle =
     data.meta.chineseTitle ?? data.chapter.titleZh ?? undefined;
   const progressForBar = liveProgress ?? data.progress;
-  const chapterErrorPairs = data.chapter.pairs.filter((p) => p.status === "error");
+  const chapterErrorPairs = data.chapter.pairs.filter(
+    (p) => p.status === "error",
+  );
   const showChapterRetry =
-    !!user && chapterErrorPairs.length > 0 && data.progress.phase !== "translating";
+    !!user &&
+    chapterErrorPairs.length > 0 &&
+    data.progress.phase !== "translating";
 
   return (
     <>
@@ -199,19 +217,22 @@ export function Reader() {
             : undefined
         }
         settingsOpen={settingsOpen}
+        settingsTriggerRef={settingsTriggerRef}
         onToggleSettings={() => {
           setSettingsOpen((v) => !v);
           setTocOpen(false);
         }}
         tocOpen={tocOpen}
+        tocTriggerRef={tocTriggerRef}
         onToggleToc={() => {
           setTocOpen((v) => !v);
           setSettingsOpen(false);
         }}
         onOpenStatus={() => setStatusOpen(true)}
+        statusTriggerRef={statusTriggerRef}
       />
 
-      {settingsOpen && (
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
         <SettingsDrawer
           settings={settings}
           setSettings={setSettings}
@@ -226,26 +247,34 @@ export function Reader() {
           }
           showAllEn={showAllEn}
           setShowAllEn={setShowAllEn}
-          onClose={() => setSettingsOpen(false)}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            settingsTriggerRef.current?.focus();
+          }}
         />
-      )}
+      </Dialog>
 
-      {tocOpen && (
+      <Dialog open={tocOpen} onOpenChange={setTocOpen}>
         <TocDrawer
           data={data}
           chapterIndex={chapterIndex}
           onClose={() => setTocOpen(false)}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            tocTriggerRef.current?.focus();
+          }}
         />
-      )}
+      </Dialog>
 
       <TranslationStatusPanel
         storyID={id}
         open={statusOpen}
         onClose={() => setStatusOpen(false)}
+        returnFocusRef={statusTriggerRef}
       />
 
       <article
-        className="mx-auto pt-[120px] pb-32"
+        className="mx-auto pb-32 pt-[152px] sm:pt-[120px]"
         style={{ width: "min(var(--reader-measure), calc(100vw - 32px))" }}
       >
         <header className="mb-12 border-b border-border pb-8">
@@ -276,6 +305,11 @@ export function Reader() {
             retrying={retryFailed.isPending}
             canRetryAll={!!user}
           />
+          {retryFailed.isError && (
+            <p role="alert" className="mt-3 text-[12px] text-destructive">
+              重试失败：{retryFailed.error.message}
+            </p>
+          )}
         </header>
 
         <div className="prose-reader space-y-[1.28em]">
@@ -285,10 +319,9 @@ export function Reader() {
               pair={p}
               showEn={showAllEn}
               canRetry={!!user}
-              onRetry={async (blockId) => {
-                await api.retry(id, { blockIds: [blockId], chapterIndex });
-                refetch();
-              }}
+              onRetry={(blockId) =>
+                retryFailed.mutate({ blockIds: [blockId], chapterIndex })
+              }
             />
           ))}
         </div>
@@ -316,17 +349,20 @@ function ReaderTopbar(props: {
   onPrev?: () => void;
   onNext?: () => void;
   settingsOpen: boolean;
+  settingsTriggerRef: RefObject<HTMLButtonElement>;
   onToggleSettings: () => void;
   tocOpen: boolean;
+  tocTriggerRef: RefObject<HTMLButtonElement>;
   onToggleToc: () => void;
   onOpenStatus: () => void;
+  statusTriggerRef: RefObject<HTMLButtonElement>;
 }) {
   return (
-    <div className="fixed left-1/2 top-3 z-40 flex w-[min(820px,calc(100vw-24px))] -translate-x-1/2 items-center gap-2 rounded-full border border-border surface px-2 py-1.5 shadow-float">
-      <Button variant="ghost" size="sm" asChild className="gap-1">
+    <div className="fixed left-1/2 top-[max(0.5rem,env(safe-area-inset-top))] z-40 grid w-[calc(100vw-16px)] max-w-[820px] -translate-x-1/2 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 rounded-card border border-border px-2 py-1.5 shadow-float surface sm:flex sm:w-[min(820px,calc(100vw-24px))] sm:rounded-full">
+      <Button variant="ghost" size="sm" asChild className="h-8 gap-1 px-2">
         <Link to="/">
           <ChevronLeft className="size-3.5" />
-          目录
+          <span className="hidden sm:inline">目录</span>
         </Link>
       </Button>
       <div className="min-w-0 flex-1 px-1">
@@ -365,41 +401,46 @@ function ReaderTopbar(props: {
           <ChevronRight className="size-3.5" />
         </Button>
       </div>
-      <span className="text-muted-foreground tabular-nums text-[11px] font-mono px-1">
-        {Math.round(props.progress * 100)}%
-      </span>
-      {props.total > 1 && (
+      <div className="col-span-3 flex min-w-0 items-center justify-end gap-1 border-t border-border/60 pt-1 sm:contents sm:border-0 sm:pt-0">
+        <span className="mr-auto px-1 font-mono text-[11px] tabular-nums text-muted-foreground sm:mr-0">
+          {Math.round(props.progress * 100)}%
+        </span>
+        {props.total > 1 && (
+          <Button
+            ref={props.tocTriggerRef}
+            variant="ghost"
+            size="sm"
+            className={cn("h-8 gap-1 px-2", props.tocOpen && "bg-secondary")}
+            onClick={props.onToggleToc}
+            aria-label="章节目录"
+          >
+            <ListOrdered className="size-3.5" />
+            <span className="hidden sm:inline">章节</span>
+          </Button>
+        )}
         <Button
+          ref={props.statusTriggerRef}
           variant="ghost"
           size="sm"
-          className={cn("gap-1", props.tocOpen && "bg-secondary")}
-          onClick={props.onToggleToc}
-          aria-label="章节目录"
+          className="h-8 gap-1 px-2"
+          onClick={props.onOpenStatus}
+          aria-label="翻译状态"
         >
-          <ListOrdered className="size-3.5" />
-          章节
+          <Activity className="size-3.5" />
+          <span className="hidden sm:inline">状态</span>
         </Button>
-      )}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="gap-1"
-        onClick={props.onOpenStatus}
-        aria-label="翻译状态"
-      >
-        <Activity className="size-3.5" />
-        状态
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className={cn("gap-1", props.settingsOpen && "bg-secondary")}
-        onClick={props.onToggleSettings}
-        aria-label="阅读设置"
-      >
-        <SettingsIcon className="size-3.5" />
-        设置
-      </Button>
+        <Button
+          ref={props.settingsTriggerRef}
+          variant="ghost"
+          size="sm"
+          className={cn("h-8 gap-1 px-2", props.settingsOpen && "bg-secondary")}
+          onClick={props.onToggleSettings}
+          aria-label="阅读设置"
+        >
+          <SettingsIcon className="size-3.5" />
+          <span className="hidden sm:inline">设置</span>
+        </Button>
+      </div>
     </div>
   );
 }
@@ -410,35 +451,25 @@ function SettingsDrawer({
   defaultSettings,
   showAllEn,
   setShowAllEn,
-  onClose,
+  onCloseAutoFocus,
 }: {
   settings: ReaderSettings;
   setSettings: (s: ReaderSettings) => void;
   defaultSettings: ReaderSettings;
   showAllEn: boolean;
   setShowAllEn: (v: boolean) => void;
-  onClose: () => void;
+  onCloseAutoFocus: (event: Event) => void;
 }) {
   return (
-    <div
-      role="dialog"
-      aria-label="阅读设置"
-      className="fixed top-[64px] left-1/2 z-40 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-card border border-border bg-card p-5 shadow-overlay surface"
+    <DialogContent
+      aria-describedby={undefined}
+      onCloseAutoFocus={onCloseAutoFocus}
+      className="top-0 max-h-[calc(100svh-120px)] translate-y-0 overflow-y-auto"
+      style={{
+        top: "calc(max(0.5rem, env(safe-area-inset-top)) + 96px)",
+      }}
     >
-      <div className="flex items-center justify-between">
-        <p className="text-[13px] font-semibold tracking-wider uppercase text-muted-foreground">
-          阅读设置
-        </p>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={onClose}
-          aria-label="关闭"
-        >
-          <X className="size-3.5" />
-        </Button>
-      </div>
+      <DialogTitle>阅读设置</DialogTitle>
       <div className="mt-4 grid gap-4">
         <ReaderSlider
           label="字号"
@@ -456,7 +487,9 @@ function SettingsDrawer({
           max={READER_LIMITS.zh.max}
           step={READER_LIMITS.zh.step}
           format={(v) => `${Math.round(v * 100)}%`}
-          onChange={(v) => setSettings({ ...settings, zh: Number(v.toFixed(2)) })}
+          onChange={(v) =>
+            setSettings({ ...settings, zh: Number(v.toFixed(2)) })
+          }
         />
         <ReaderSlider
           label="栏宽"
@@ -486,7 +519,7 @@ function SettingsDrawer({
           恢复默认
         </Button>
       </div>
-    </div>
+    </DialogContent>
   );
 }
 
@@ -509,8 +542,11 @@ function ReaderSlider({
 }) {
   return (
     <div className="flex items-center gap-4">
-      <span className="text-muted-foreground w-[80px] text-[12px]">{label}</span>
+      <span className="text-muted-foreground w-[80px] text-[12px]">
+        {label}
+      </span>
       <Slider
+        aria-label={label}
         value={[value]}
         min={min}
         max={max}
@@ -529,32 +565,24 @@ function TocDrawer({
   data,
   chapterIndex,
   onClose,
+  onCloseAutoFocus,
 }: {
   data: ChapterView;
   chapterIndex: number;
   onClose: () => void;
+  onCloseAutoFocus: (event: Event) => void;
 }) {
   const items = Array.from({ length: data.nav.total }, (_, i) => i);
   return (
-    <div
-      role="dialog"
-      aria-label="章节目录"
-      className="fixed top-[64px] left-1/2 z-40 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-card border border-border bg-card p-3 shadow-overlay surface max-h-[60vh] overflow-y-auto"
+    <DialogContent
+      aria-describedby={undefined}
+      onCloseAutoFocus={onCloseAutoFocus}
+      className="top-0 max-h-[60svh] translate-y-0 overflow-y-auto p-3"
+      style={{
+        top: "calc(max(0.5rem, env(safe-area-inset-top)) + 96px)",
+      }}
     >
-      <div className="flex items-center justify-between px-2 py-1">
-        <p className="text-[13px] font-semibold tracking-wider uppercase text-muted-foreground">
-          章节目录
-        </p>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={onClose}
-          aria-label="关闭"
-        >
-          <X className="size-3.5" />
-        </Button>
-      </div>
+      <DialogTitle className="px-2 py-1">章节目录</DialogTitle>
       <ul className="mt-2">
         {items.map((i) => (
           <li key={i}>
@@ -575,7 +603,7 @@ function TocDrawer({
           </li>
         ))}
       </ul>
-    </div>
+    </DialogContent>
   );
 }
 
@@ -592,7 +620,10 @@ function ChapterNav({
     <nav className="mt-20 flex items-center justify-between border-t border-border pt-8 text-[13px] text-muted-foreground">
       {data.nav.prev !== undefined ? (
         <Button variant="ghost" asChild className="gap-1.5">
-          <Link to="/r/$id/$chapter" params={{ id, chapter: String(data.nav.prev) }}>
+          <Link
+            to="/r/$id/$chapter"
+            params={{ id, chapter: String(data.nav.prev) }}
+          >
             <ChevronLeft className="size-3.5" />
             上一章
           </Link>
@@ -605,7 +636,10 @@ function ChapterNav({
       </span>
       {data.nav.next !== undefined ? (
         <Button variant="ghost" asChild className="gap-1.5">
-          <Link to="/r/$id/$chapter" params={{ id, chapter: String(data.nav.next) }}>
+          <Link
+            to="/r/$id/$chapter"
+            params={{ id, chapter: String(data.nav.next) }}
+          >
             下一章
             <ChevronRight className="size-3.5" />
           </Link>
@@ -693,8 +727,7 @@ function Pair({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const heading = pair.type === "h2" || pair.type === "h3";
-  if (pair.type === "hr")
-    return <hr className="my-8 border-t border-border" />;
+  if (pair.type === "hr") return <hr className="my-8 border-t border-border" />;
 
   return (
     <div
@@ -703,9 +736,7 @@ function Pair({
       data-status={pair.status}
       className={cn("group", heading && "mt-12 mb-6")}
     >
-      {showEn && (
-        <RichHTML type={pair.type} html={pair.en} />
-      )}
+      {showEn && <RichHTML type={pair.type} html={pair.en} />}
       {pair.status === "done" && pair.zh && (
         <RichHTML
           type={pair.type}
@@ -737,9 +768,19 @@ function Pair({
   );
 }
 
-type RichHTMLTag = "p" | "h2" | "h3" | "blockquote" | "pre" | "div" | "ul" | "ol";
+type RichHTMLTag =
+  | "p"
+  | "h2"
+  | "h3"
+  | "blockquote"
+  | "pre"
+  | "div"
+  | "ul"
+  | "ol";
 
-function legacyTagFor(type: ChapterView["chapter"]["pairs"][number]["type"]): RichHTMLTag {
+function legacyTagFor(
+  type: ChapterView["chapter"]["pairs"][number]["type"],
+): RichHTMLTag {
   switch (type) {
     case "h2":
       return "h2";

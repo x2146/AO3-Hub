@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   DEFAULT_DEV_UPDATE_MANIFEST_URL,
   DEFAULT_UPDATE_MANIFEST_URL,
+  CONFIG_LIMITS,
 } from "@ao3hub/shared";
 import { Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 
 type LocalConfig = {
   server: {
@@ -80,19 +82,29 @@ const LLM_PROVIDER_DEFAULTS = {
     baseURL: "https://api.anthropic.com/v1",
     model: "claude-sonnet-4-5",
   },
-} satisfies Record<LocalConfig["llm"]["apiType"], { baseURL: string; model: string }>;
+} satisfies Record<
+  LocalConfig["llm"]["apiType"],
+  { baseURL: string; model: string }
+>;
 
 export function Settings() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({
-    queryKey: ["config"],
+  const { user, loading: authLoading } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const configKey = ["config", "admin", user?.id] as const;
+  const { data, isLoading, isError, error, refetch } = useQuery({
+    queryKey: configKey,
     queryFn: () => api.getConfig(),
+    enabled: isAdmin,
   });
 
   const [form, setForm] = useState<LocalConfig | null>(null);
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
   const [cookieDirty, setCookieDirty] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    msg: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!data) return;
@@ -144,7 +156,20 @@ export function Settings() {
 
   const save = useMutation({
     mutationFn: (body: any) => api.saveConfig(body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["config"] }),
+    onSuccess: async () => {
+      setApiKeyDirty(false);
+      setCookieDirty(false);
+      setForm((current) =>
+        current
+          ? {
+              ...current,
+              llm: { ...current.llm, apiKey: "" },
+              ao3: { ...current.ao3, cookie: "" },
+            }
+          : current,
+      );
+      await qc.invalidateQueries({ queryKey: configKey });
+    },
   });
 
   const test = useMutation({
@@ -156,8 +181,26 @@ export function Settings() {
           : { ok: false, msg: r.error ?? "失败" },
       );
     },
+    onError: (error) => {
+      setTestResult({
+        ok: false,
+        msg: error instanceof Error ? error.message : "测试失败",
+      });
+    },
   });
 
+  if (authLoading) return <p className="text-muted-foreground">确认权限…</p>;
+  if (!isAdmin) return <p className="text-destructive">需要管理员权限。</p>;
+  if (isError) {
+    return (
+      <div className="space-y-3">
+        <p className="text-destructive">载入配置失败：{error.message}</p>
+        <Button variant="outline" onClick={() => refetch()}>
+          重试
+        </Button>
+      </div>
+    );
+  }
   if (isLoading || !form)
     return <p className="text-muted-foreground">载入配置…</p>;
 
@@ -227,7 +270,8 @@ export function Settings() {
           Settings
         </h1>
         <p className="text-muted-foreground mt-3 text-[14px]">
-          配置服务监听、LLM provider、AO3 cookie、OTA manifest。所有数据存在服务端 data/config.json。
+          配置服务监听、LLM provider、AO3 cookie、OTA
+          manifest。所有数据存在服务端 data/config.json。
         </p>
       </header>
 
@@ -252,8 +296,8 @@ export function Settings() {
             <Input
               id="server-port"
               type="number"
-              min="1"
-              max="65535"
+              min={CONFIG_LIMITS.server.port.min}
+              max={CONFIG_LIMITS.server.port.max}
               value={form.server.port}
               onChange={(e) =>
                 setForm({
@@ -269,12 +313,16 @@ export function Settings() {
             <Input
               id="auth-session-ttl"
               type="number"
-              min="1"
+              min={CONFIG_LIMITS.auth.sessionTtlDays.min}
+              max={CONFIG_LIMITS.auth.sessionTtlDays.max}
               value={form.auth.sessionTtlDays}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  auth: { ...form.auth, sessionTtlDays: Number(e.target.value) },
+                  auth: {
+                    ...form.auth,
+                    sessionTtlDays: Number(e.target.value),
+                  },
                 })
               }
             />
@@ -283,12 +331,16 @@ export function Settings() {
             <Input
               id="stream-heartbeat"
               type="number"
-              min="1"
+              min={CONFIG_LIMITS.stream.heartbeatMs.min}
+              max={CONFIG_LIMITS.stream.heartbeatMs.max}
               value={form.stream.heartbeatMs}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  stream: { ...form.stream, heartbeatMs: Number(e.target.value) },
+                  stream: {
+                    ...form.stream,
+                    heartbeatMs: Number(e.target.value),
+                  },
                 })
               }
             />
@@ -299,12 +351,16 @@ export function Settings() {
             <Input
               id="import-min-html"
               type="number"
-              min="0"
+              min={CONFIG_LIMITS.import.minHtmlLength.min}
+              max={CONFIG_LIMITS.import.minHtmlLength.max}
               value={form.import.minHtmlLength}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  import: { ...form.import, minHtmlLength: Number(e.target.value) },
+                  import: {
+                    ...form.import,
+                    minHtmlLength: Number(e.target.value),
+                  },
                 })
               }
             />
@@ -313,7 +369,8 @@ export function Settings() {
             <Input
               id="ui-library-refetch"
               type="number"
-              min="1"
+              min={CONFIG_LIMITS.ui.libraryRefetchIntervalMs.min}
+              max={CONFIG_LIMITS.ui.libraryRefetchIntervalMs.max}
               value={form.ui.libraryRefetchIntervalMs}
               onChange={(e) =>
                 setForm({
@@ -344,7 +401,9 @@ export function Settings() {
                 type="button"
                 variant={form.llm.apiType === apiType ? "default" : "outline"}
                 size="sm"
-                onClick={() => setLlmAPIType(apiType as LocalConfig["llm"]["apiType"])}
+                onClick={() =>
+                  setLlmAPIType(apiType as LocalConfig["llm"]["apiType"])
+                }
               >
                 {label}
               </Button>
@@ -361,13 +420,16 @@ export function Settings() {
             }
             value={form.llm.baseURL}
             onChange={(e) =>
-              setForm({ ...form, llm: { ...form.llm, baseURL: e.target.value } })
+              setForm({
+                ...form,
+                llm: { ...form.llm, baseURL: e.target.value },
+              })
             }
           />
         </Field>
         <Field
           id="llm-apikey"
-          label={`API Key${data?.llm.hasApiKey ? "（已配置，留空保留）" : ""}`}
+          label={`API Key${data?.llm.hasApiKey ? "（已配置，不修改则保留）" : ""}`}
         >
           <Input
             id="llm-apikey"
@@ -376,7 +438,10 @@ export function Settings() {
             value={apiKeyDirty ? form.llm.apiKey : ""}
             onChange={(e) => {
               setApiKeyDirty(true);
-              setForm({ ...form, llm: { ...form.llm, apiKey: e.target.value } });
+              setForm({
+                ...form,
+                llm: { ...form.llm, apiKey: e.target.value },
+              });
             }}
           />
         </Field>
@@ -394,7 +459,9 @@ export function Settings() {
             <Input
               id="llm-temp"
               type="number"
-              step="0.1"
+              min={CONFIG_LIMITS.llm.temperature.min}
+              max={CONFIG_LIMITS.llm.temperature.max}
+              step={CONFIG_LIMITS.llm.temperature.step}
               value={form.llm.temperature}
               onChange={(e) =>
                 setForm({
@@ -408,7 +475,8 @@ export function Settings() {
             <Input
               id="llm-conc"
               type="number"
-              min="1"
+              min={CONFIG_LIMITS.llm.concurrency.min}
+              max={CONFIG_LIMITS.llm.concurrency.max}
               value={form.llm.concurrency}
               onChange={(e) =>
                 setForm({
@@ -422,12 +490,16 @@ export function Settings() {
             <Input
               id="llm-blocks"
               type="number"
-              min="1"
+              min={CONFIG_LIMITS.llm.blocksPerRequest.min}
+              max={CONFIG_LIMITS.llm.blocksPerRequest.max}
               value={form.llm.blocksPerRequest}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  llm: { ...form.llm, blocksPerRequest: Number(e.target.value) },
+                  llm: {
+                    ...form.llm,
+                    blocksPerRequest: Number(e.target.value),
+                  },
                 })
               }
             />
@@ -436,12 +508,16 @@ export function Settings() {
             <Input
               id="llm-max-tokens"
               type="number"
-              min="1"
+              min={CONFIG_LIMITS.llm.maxTokensPerRequest.min}
+              max={CONFIG_LIMITS.llm.maxTokensPerRequest.max}
               value={form.llm.maxTokensPerRequest}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  llm: { ...form.llm, maxTokensPerRequest: Number(e.target.value) },
+                  llm: {
+                    ...form.llm,
+                    maxTokensPerRequest: Number(e.target.value),
+                  },
                 })
               }
             />
@@ -452,7 +528,8 @@ export function Settings() {
             <Input
               id="llm-auto-retries"
               type="number"
-              min="0"
+              min={CONFIG_LIMITS.llm.maxAutoRetries.min}
+              max={CONFIG_LIMITS.llm.maxAutoRetries.max}
               value={form.llm.maxAutoRetries}
               onChange={(e) =>
                 setForm({
@@ -492,7 +569,10 @@ export function Settings() {
                 onClick={() =>
                   setForm({
                     ...form,
-                    llm: { ...form.llm, mode: mode as LocalConfig["llm"]["mode"] },
+                    llm: {
+                      ...form.llm,
+                      mode: mode as LocalConfig["llm"]["mode"],
+                    },
                   })
                 }
               >
@@ -508,7 +588,8 @@ export function Settings() {
           <Input
             id="llm-analysis-tokens"
             type="number"
-            min="1000"
+            min={CONFIG_LIMITS.llm.analysisMaxInputTokens.min}
+            max={CONFIG_LIMITS.llm.analysisMaxInputTokens.max}
             value={form.llm.analysisMaxInputTokens}
             onChange={(e) =>
               setForm({
@@ -552,18 +633,23 @@ export function Settings() {
         </h2>
         <Field
           id="ao3-cookie"
-          label={`Cookie${data?.ao3.hasCookie ? "（已配置，留空保留）" : ""}`}
+          label={`Cookie${data?.ao3.hasCookie ? "（已配置，不修改则保留）" : ""}`}
         >
           <Textarea
             id="ao3-cookie"
             rows={3}
             placeholder={
-              data?.ao3.hasCookie ? "已存在 — 输入新值替换" : "_otwarchive_session=…"
+              data?.ao3.hasCookie
+                ? "已存在 — 输入新值替换"
+                : "_otwarchive_session=…"
             }
             value={cookieDirty ? form.ao3.cookie : ""}
             onChange={(e) => {
               setCookieDirty(true);
-              setForm({ ...form, ao3: { ...form.ao3, cookie: e.target.value } });
+              setForm({
+                ...form,
+                ao3: { ...form.ao3, cookie: e.target.value },
+              });
             }}
           />
         </Field>
@@ -572,7 +658,10 @@ export function Settings() {
             id="ao3-ua"
             value={form.ao3.userAgent}
             onChange={(e) =>
-              setForm({ ...form, ao3: { ...form.ao3, userAgent: e.target.value } })
+              setForm({
+                ...form,
+                ao3: { ...form.ao3, userAgent: e.target.value },
+              })
             }
           />
         </Field>
@@ -587,12 +676,17 @@ export function Settings() {
             <Input
               id="reader-font"
               type="number"
-              min="1"
+              min={CONFIG_LIMITS.reader.defaultFont.min}
+              max={CONFIG_LIMITS.reader.defaultFont.max}
+              step={CONFIG_LIMITS.reader.defaultFont.step}
               value={form.reader.defaultFont}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  reader: { ...form.reader, defaultFont: Number(e.target.value) },
+                  reader: {
+                    ...form.reader,
+                    defaultFont: Number(e.target.value),
+                  },
                 })
               }
             />
@@ -601,13 +695,17 @@ export function Settings() {
             <Input
               id="reader-zh-scale"
               type="number"
-              min="0.1"
-              step="0.01"
+              min={CONFIG_LIMITS.reader.defaultZhScale.min}
+              max={CONFIG_LIMITS.reader.defaultZhScale.max}
+              step={CONFIG_LIMITS.reader.defaultZhScale.step}
               value={form.reader.defaultZhScale}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  reader: { ...form.reader, defaultZhScale: Number(e.target.value) },
+                  reader: {
+                    ...form.reader,
+                    defaultZhScale: Number(e.target.value),
+                  },
                 })
               }
             />
@@ -616,12 +714,17 @@ export function Settings() {
             <Input
               id="reader-measure"
               type="number"
-              min="1"
+              min={CONFIG_LIMITS.reader.defaultMeasure.min}
+              max={CONFIG_LIMITS.reader.defaultMeasure.max}
+              step={CONFIG_LIMITS.reader.defaultMeasure.step}
               value={form.reader.defaultMeasure}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  reader: { ...form.reader, defaultMeasure: Number(e.target.value) },
+                  reader: {
+                    ...form.reader,
+                    defaultMeasure: Number(e.target.value),
+                  },
                 })
               }
             />
@@ -653,7 +756,9 @@ export function Settings() {
                 <Button
                   key={channel}
                   type="button"
-                  variant={form.update.channel === channel ? "default" : "outline"}
+                  variant={
+                    form.update.channel === channel ? "default" : "outline"
+                  }
                   size="sm"
                   onClick={() => setUpdateChannel(channel)}
                 >
@@ -682,12 +787,16 @@ export function Settings() {
           <Input
             id="ota-restart-delay"
             type="number"
-            min="0"
+            min={CONFIG_LIMITS.update.restartDelayMs.min}
+            max={CONFIG_LIMITS.update.restartDelayMs.max}
             value={form.update.restartDelayMs}
             onChange={(e) =>
               setForm({
                 ...form,
-                update: { ...form.update, restartDelayMs: Number(e.target.value) },
+                update: {
+                  ...form.update,
+                  restartDelayMs: Number(e.target.value),
+                },
               })
             }
           />

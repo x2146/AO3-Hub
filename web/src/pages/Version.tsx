@@ -5,10 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import type { ApplyUpdateRequest } from "@ao3hub/shared";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 
 export function Version() {
   const qc = useQueryClient();
-  const { data, isLoading, refetch, isFetching } = useQuery({
+  const { user } = useAuth();
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["version"],
     queryFn: () => api.version(),
   });
@@ -18,7 +20,18 @@ export function Version() {
   });
 
   if (isLoading) return <p className="text-muted-foreground">读取版本…</p>;
-  if (!data) return null;
+  if (error || !data) {
+    return (
+      <div className="space-y-3">
+        <p className="text-destructive">
+          读取版本失败：{error instanceof Error ? error.message : "未知错误"}
+        </p>
+        <Button variant="outline" onClick={() => refetch()}>
+          重试
+        </Button>
+      </div>
+    );
+  }
 
   const latest = data.latest;
   return (
@@ -58,7 +71,9 @@ export function Version() {
             disabled={isFetching}
             className="gap-1.5"
           >
-            <RefreshCw className={isFetching ? "size-3.5 animate-spin" : "size-3.5"} />
+            <RefreshCw
+              className={isFetching ? "size-3.5 animate-spin" : "size-3.5"}
+            />
             {isFetching ? "检查中…" : "重新检查"}
           </Button>
         </div>
@@ -93,24 +108,26 @@ export function Version() {
                 发布于 {latest.publishedAt}
               </p>
             )}
-            <div className="flex gap-2">
-              <Button
-                variant="default"
-                onClick={() => apply.mutate({})}
-                disabled={!latest.hasUpdate || apply.isPending}
-              >
-                {apply.isPending ? "下载安装中…" : "下载并安装"}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() =>
-                  apply.mutate({ force: true, forceVersion: latest.version })
-                }
-                disabled={apply.isPending}
-              >
-                强制拉取此版本
-              </Button>
-            </div>
+            {user?.role === "admin" && (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="default"
+                  onClick={() => apply.mutate({})}
+                  disabled={!latest.hasUpdate || apply.isPending}
+                >
+                  {apply.isPending ? "下载安装中…" : "下载并安装"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    apply.mutate({ force: true, forceVersion: latest.version })
+                  }
+                  disabled={apply.isPending}
+                >
+                  强制拉取此版本
+                </Button>
+              </div>
+            )}
             {apply.data && (
               <p
                 className={`text-[12px] ${
@@ -118,6 +135,13 @@ export function Version() {
                 }`}
               >
                 {apply.data.message}
+              </p>
+            )}
+            {apply.isError && (
+              <p className="text-destructive text-[12px]">
+                {apply.error instanceof Error
+                  ? apply.error.message
+                  : "更新失败"}
               </p>
             )}
           </div>

@@ -27,6 +27,8 @@ type App struct {
 	ctx        context.Context
 	inflightMu sync.RWMutex
 	inflight   map[string]map[string]bool
+	loginOnce  sync.Once
+	loginGuard *loginAttemptGuard
 }
 
 func New() (*App, error) {
@@ -165,6 +167,12 @@ func (a *App) mountAuth(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "参数无效")
 			return
 		}
+		finishAttempt, err := a.authLoginGuard().Begin(r.Context(), loginAttemptKey(r, "__setup__"))
+		if err != nil {
+			writeLoginGuardError(w, err)
+			return
+		}
+		defer finishAttempt(true)
 		hash, err := hashPassword(body.Password)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -194,15 +202,28 @@ func (a *App) mountAuth(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "用户名或密码无效")
 			return
 		}
+		finishAttempt, err := a.authLoginGuard().Begin(r.Context(), loginAttemptKey(r, body.Username))
+		if err != nil {
+			writeLoginGuardError(w, err)
+			return
+		}
+		success := false
+		defer func() { finishAttempt(success) }()
 		record, err := a.store.FindUserByUsername(body.Username)
 		if err != nil {
+			success = true
 			writeError(w, http.StatusInternalServerError, "数据存储不可用")
 			return
 		}
-		if record == nil || !verifyPassword(body.Password, record.PasswordHash) {
+		passwordHash := dummyPasswordHash
+		if record != nil {
+			passwordHash = record.PasswordHash
+		}
+		if !verifyPassword(body.Password, passwordHash) || record == nil {
 			writeError(w, http.StatusUnauthorized, "用户名或密码错误")
 			return
 		}
+		success = true
 		if err := a.startSession(w, r, record.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -484,12 +505,8 @@ func (a *App) handleTranslationStatus(w http.ResponseWriter, r *http.Request) {
 
 	user := currentUser(r)
 	if user == nil {
-		for stage, sample := range stats.Samples {
-			sample.SystemPrompt = ""
-			sample.UserPayload = truncateString(sample.UserPayload, 256)
-			sample.ResponsePreview = truncateString(sample.ResponsePreview, 256)
-			stats.Samples[stage] = sample
-		}
+		stats.Events = []LLMCallEvent{}
+		stats.Samples = map[LLMCallStage]RequestSample{}
 	}
 
 	writeJSON(w, http.StatusOK, TranslationStatusView{
@@ -804,15 +821,21 @@ func mergeConfig(cfg *Config, raw map[string]json.RawMessage) {
 		var patch map[string]json.RawMessage
 		_ = json.Unmarshal(v, &patch)
 		_ = json.Unmarshal(v, &cfg.LLM)
-		if cfg.LLM.APIKey == "" || strings.Contains(cfg.LLM.APIKey, "…") {
+		_, hasAPIKeyPatch := patch["apiKey"]
+		if !hasAPIKeyPatch ||
+			(currentKey != "" && cfg.LLM.APIKey == maskSecret(currentKey)) {
 			cfg.LLM.APIKey = currentKey
 		}
 		normalizeLLMProviderDefaults(&cfg.LLM, previous, patch)
 	}
 	if v, ok := raw["ao3"]; ok {
 		currentCookie := cfg.AO3.Cookie
+		var patch map[string]json.RawMessage
+		_ = json.Unmarshal(v, &patch)
 		_ = json.Unmarshal(v, &cfg.AO3)
-		if cfg.AO3.Cookie == "***" {
+		_, hasCookiePatch := patch["cookie"]
+		if !hasCookiePatch ||
+			(currentCookie != "" && cfg.AO3.Cookie == "***") {
 			cfg.AO3.Cookie = currentCookie
 		}
 	}

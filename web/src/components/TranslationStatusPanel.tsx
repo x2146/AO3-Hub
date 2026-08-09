@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -26,6 +26,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { api, subscribeStream } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -35,6 +41,7 @@ type Props = {
   storyID: string;
   open: boolean;
   onClose: () => void;
+  returnFocusRef?: RefObject<HTMLButtonElement>;
 };
 
 const STAGE_COLOR: Record<LlmCallStage, string> = {
@@ -44,7 +51,12 @@ const STAGE_COLOR: Record<LlmCallStage, string> = {
   "translate-batch": "bg-success/15 text-success",
 };
 
-export function TranslationStatusPanel({ storyID, open, onClose }: Props) {
+export function TranslationStatusPanel({
+  storyID,
+  open,
+  onClose,
+  returnFocusRef,
+}: Props) {
   const qc = useQueryClient();
   const { user } = useAuth();
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -79,35 +91,25 @@ export function TranslationStatusPanel({ storyID, open, onClose }: Props) {
     },
   });
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    if (open) window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div
-        className="absolute inset-0 bg-black/30 backdrop-blur-[2px]"
-        onClick={onClose}
-        aria-hidden
-      />
-      <aside
-        role="dialog"
-        aria-label="翻译状态"
-        className="relative h-full w-full max-w-[640px] overflow-y-auto border-l border-border bg-card shadow-overlay surface"
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent
+        hideClose
+        aria-describedby={undefined}
+        onCloseAutoFocus={(event) => {
+          if (!returnFocusRef?.current) return;
+          event.preventDefault();
+          returnFocusRef.current.focus();
+        }}
+        className="left-auto right-0 top-0 h-svh w-full max-w-[640px] translate-x-0 translate-y-0 gap-0 overflow-y-auto rounded-none border-y-0 border-r-0 p-0"
       >
         <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-card/95 backdrop-blur px-5 py-3">
           <div className="flex items-center gap-2 min-w-0">
             <Activity className="size-4 text-accent shrink-0" />
             <div className="min-w-0">
-              <p className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <DialogTitle className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">
                 翻译状态
-              </p>
+              </DialogTitle>
               <p className="text-[11px] text-muted-foreground font-mono truncate">
                 {storyID}
                 {data?.mode === "refined" && (
@@ -132,15 +134,16 @@ export function TranslationStatusPanel({ storyID, open, onClose }: Props) {
               />
               {autoRefresh ? "Live" : "Paused"}
             </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={onClose}
-              aria-label="关闭"
-            >
-              <X className="size-3.5" />
-            </Button>
+            <DialogClose asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                aria-label="关闭"
+              >
+                <X className="size-3.5" />
+              </Button>
+            </DialogClose>
           </div>
         </header>
 
@@ -151,6 +154,12 @@ export function TranslationStatusPanel({ storyID, open, onClose }: Props) {
           {error && (
             <p className="text-destructive text-[13px]">
               加载失败：{(error as Error).message}
+            </p>
+          )}
+          {(resetStats.isError || reanalyze.isError) && (
+            <p role="alert" className="mb-3 text-destructive text-[13px]">
+              操作失败：
+              {(resetStats.error ?? reanalyze.error)?.message ?? "未知错误"}
             </p>
           )}
           {data && (
@@ -204,8 +213,8 @@ export function TranslationStatusPanel({ storyID, open, onClose }: Props) {
             </Tabs>
           )}
         </div>
-      </aside>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -361,11 +370,15 @@ function StageRow({
   return (
     <div className="rounded-control border border-border px-3 py-2 text-[12px]">
       <div className="flex items-center justify-between">
-        <Badge variant="outline" className={cn("font-mono", STAGE_COLOR[stage])}>
+        <Badge
+          variant="outline"
+          className={cn("font-mono", STAGE_COLOR[stage])}
+        >
           {STAGE_LABEL[stage]}
         </Badge>
         <span className="text-muted-foreground tabular-nums font-mono">
-          {stats.calls} 次 · {successRate}% · {stats.totalTokens.toLocaleString()} tok
+          {stats.calls} 次 · {successRate}% ·{" "}
+          {stats.totalTokens.toLocaleString()} tok
         </span>
       </div>
       {(stats.failures > 0 || stats.retries > 0) && (
@@ -532,7 +545,10 @@ function SampleCard({
     <div className="rounded-control border border-border overflow-hidden">
       <div className="flex items-center justify-between bg-secondary/40 px-3 py-2 text-[12px]">
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className={cn("font-mono", STAGE_COLOR[stage])}>
+          <Badge
+            variant="outline"
+            className={cn("font-mono", STAGE_COLOR[stage])}
+          >
             {STAGE_LABEL[stage]}
           </Badge>
           {sample.chapterIndex !== undefined && (
@@ -551,7 +567,13 @@ function SampleCard({
         </span>
       </div>
       <div className="px-3 py-3 space-y-3">
-        <details className="group" open={showSystem} onToggle={(e) => setShowSystem((e.currentTarget as HTMLDetailsElement).open)}>
+        <details
+          className="group"
+          open={showSystem}
+          onToggle={(e) =>
+            setShowSystem((e.currentTarget as HTMLDetailsElement).open)
+          }
+        >
           <summary className="flex cursor-pointer items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             <span>System Prompt</span>
             <ChevronDown
@@ -760,9 +782,11 @@ export function TranslationStatusButton({
   label?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   return (
     <>
       <Button
+        ref={triggerRef}
         variant="ghost"
         size="sm"
         className={cn("gap-1", className)}
@@ -780,6 +804,7 @@ export function TranslationStatusButton({
         storyID={storyID}
         open={open}
         onClose={() => setOpen(false)}
+        returnFocusRef={triggerRef}
       />
     </>
   );

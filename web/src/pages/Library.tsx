@@ -25,9 +25,10 @@ export function Library() {
     queryKey: ["stories"],
     queryFn: () => api.listStories(),
     refetchInterval: (q) => {
-      const stories = (q.state.data as StoriesListResponse | undefined)?.stories;
+      const stories = (q.state.data as StoriesListResponse | undefined)
+        ?.stories;
       const inFlight = stories?.some((s) => isInFlight(s.status));
-      return inFlight ? config?.ui.libraryRefetchIntervalMs ?? 3000 : false;
+      return inFlight ? (config?.ui.libraryRefetchIntervalMs ?? 3000) : false;
     },
   });
 
@@ -46,9 +47,7 @@ export function Library() {
   }
   if (error) {
     return (
-      <p className="text-destructive">
-        加载失败：{(error as Error).message}
-      </p>
+      <p className="text-destructive">加载失败：{(error as Error).message}</p>
     );
   }
 
@@ -61,7 +60,8 @@ export function Library() {
             AO3<span className="text-muted-foreground">.</span>Hub
           </h1>
           <p className="text-muted-foreground mt-3 max-w-[560px] text-[15px] leading-relaxed">
-            个人 AO3 翻译 + 阅读 CMS。贴 work URL，或者直接拖 AO3 导出的 HTML 进来。
+            个人 AO3 翻译 + 阅读 CMS。贴 work URL，或者直接拖 AO3 导出的 HTML
+            进来。
           </p>
         </div>
         <div className="text-right">
@@ -73,6 +73,11 @@ export function Library() {
           </p>
         </div>
       </header>
+      {(del.isError || retry.isError) && (
+        <p role="alert" className="text-destructive text-[13px]">
+          操作失败：{(del.error ?? retry.error)?.message ?? "未知错误"}
+        </p>
+      )}
 
       {stories.length === 0 ? (
         <div className="py-20 text-center">
@@ -83,7 +88,9 @@ export function Library() {
             </Button>
           ) : (
             <Button variant="outline" size="lg" asChild className="mt-5">
-              <Link to="/login" search={{ redirect: undefined }}>登录后导入</Link>
+              <Link to="/login" search={{ redirect: undefined }}>
+                登录后导入
+              </Link>
             </Button>
           )}
         </div>
@@ -146,6 +153,7 @@ export function Library() {
                         variant="ghost"
                         size="icon"
                         className="opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
+                        disabled={del.isPending && del.variables === s.id}
                         onClick={() => {
                           if (confirm(`删除「${s.title}」？`)) del.mutate(s.id);
                         }}
