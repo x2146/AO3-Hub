@@ -516,6 +516,7 @@ export const TranslationContext = z.object({
   chapterSummaries: z.array(ChapterSummary).default([]),
   generatedAt: z.string().optional(),
   chapterCount: z.number().int().nonnegative().optional(),
+  analysisFingerprint: z.string().optional(),
 });
 export type TranslationContext = z.infer<typeof TranslationContext>;
 

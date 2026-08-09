@@ -2,14 +2,26 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
+	"io"
+	"net"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 )
+
+const (
+	analysisCacheSchemaVersion  = 1
+	analysisPromptVersion       = 1
+	analysisResultSchemaVersion = 1
+)
+
+var errAnalysisInputsChanged = errors.New("分析期间故事内容已变更")
 
 const analysisSystemPromptFull = `你是 AO3 同人文资深读者，正在为后续中文翻译做预读分析。
 读完整篇英文同人后，仅输出一个 JSON 对象，schema 如下：
@@ -170,10 +182,44 @@ func stripJSONFences(content string) string {
 	return s
 }
 
+func decodeAnalysisJSON(content string, dst any, label string) error {
+	dec := json.NewDecoder(strings.NewReader(stripJSONFences(content)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return fmt.Errorf("%s非有效 JSON: %w", label, err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("%s包含多个 JSON 值", label)
+		}
+		return fmt.Errorf("%s包含多余内容: %w", label, err)
+	}
+	return nil
+}
+
 func parseAnalysisFullResponse(content string) (TranslationContext, error) {
-	var ctx TranslationContext
-	if err := json.Unmarshal([]byte(stripJSONFences(content)), &ctx); err != nil {
-		return TranslationContext{}, fmt.Errorf("分析结果非 JSON: %w", err)
+	var raw struct {
+		Summary          string            `json:"summary"`
+		Tone             string            `json:"tone"`
+		Ships            []string          `json:"ships"`
+		Characters       []Character       `json:"characters"`
+		Glossary         map[string]string `json:"glossary"`
+		ChapterSummaries []ChapterSummary  `json:"chapterSummaries"`
+	}
+	if err := decodeAnalysisJSON(content, &raw, "分析结果"); err != nil {
+		return TranslationContext{}, err
+	}
+	raw.Summary = strings.TrimSpace(raw.Summary)
+	if raw.Summary == "" {
+		return TranslationContext{}, errors.New("分析结果缺少全文摘要")
+	}
+	ctx := TranslationContext{
+		Summary:          raw.Summary,
+		Tone:             raw.Tone,
+		Ships:            raw.Ships,
+		Characters:       raw.Characters,
+		Glossary:         raw.Glossary,
+		ChapterSummaries: raw.ChapterSummaries,
 	}
 	if ctx.Glossary == nil {
 		ctx.Glossary = map[string]string{}
@@ -198,8 +244,12 @@ func parseChapterPartial(content string, index int, title string) (chapterPartia
 		Characters []Character       `json:"characters"`
 		Glossary   map[string]string `json:"glossary"`
 	}
-	if err := json.Unmarshal([]byte(stripJSONFences(content)), &raw); err != nil {
-		return chapterPartial{}, fmt.Errorf("分章分析结果非 JSON: %w", err)
+	if err := decodeAnalysisJSON(content, &raw, "分章分析结果"); err != nil {
+		return chapterPartial{}, err
+	}
+	raw.Summary = strings.TrimSpace(raw.Summary)
+	if raw.Summary == "" {
+		return chapterPartial{}, fmt.Errorf("章 %d 分析结果缺少摘要", index)
 	}
 	return chapterPartial{
 		Index:      index,
@@ -228,7 +278,7 @@ func analyzeFullText(ctx context.Context, cfg Config, meta Meta, original Chapte
 	if err != nil {
 		return TranslationContext{}, err
 	}
-	if err := alignChapterSummaries(&out, original); err != nil {
+	if err := validateAnalysisContext(&out, original); err != nil {
 		return TranslationContext{}, err
 	}
 	return out, nil
@@ -320,7 +370,7 @@ func analyzeByChapters(ctx context.Context, cfg Config, meta Meta, original Chap
 	if err != nil {
 		return TranslationContext{}, err
 	}
-	if err := alignChapterSummaries(&out, original); err != nil {
+	if err := validateAnalysisContext(&out, original); err != nil {
 		return TranslationContext{}, err
 	}
 	return out, nil
@@ -328,27 +378,118 @@ func analyzeByChapters(ctx context.Context, cfg Config, meta Meta, original Chap
 
 func alignChapterSummaries(ctx *TranslationContext, original ChapterFile) error {
 	want := len(original.Chapters)
-	got := len(ctx.ChapterSummaries)
-	if got == want {
-		return nil
+	if want == 0 {
+		return errors.New("原文章节为空")
 	}
-	if got < want {
-		byIndex := map[int]ChapterSummary{}
-		for _, s := range ctx.ChapterSummaries {
-			byIndex[s.Index] = s
-		}
-		next := make([]ChapterSummary, 0, want)
-		for i := 0; i < want; i++ {
-			if s, ok := byIndex[i]; ok {
-				next = append(next, s)
-				continue
-			}
-			next = append(next, ChapterSummary{Index: i, Title: original.Chapters[i].Title})
-		}
-		ctx.ChapterSummaries = next
-		return nil
+	if got := len(ctx.ChapterSummaries); got != want {
+		return fmt.Errorf("章节摘要数量不匹配: 期望 %d，实际 %d", want, got)
 	}
-	return fmt.Errorf("章节摘要数量超出原文: 期望 %d，实际 %d", want, got)
+
+	expected := make(map[int]int, want)
+	for position, chapter := range original.Chapters {
+		if _, exists := expected[chapter.Index]; exists {
+			return fmt.Errorf("原文章节索引重复: %d", chapter.Index)
+		}
+		expected[chapter.Index] = position
+	}
+	ordered := make([]ChapterSummary, want)
+	seen := make(map[int]struct{}, want)
+	for _, summary := range ctx.ChapterSummaries {
+		position, ok := expected[summary.Index]
+		if !ok {
+			return fmt.Errorf("章节摘要索引越界: %d", summary.Index)
+		}
+		if _, exists := seen[summary.Index]; exists {
+			return fmt.Errorf("章节摘要索引重复: %d", summary.Index)
+		}
+		summary.Summary = strings.TrimSpace(summary.Summary)
+		if summary.Summary == "" {
+			return fmt.Errorf("章节 %d 摘要为空", summary.Index)
+		}
+		summary.Title = original.Chapters[position].Title
+		ordered[position] = summary
+		seen[summary.Index] = struct{}{}
+	}
+	ctx.ChapterSummaries = ordered
+	return nil
+}
+
+func validateAnalysisContext(ctx *TranslationContext, original ChapterFile) error {
+	ctx.Summary = strings.TrimSpace(ctx.Summary)
+	if ctx.Summary == "" {
+		return errors.New("分析结果缺少全文摘要")
+	}
+	return alignChapterSummaries(ctx, original)
+}
+
+func normalizedAnalysisBaseURL(raw string) (string, error) {
+	normalized, err := llmEndpoint(raw, "")
+	if err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(normalized)
+	if err != nil {
+		return "", err
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	hostname := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+	if (parsed.Scheme == "https" && port == "443") || (parsed.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	if port != "" {
+		parsed.Host = net.JoinHostPort(hostname, port)
+	} else if strings.Contains(hostname, ":") {
+		parsed.Host = "[" + hostname + "]"
+	} else {
+		parsed.Host = hostname
+	}
+	return parsed.String(), nil
+}
+
+func analysisFingerprint(meta Meta, original ChapterFile, cfg Config) (string, error) {
+	baseURL, err := normalizedAnalysisBaseURL(cfg.LLM.BaseURL)
+	if err != nil {
+		return "", fmt.Errorf("规范化 LLM baseURL: %w", err)
+	}
+	threshold := cfg.LLM.AnalysisMaxInputTokens
+	if threshold <= 0 {
+		threshold = 60000
+	}
+	payload := struct {
+		CacheSchemaVersion  int            `json:"cacheSchemaVersion"`
+		PromptVersion       int            `json:"promptVersion"`
+		ResultSchemaVersion int            `json:"resultSchemaVersion"`
+		Prompts             [3]string      `json:"prompts"`
+		Meta                map[string]any `json:"meta"`
+		Original            ChapterFile    `json:"original"`
+		Provider            struct {
+			APIType             string  `json:"apiType"`
+			BaseURL             string  `json:"baseURL"`
+			Model               string  `json:"model"`
+			Temperature         float64 `json:"temperature"`
+			MaxOutputTokens     int     `json:"maxOutputTokens"`
+			AnalysisInputTokens int     `json:"analysisInputTokens"`
+		} `json:"provider"`
+	}{
+		CacheSchemaVersion:  analysisCacheSchemaVersion,
+		PromptVersion:       analysisPromptVersion,
+		ResultSchemaVersion: analysisResultSchemaVersion,
+		Prompts:             [3]string{analysisSystemPromptFull, analysisSystemPromptChapter, analysisSystemPromptMerge},
+		Meta:                metaSeed(meta),
+		Original:            original,
+	}
+	payload.Provider.APIType = normalizeLLMAPIType(cfg.LLM.APIType)
+	payload.Provider.BaseURL = baseURL
+	payload.Provider.Model = cfg.LLM.Model
+	payload.Provider.Temperature = cfg.LLM.Temperature
+	payload.Provider.MaxOutputTokens = cfg.LLM.MaxTokensPerRequest
+	payload.Provider.AnalysisInputTokens = threshold
+	digest := sha256.New()
+	if err := json.NewEncoder(digest).Encode(payload); err != nil {
+		return "", fmt.Errorf("编码分析缓存指纹: %w", err)
+	}
+	return fmt.Sprintf("v%d:%x", analysisCacheSchemaVersion, digest.Sum(nil)), nil
 }
 
 func estimateAnalysisInputTokens(meta Meta, original ChapterFile) int {
@@ -377,8 +518,18 @@ func estimateAnalysisInputTokens(meta Meta, original ChapterFile) int {
 }
 
 func (a *App) runAnalysis(ctx context.Context, storyID string, meta Meta, original ChapterFile, cfg Config, tracker *statsTracker) (*TranslationContext, error) {
-	existing, _ := a.store.LoadContext(storyID)
-	if existing != nil && existing.ChapterCount == len(original.Chapters) && len(existing.ChapterSummaries) == len(original.Chapters) {
+	fingerprint, err := analysisFingerprint(meta, original, cfg)
+	if err != nil {
+		return nil, err
+	}
+	existing, err := a.store.LoadContext(storyID)
+	if err != nil {
+		return nil, fmt.Errorf("读取分析缓存: %w", err)
+	}
+	if existing != nil && existing.AnalysisFingerprint == fingerprint {
+		if err := validateAnalysisContext(existing, original); err != nil {
+			return nil, fmt.Errorf("分析缓存无效: %w", err)
+		}
 		return existing, nil
 	}
 
@@ -401,21 +552,43 @@ func (a *App) runAnalysis(ctx context.Context, storyID string, meta Meta, origin
 	tokens := estimateAnalysisInputTokens(meta, original)
 
 	var result TranslationContext
-	var err error
+	var analysisErr error
 	if tokens <= threshold {
-		result, err = analyzeFullText(ctx, cfg, meta, original, tracker)
-		if err != nil {
-			result, err = analyzeByChapters(ctx, cfg, meta, original, tracker)
+		result, analysisErr = analyzeFullText(ctx, cfg, meta, original, tracker)
+		if analysisErr != nil {
+			result, analysisErr = analyzeByChapters(ctx, cfg, meta, original, tracker)
 		}
 	} else {
-		result, err = analyzeByChapters(ctx, cfg, meta, original, tracker)
+		result, analysisErr = analyzeByChapters(ctx, cfg, meta, original, tracker)
 	}
+	if analysisErr != nil {
+		return nil, analysisErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	currentMeta, err := a.store.LoadMeta(storyID)
+	if err != nil {
+		return nil, fmt.Errorf("保存分析缓存前读取元数据: %w", err)
+	}
+	currentOriginal, err := a.store.LoadOriginal(storyID)
+	if err != nil {
+		return nil, fmt.Errorf("保存分析缓存前读取原文: %w", err)
+	}
+	if currentMeta == nil || currentOriginal == nil {
+		return nil, errAnalysisInputsChanged
+	}
+	currentFingerprint, err := analysisFingerprint(*currentMeta, *currentOriginal, cfg)
 	if err != nil {
 		return nil, err
+	}
+	if currentFingerprint != fingerprint {
+		return nil, errAnalysisInputsChanged
 	}
 
 	result.GeneratedAt = nowISO()
 	result.ChapterCount = len(original.Chapters)
+	result.AnalysisFingerprint = fingerprint
 	if err := a.store.SaveContext(storyID, result); err != nil {
 		return nil, err
 	}

@@ -329,14 +329,15 @@ type ChapterSummary struct {
 }
 
 type TranslationContext struct {
-	Summary          string            `json:"summary,omitempty"`
-	Tone             string            `json:"tone,omitempty"`
-	Ships            []string          `json:"ships"`
-	Characters       []Character       `json:"characters"`
-	Glossary         map[string]string `json:"glossary"`
-	ChapterSummaries []ChapterSummary  `json:"chapterSummaries"`
-	GeneratedAt      string            `json:"generatedAt,omitempty"`
-	ChapterCount     int               `json:"chapterCount,omitempty"`
+	Summary             string            `json:"summary,omitempty"`
+	Tone                string            `json:"tone,omitempty"`
+	Ships               []string          `json:"ships"`
+	Characters          []Character       `json:"characters"`
+	Glossary            map[string]string `json:"glossary"`
+	ChapterSummaries    []ChapterSummary  `json:"chapterSummaries"`
+	GeneratedAt         string            `json:"generatedAt,omitempty"`
+	ChapterCount        int               `json:"chapterCount,omitempty"`
+	AnalysisFingerprint string            `json:"analysisFingerprint,omitempty"`
 }
 
 type StreamEvent struct {
