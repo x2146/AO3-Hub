@@ -60,15 +60,15 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     <div className="min-h-svh">
       {!isReader && (
         <header className="sticky top-0 z-40 surface border-b border-border">
-          <div className="mx-auto flex max-w-[1180px] items-center gap-6 px-5 py-3">
+          <div className="mx-auto flex max-w-[1180px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:flex-nowrap sm:gap-6 sm:px-5">
             <Link
               to="/"
-              className="flex items-baseline gap-1 font-semibold tracking-tight"
+              className="flex shrink-0 items-baseline gap-1 font-semibold tracking-tight"
             >
               <span className="text-[20px]">AO3</span>
               <span className="text-muted-foreground text-[14px]">Hub</span>
             </Link>
-            <nav className="flex items-center gap-1 text-[13px] font-medium">
+            <nav className="order-last -mx-1 flex w-full min-w-0 items-center gap-1 overflow-x-auto pb-1 text-[13px] font-medium sm:order-none sm:mx-0 sm:w-auto sm:overflow-visible sm:pb-0">
               {nav.map((n) => {
                 const active = location.pathname === n.to;
                 return (
@@ -87,7 +87,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 );
               })}
             </nav>
-            <div className="ml-auto flex items-center gap-1">
+            <div className="ml-auto flex min-w-0 items-center gap-1">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -97,7 +97,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     aria-label="切换主题"
                   >
                     <ThemeIcon className="size-3.5" />
-                    <span>{themeLabel[theme]}</span>
+                    <span className="hidden sm:inline">{themeLabel[theme]}</span>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[8rem]">
@@ -138,7 +138,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                       aria-label="账号"
                     >
                       <UserCircle className="size-3.5" />
-                      <span className="max-w-[120px] truncate">{user.username}</span>
+                      <span className="max-w-[76px] truncate sm:max-w-[120px]">
+                        {user.username}
+                      </span>
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-[10rem]">

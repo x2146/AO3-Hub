@@ -100,7 +100,7 @@ export function Library() {
             return (
               <li key={s.id}>
                 {i > 0 && <Separator />}
-                <div className="group grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-5 py-6 transition-transform hover:translate-x-1">
+                <div className="group grid grid-cols-[32px_minmax(0,1fr)] items-start gap-x-3 gap-y-3 py-5 transition-transform sm:grid-cols-[44px_minmax(0,1fr)_auto] sm:items-center sm:gap-5 sm:py-6 sm:hover:translate-x-1">
                   <span className="text-muted-foreground font-mono text-[12px]">
                     {String(i + 1).padStart(2, "0")}
                   </span>
@@ -123,8 +123,8 @@ export function Library() {
                       </div>
                     )}
                   </Link>
-                  <div className="flex items-center gap-3">
-                    <span className="text-muted-foreground text-[12px] tabular-nums">
+                  <div className="col-start-2 flex min-w-0 flex-wrap items-center gap-2 sm:col-start-auto sm:flex-nowrap sm:justify-end sm:gap-3">
+                    <span className="text-muted-foreground shrink-0 text-[12px] tabular-nums">
                       {s.chapterCount} ch · {s.wordCount.toLocaleString()} w
                     </span>
                     <StatusPill status={s.status} />
@@ -145,7 +145,7 @@ export function Library() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="opacity-0 transition-opacity group-hover:opacity-100"
+                        className="opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
                         onClick={() => {
                           if (confirm(`删除「${s.title}」？`)) del.mutate(s.id);
                         }}
