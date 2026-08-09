@@ -31,6 +31,7 @@ var (
 	errCannotModifySelf = errors.New("不能修改自己的角色")
 	errCannotDeleteSelf = errors.New("不能删除自己")
 	errLastAdmin        = errors.New("至少保留一个 admin")
+	errStoryNotFound    = errors.New("story not found")
 )
 
 func NewStore(dir string) (*Store, error) {
@@ -352,6 +353,86 @@ func (s *Store) UpdateProgress(id string, update func(Progress) Progress) error 
 	return s.writeJSON(path, normalizeProgress(update(progress)))
 }
 
+func (s *Store) FinishStory(id string, phase ProgressPhase, status StoryStatus, message string) error {
+	return s.setStoryState(id, phase, status, message, true)
+}
+
+func (s *Store) QueueStory(id string) error {
+	return s.setStoryState(id, PhaseQueued, StatusQueued, "", false)
+}
+
+func (s *Store) setStoryState(id string, phase ProgressPhase, status StoryStatus, message string, finished bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	storyPath, err := s.storyPath(id)
+	if err != nil {
+		return err
+	}
+	if info, err := os.Stat(storyPath); err != nil || !info.IsDir() {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return errStoryNotFound
+	}
+
+	progressPath, err := s.storyPath(id, "progress.json")
+	if err != nil {
+		return err
+	}
+	var previousProgress Progress
+	ok, err := s.readJSON(progressPath, &previousProgress)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errStoryNotFound
+	}
+	previousProgress = normalizeProgress(previousProgress)
+	nextProgress := previousProgress
+	nextProgress.Phase = phase
+	nextProgress.CurrentChapter = nil
+	nextProgress.InflightBlocks = 0
+	nextProgress.Message = message
+	if finished {
+		nextProgress.FinishedAt = nowISO()
+	} else {
+		nextProgress.FinishedAt = ""
+	}
+
+	indexPath := s.path("index.json")
+	var previousIndex IndexFile
+	if _, err := s.readJSON(indexPath, &previousIndex); err != nil {
+		return err
+	}
+	nextIndex := previousIndex
+	nextIndex.Stories = append([]IndexEntry(nil), previousIndex.Stories...)
+	found := false
+	for i := range nextIndex.Stories {
+		if nextIndex.Stories[i].ID != id {
+			continue
+		}
+		nextIndex.Stories[i].Status = status
+		nextIndex.Stories[i].UpdatedAt = nowISO()
+		found = true
+		break
+	}
+	if !found {
+		return errStoryNotFound
+	}
+
+	if err := s.writeJSON(progressPath, normalizeProgress(nextProgress)); err != nil {
+		return err
+	}
+	if err := s.writeJSON(indexPath, nextIndex); err != nil {
+		if rollbackErr := s.writeJSON(progressPath, previousProgress); rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("rollback progress: %w", rollbackErr))
+		}
+		return err
+	}
+	return nil
+}
+
 func (s *Store) SaveSource(id string, html string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -443,6 +524,37 @@ func (s *Store) RemoveStory(id string) error {
 		return err
 	}
 	return os.RemoveAll(path)
+}
+
+func (s *Store) RemoveStoryAndIndex(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	storyPath, err := s.storyPath(id)
+	if err != nil {
+		return err
+	}
+
+	indexPath := s.path("index.json")
+	var previous IndexFile
+	if _, err := s.readJSON(indexPath, &previous); err != nil {
+		return err
+	}
+	next := IndexFile{Stories: make([]IndexEntry, 0, len(previous.Stories))}
+	for _, entry := range previous.Stories {
+		if entry.ID != id {
+			next.Stories = append(next.Stories, entry)
+		}
+	}
+	if err := s.writeJSON(indexPath, next); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(storyPath); err != nil {
+		if rollbackErr := s.writeJSON(indexPath, previous); rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("rollback index: %w", rollbackErr))
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Store) loadUsersLocked() (UsersFile, error) {

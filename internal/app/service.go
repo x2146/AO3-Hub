@@ -1,10 +1,17 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 )
+
+type storySource struct {
+	URL         string
+	DownloadURL string
+	WorkID      string
+}
 
 func indexEntryFor(meta Meta, status StoryStatus) IndexEntry {
 	now := nowISO()
@@ -21,15 +28,15 @@ func indexEntryFor(meta Meta, status StoryStatus) IndexEntry {
 	}
 }
 
-func (a *App) persistParsed(html string, source struct {
-	URL         string
-	DownloadURL string
-	WorkID      string
-}, mode TranslationMode) (Meta, ChapterFile, bool, error) {
+func (a *App) persistParsed(html string, source storySource, mode TranslationMode) (Meta, ChapterFile, bool, error) {
 	parsed, err := parseAO3HTML(html)
 	if err != nil {
 		return Meta{}, ChapterFile{}, false, err
 	}
+	return a.persistParseResult(html, parsed, source, mode)
+}
+
+func (a *App) persistParseResult(html string, parsed parseResult, source storySource, mode TranslationMode) (Meta, ChapterFile, bool, error) {
 	id := source.WorkID
 	if id == "" {
 		id = parsed.Meta.WorkIDGuess
@@ -116,6 +123,28 @@ func (a *App) persistParsed(html string, source struct {
 	return meta, parsed.Original, isNew, nil
 }
 
+func (a *App) lifecycleContext() context.Context {
+	if a.ctx != nil {
+		return a.ctx
+	}
+	return context.Background()
+}
+
+func (a *App) withExclusiveStory(storyID string, cancelQueued bool, fn func() error) error {
+	if cancelQueued && a.queue != nil {
+		a.queue.CancelAndWait(storyID)
+	}
+	release, err := a.acquireStory(a.lifecycleContext(), storyID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if cancelQueued && a.queue != nil {
+		a.queue.CancelAndWait(storyID)
+	}
+	return fn()
+}
+
 func translatedMatchesOriginal(translated *ChapterFile, original ChapterFile) bool {
 	if translated == nil || len(translated.Chapters) != len(original.Chapters) {
 		return false
@@ -159,145 +188,205 @@ func (a *App) prepareEntry(id, title, author string, status StoryStatus) error {
 	})
 }
 
+func (a *App) failPreparedStory(id string, cause error) error {
+	terminalErr := a.finishStory(id, PhaseError, StatusError, cause.Error())
+	if terminalErr == nil {
+		a.bus.Emit(id, StreamEvent{Type: "phase", Phase: PhaseError, Message: cause.Error()})
+		return cause
+	}
+	statusErr := a.updateStoryStatus(id, StatusError)
+	if statusErr == nil {
+		a.bus.Emit(id, StreamEvent{Type: "phase", Phase: PhaseError, Message: cause.Error()})
+		if errors.Is(terminalErr, errStoryNotFound) {
+			return cause
+		}
+		return errors.Join(cause, fmt.Errorf("persist story failure state: %w", terminalErr))
+	}
+	return errors.Join(
+		cause,
+		fmt.Errorf("persist story terminal state: %w", terminalErr),
+		fmt.Errorf("persist story error status: %w", statusErr),
+	)
+}
+
 func (a *App) CreateFromURL(url string, mode TranslationMode) (map[string]string, error) {
 	workID := extractWorkID(url)
 	if workID == "" {
 		return nil, errors.New("无法从 URL 提取 work id")
 	}
-	if err := a.prepareEntry(workID, "Fetching…", "", StatusFetching); err != nil {
-		return nil, err
-	}
-	a.bus.Emit(workID, StreamEvent{Type: "phase", Phase: PhaseFetching})
+	var out map[string]string
+	err := a.withExclusiveStory(workID, true, func() error {
+		if err := a.prepareEntry(workID, "Fetching…", "", StatusFetching); err != nil {
+			return err
+		}
+		a.bus.Emit(workID, StreamEvent{Type: "phase", Phase: PhaseFetching})
 
-	html, err := a.fetchDownloadHTML(workID)
-	if err != nil {
-		_, _ = a.store.PatchIndex(workID, func(entry *IndexEntry) {
-			entry.Status = StatusError
-		})
-		a.bus.Emit(workID, StreamEvent{Type: "phase", Phase: PhaseError, Message: err.Error()})
-		return nil, err
-	}
+		html, err := a.fetchDownloadHTMLContext(a.lifecycleContext(), workID)
+		if err != nil {
+			return a.failPreparedStory(workID, err)
+		}
 
-	meta, _, _, err := a.persistParsed(html, struct {
-		URL         string
-		DownloadURL string
-		WorkID      string
-	}{
-		URL:         url,
-		DownloadURL: fmt.Sprintf("https://archiveofourown.org/works/%s?view_full_work=true", workID),
-		WorkID:      workID,
-	}, mode)
-	if err != nil {
-		return nil, err
-	}
-	if err := a.store.UpsertIndex(indexEntryFor(meta, StatusQueued)); err != nil {
-		return nil, err
-	}
-	a.queue.Enqueue(Job{StoryID: workID, Type: "translate"})
-	return map[string]string{"id": workID, "status": string(StatusQueued)}, nil
+		meta, _, _, err := a.persistParsed(html, storySource{
+			URL:         url,
+			DownloadURL: fmt.Sprintf("https://archiveofourown.org/works/%s?view_full_work=true", workID),
+			WorkID:      workID,
+		}, mode)
+		if err != nil {
+			return a.failPreparedStory(workID, err)
+		}
+		if err := a.store.UpsertIndex(indexEntryFor(meta, StatusQueued)); err != nil {
+			return a.failPreparedStory(workID, err)
+		}
+		a.queue.Enqueue(Job{StoryID: workID, Type: "translate"})
+		out = map[string]string{"id": workID, "status": string(StatusQueued)}
+		return nil
+	})
+	return out, err
 }
 
 func (a *App) CreateFromHTML(html string, mode TranslationMode) (map[string]string, error) {
-	meta, _, _, err := a.persistParsed(html, struct {
-		URL         string
-		DownloadURL string
-		WorkID      string
-	}{}, mode)
+	parsed, err := parseAO3HTML(html)
 	if err != nil {
 		return nil, err
 	}
-	if err := a.store.UpsertIndex(indexEntryFor(meta, StatusQueued)); err != nil {
+	storyID := parsed.Meta.WorkIDGuess
+	if storyID == "" {
+		storyID = randomStoryID()
+	}
+	if err := validateStoryID(storyID); err != nil {
 		return nil, err
 	}
-	a.queue.Enqueue(Job{StoryID: meta.ID, Type: "translate"})
-	return map[string]string{"id": meta.ID, "status": string(StatusQueued)}, nil
+	var out map[string]string
+	err = a.withExclusiveStory(storyID, true, func() error {
+		meta, _, _, err := a.persistParseResult(html, parsed, storySource{WorkID: storyID}, mode)
+		if err != nil {
+			return err
+		}
+		if err := a.store.UpsertIndex(indexEntryFor(meta, StatusQueued)); err != nil {
+			return err
+		}
+		a.queue.Enqueue(Job{StoryID: storyID, Type: "translate"})
+		out = map[string]string{"id": storyID, "status": string(StatusQueued)}
+		return nil
+	})
+	return out, err
 }
 
 func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode TranslationMode) error {
 	if err := validateStoryID(id); err != nil {
 		return err
 	}
-	translated, err := a.store.LoadTranslated(id)
-	if err != nil || translated == nil {
-		return errors.New("story not found")
-	}
-	original, err := a.store.LoadOriginal(id)
-	if err != nil || original == nil {
-		return errors.New("story not found")
-	}
-	if strings.TrimSpace(string(mode)) != "" {
-		nextMode := normalizeTranslationMode(mode)
-		if meta, _ := a.store.LoadMeta(id); meta != nil && meta.TranslationMode != nextMode {
-			meta.TranslationMode = nextMode
-			if err := a.store.SaveMeta(id, *meta); err != nil {
+	return a.withExclusiveStory(id, true, func() error {
+		translated, err := a.store.LoadTranslated(id)
+		if err != nil {
+			return err
+		}
+		if translated == nil {
+			return errStoryNotFound
+		}
+		original, err := a.store.LoadOriginal(id)
+		if err != nil {
+			return err
+		}
+		if original == nil {
+			return errStoryNotFound
+		}
+		if strings.TrimSpace(string(mode)) != "" {
+			nextMode := normalizeTranslationMode(mode)
+			meta, err := a.store.LoadMeta(id)
+			if err != nil {
 				return err
 			}
+			if meta == nil {
+				return errStoryNotFound
+			}
+			if meta.TranslationMode != nextMode {
+				meta.TranslationMode = nextMode
+				if err := a.store.SaveMeta(id, *meta); err != nil {
+					return err
+				}
+			}
 		}
-	}
-	idSet := map[string]bool{}
-	if len(blockIDs) > 0 {
-		for _, id := range blockIDs {
-			idSet[id] = true
+		idSet := map[string]bool{}
+		if len(blockIDs) > 0 {
+			for _, blockID := range blockIDs {
+				idSet[blockID] = true
+			}
 		}
-	}
-	for ci := range translated.Chapters {
-		if chapterIndex != nil && ci != *chapterIndex {
-			continue
-		}
-		for bi := range translated.Chapters[ci].Blocks {
-			block := translated.Chapters[ci].Blocks[bi]
-			if len(idSet) > 0 && !idSet[block.ID] {
+		for ci := range translated.Chapters {
+			if chapterIndex != nil && ci != *chapterIndex {
 				continue
 			}
-			if len(idSet) == 0 && block.Status != BlockError {
-				continue
-			}
-			if ci >= len(original.Chapters) || bi >= len(original.Chapters[ci].Blocks) {
-				continue
-			}
-			ob := original.Chapters[ci].Blocks[bi]
-			if !isTranslatable(ob) {
-				block.Status = BlockDone
-				block.HTML = ob.HTML
+			for bi := range translated.Chapters[ci].Blocks {
+				block := translated.Chapters[ci].Blocks[bi]
+				if len(idSet) > 0 && !idSet[block.ID] {
+					continue
+				}
+				if len(idSet) == 0 && block.Status != BlockError {
+					continue
+				}
+				if ci >= len(original.Chapters) || bi >= len(original.Chapters[ci].Blocks) {
+					continue
+				}
+				ob := original.Chapters[ci].Blocks[bi]
+				if !isTranslatable(ob) {
+					block.Status = BlockDone
+					block.HTML = ob.HTML
+					block.Error = ""
+					translated.Chapters[ci].Blocks[bi] = block
+					continue
+				}
+				block.Status = BlockPending
+				block.HTML = ""
 				block.Error = ""
 				translated.Chapters[ci].Blocks[bi] = block
-				continue
 			}
-			block.Status = BlockPending
-			block.HTML = ""
-			block.Error = ""
-			translated.Chapters[ci].Blocks[bi] = block
 		}
-	}
-	if err := a.store.SaveTranslated(id, *translated); err != nil {
-		return err
-	}
-	if err := a.updateStoryStatus(id, StatusTranslating); err != nil {
-		return err
-	}
-	a.queue.Enqueue(Job{StoryID: id, Type: "translate"})
-	return nil
+		if err := a.store.SaveTranslated(id, *translated); err != nil {
+			return err
+		}
+		if err := a.store.QueueStory(id); err != nil {
+			return err
+		}
+		a.queue.Enqueue(Job{StoryID: id, Type: "translate"})
+		return nil
+	})
 }
 
 func (a *App) DeleteStory(id string) error {
 	if err := validateStoryID(id); err != nil {
 		return err
 	}
-	idx, err := a.store.LoadIndex()
-	if err != nil {
+	return a.withExclusiveStory(id, true, func() error {
+		return a.store.RemoveStoryAndIndex(id)
+	})
+}
+
+func (a *App) ReanalyzeStory(id string) error {
+	if err := validateStoryID(id); err != nil {
 		return err
 	}
-	next := idx.Stories[:0]
-	for _, entry := range idx.Stories {
-		if entry.ID != id {
-			next = append(next, entry)
+	return a.withExclusiveStory(id, true, func() error {
+		meta, err := a.store.LoadMeta(id)
+		if err != nil {
+			return err
 		}
-	}
-	idx.Stories = next
-	if err := a.store.SaveIndex(idx); err != nil {
-		return err
-	}
-	return a.store.RemoveStory(id)
+		if meta == nil {
+			return errStoryNotFound
+		}
+		if err := a.store.DeleteContext(id); err != nil {
+			return err
+		}
+		meta.TranslationMode = TranslationModeRefined
+		if err := a.store.SaveMeta(id, *meta); err != nil {
+			return err
+		}
+		if err := a.store.QueueStory(id); err != nil {
+			return err
+		}
+		a.queue.Enqueue(Job{StoryID: id, Type: "translate"})
+		return nil
+	})
 }
 
 func (a *App) ResumeOnStartup() error {

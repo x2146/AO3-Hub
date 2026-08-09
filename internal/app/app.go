@@ -25,6 +25,10 @@ type App struct {
 	bus                  *EventBus
 	queue                *Queue
 	ctx                  context.Context
+	cancel               context.CancelFunc
+	closeOnce            sync.Once
+	storyMu              sync.Mutex
+	storyGates           map[string]*storyGate
 	inflightMu           sync.RWMutex
 	inflight             map[string]map[string]bool
 	loginOnce            sync.Once
@@ -32,6 +36,11 @@ type App struct {
 	updateMu             sync.Mutex
 	updateRestartPending bool
 	updateCache          updateManifestCache
+}
+
+type storyGate struct {
+	token chan struct{}
+	refs  int
 }
 
 func New() (*App, error) {
@@ -43,10 +52,12 @@ func New() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	app := &App{
 		store:    store,
 		bus:      NewEventBus(),
-		ctx:      context.Background(),
+		ctx:      ctx,
+		cancel:   cancel,
 		inflight: map[string]map[string]bool{},
 	}
 	app.queue = NewQueue(app)
@@ -54,6 +65,7 @@ func New() (*App, error) {
 }
 
 func (a *App) Run() error {
+	defer a.Close()
 	cfg, err := a.store.LoadConfig()
 	if err != nil {
 		return err
@@ -78,6 +90,63 @@ func (a *App) Run() error {
 		MaxHeaderBytes:    1 << 20,
 	}
 	return server.ListenAndServe()
+}
+
+func (a *App) Close() {
+	a.closeOnce.Do(func() {
+		if a.cancel != nil {
+			a.cancel()
+		}
+		if a.queue != nil {
+			a.queue.Close()
+		}
+		if a.bus != nil {
+			a.bus.Close()
+		}
+	})
+}
+
+func (a *App) acquireStory(ctx context.Context, storyID string) (func(), error) {
+	a.storyMu.Lock()
+	if a.storyGates == nil {
+		a.storyGates = map[string]*storyGate{}
+	}
+	gate := a.storyGates[storyID]
+	if gate == nil {
+		gate = &storyGate{token: make(chan struct{}, 1)}
+		gate.token <- struct{}{}
+		a.storyGates[storyID] = gate
+	}
+	gate.refs++
+	a.storyMu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		a.releaseStoryGate(storyID, gate)
+		return nil, ctx.Err()
+	case <-gate.token:
+		if err := ctx.Err(); err != nil {
+			gate.token <- struct{}{}
+			a.releaseStoryGate(storyID, gate)
+			return nil, err
+		}
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				gate.token <- struct{}{}
+				a.releaseStoryGate(storyID, gate)
+			})
+		}, nil
+	}
+}
+
+func (a *App) releaseStoryGate(storyID string, gate *storyGate) {
+	a.storyMu.Lock()
+	defer a.storyMu.Unlock()
+	gate.refs--
+	if gate.refs == 0 && a.storyGates[storyID] == gate {
+		delete(a.storyGates, storyID)
+	}
 }
 
 func (a *App) routes() http.Handler {
@@ -469,22 +538,14 @@ func (a *App) mountStories(mux *http.ServeMux) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}))
 	mux.HandleFunc("POST /stories/{id}/reanalyze", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
-		id := r.PathValue("id")
-		meta, _ := a.store.LoadMeta(id)
-		if meta == nil {
-			writeError(w, http.StatusNotFound, "not found")
+		if err := a.ReanalyzeStory(r.PathValue("id")); err != nil {
+			if errors.Is(err, errStoryNotFound) {
+				writeError(w, http.StatusNotFound, "not found")
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
-		if err := a.store.DeleteContext(id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		meta.TranslationMode = TranslationModeRefined
-		if err := a.store.SaveMeta(id, *meta); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		a.queue.Enqueue(Job{StoryID: id, Type: "translate"})
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}))
 }

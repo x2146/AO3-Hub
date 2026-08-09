@@ -560,10 +560,20 @@ func (a *App) setProgress(storyID string, mutator func(Progress) Progress) error
 }
 
 func (a *App) updateStoryStatus(storyID string, status StoryStatus) error {
-	_, err := a.store.PatchIndex(storyID, func(entry *IndexEntry) {
+	entry, err := a.store.PatchIndex(storyID, func(entry *IndexEntry) {
 		entry.Status = status
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if entry == nil {
+		return errStoryNotFound
+	}
+	return nil
+}
+
+func (a *App) finishStory(storyID string, phase ProgressPhase, status StoryStatus, message string) error {
+	return a.store.FinishStory(storyID, phase, status, message)
 }
 
 func (a *App) runTranslation(ctx context.Context, storyID string) error {
@@ -593,15 +603,7 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 	}
 	if strings.TrimSpace(cfg.LLM.APIKey) == "" {
 		msg := "未配置 LLM apiKey，请到 Settings 填好后再 retry"
-		if err := a.setProgress(storyID, func(p Progress) Progress {
-			p.Phase = PhaseError
-			p.Message = msg
-			p.FinishedAt = nowISO()
-			return p
-		}); err != nil {
-			return err
-		}
-		if err := a.updateStoryStatus(storyID, StatusError); err != nil {
+		if err := a.finishStory(storyID, PhaseError, StatusError, msg); err != nil {
 			return err
 		}
 		a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseError, Message: msg})
@@ -635,15 +637,7 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 		analysed, err := a.runAnalysis(ctx, storyID, *meta, *original, cfg, tracker)
 		if err != nil {
 			msg := "精翻预读分析失败: " + err.Error()
-			if err := a.setProgress(storyID, func(p Progress) Progress {
-				p.Phase = PhaseError
-				p.Message = msg
-				p.FinishedAt = nowISO()
-				return p
-			}); err != nil {
-				return err
-			}
-			if err := a.updateStoryStatus(storyID, StatusError); err != nil {
+			if err := a.finishStory(storyID, PhaseError, StatusError, msg); err != nil {
 				return err
 			}
 			a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: PhaseError, Message: msg})
@@ -681,16 +675,7 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 		phase = PhaseError
 		status = StatusError
 	}
-	if err := a.setProgress(storyID, func(p Progress) Progress {
-		p.Phase = phase
-		p.CurrentChapter = nil
-		p.FinishedAt = nowISO()
-		p.InflightBlocks = 0
-		return p
-	}); err != nil {
-		return err
-	}
-	if err := a.updateStoryStatus(storyID, status); err != nil {
+	if err := a.finishStory(storyID, phase, status, ""); err != nil {
 		return err
 	}
 	a.bus.Emit(storyID, StreamEvent{Type: "phase", Phase: phase})
