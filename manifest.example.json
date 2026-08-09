@@ -8,25 +8,29 @@
       "platform": "darwin",
       "arch": "arm64",
       "url": "https://github.com/x2146/AO3-Hub/releases/download/v0.1.1/ao3-hub-darwin-arm64",
-      "sha256": ""
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 12345678
     },
     {
       "platform": "darwin",
       "arch": "x64",
       "url": "https://github.com/x2146/AO3-Hub/releases/download/v0.1.1/ao3-hub-darwin-x64",
-      "sha256": ""
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 12345678
     },
     {
       "platform": "linux",
       "arch": "x64",
       "url": "https://github.com/x2146/AO3-Hub/releases/download/v0.1.1/ao3-hub-linux-x64",
-      "sha256": ""
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 12345678
     },
     {
       "platform": "linux",
       "arch": "arm64",
       "url": "https://github.com/x2146/AO3-Hub/releases/download/v0.1.1/ao3-hub-linux-arm64",
-      "sha256": ""
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 12345678
     }
   ]
 }

@@ -25,6 +25,13 @@ function goEnvForTarget() {
 }
 
 async function main() {
+  const updatePublicKey = (process.env.AO3HUB_UPDATE_PUBLIC_KEY ?? "").trim();
+  if (updatePublicKey && !/^[0-9a-fA-F]{64}$/.test(updatePublicKey)) {
+    throw new Error(
+      "AO3HUB_UPDATE_PUBLIC_KEY must be a 32-byte Ed25519 public key encoded as hex",
+    );
+  }
+
   console.log("[build] vite build");
   await run("npm", ["run", "build", "--workspace", "@ao3hub/web"]);
 
@@ -43,11 +50,23 @@ async function main() {
   const ldflags = [
     `-X ao3hub/internal/app.Version=${process.env.AO3HUB_VERSION ?? (await packageVersion())}`,
     `-X ao3hub/internal/app.BuiltAt=${process.env.AO3HUB_BUILT_AT ?? new Date().toISOString()}`,
+    `-X ao3hub/internal/app.UpdateSigningPublicKey=${updatePublicKey}`,
   ].join(" ");
 
-  await run("go", ["build", "-trimpath", `-ldflags=${ldflags}`, "-o", OUT_PATH, "./cmd/ao3hub"], {
-    env,
-  });
+  await run(
+    "go",
+    [
+      "build",
+      "-trimpath",
+      `-ldflags=${ldflags}`,
+      "-o",
+      OUT_PATH,
+      "./cmd/ao3hub",
+    ],
+    {
+      env,
+    },
+  );
 
   console.log("[build] restoring empty embed directory");
   await rm(EMBED_DIST, { recursive: true, force: true });
@@ -58,11 +77,15 @@ async function main() {
   );
 
   const stats = await stat(OUT_PATH);
-  console.log(`[build] done: ${OUT_PATH}  ${(stats.size / 1024 / 1024).toFixed(1)} MB`);
+  console.log(
+    `[build] done: ${OUT_PATH}  ${(stats.size / 1024 / 1024).toFixed(1)} MB`,
+  );
 }
 
 async function packageVersion() {
-  const pkg = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
+  const pkg = JSON.parse(
+    await readFile(path.join(ROOT, "package.json"), "utf8"),
+  );
   return String(pkg.version ?? "0.0.0");
 }
 

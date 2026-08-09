@@ -215,8 +215,8 @@ type ManifestAsset struct {
 	Platform string `json:"platform"`
 	Arch     string `json:"arch"`
 	URL      string `json:"url"`
-	SHA256   string `json:"sha256,omitempty"`
-	Size     int64  `json:"size,omitempty"`
+	SHA256   string `json:"sha256"`
+	Size     int64  `json:"size"`
 }
 
 type Manifest struct {

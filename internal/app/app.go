@@ -21,14 +21,16 @@ import (
 )
 
 type App struct {
-	store      *Store
-	bus        *EventBus
-	queue      *Queue
-	ctx        context.Context
-	inflightMu sync.RWMutex
-	inflight   map[string]map[string]bool
-	loginOnce  sync.Once
-	loginGuard *loginAttemptGuard
+	store                *Store
+	bus                  *EventBus
+	queue                *Queue
+	ctx                  context.Context
+	inflightMu           sync.RWMutex
+	inflight             map[string]map[string]bool
+	loginOnce            sync.Once
+	loginGuard           *loginAttemptGuard
+	updateMu             sync.Mutex
+	updateRestartPending bool
 }
 
 func New() (*App, error) {
@@ -855,7 +857,10 @@ func (a *App) mountUpdate(mux *http.ServeMux) {
 			ForceVersion string `json:"forceVersion"`
 			Version      string `json:"version"`
 		}
-		_ = decodeJSON(r, &body)
+		if err := decodeJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "参数无效")
+			return
+		}
 		forceVersion := strings.TrimSpace(body.ForceVersion)
 		if forceVersion == "" {
 			forceVersion = strings.TrimSpace(body.Version)

@@ -1,24 +1,50 @@
 package app
 
 import (
+	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
-var (
-	stableVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$`)
-	devVersionRE    = regexp.MustCompile(`^dev-(\d+)-\d{8}-([A-Za-z0-9]+)(?:[-+].*)?$`)
+const (
+	updateManifestTimeout         = 30 * time.Second
+	updateDownloadTimeout         = 30 * time.Minute
+	maxUpdateManifestBytes        = 1 << 20
+	maxUpdateSignatureBytes       = 4 << 10
+	maxUpdateAssetBytes     int64 = 512 << 20
 )
+
+var (
+	stableVersionRE  = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$`)
+	devVersionRE     = regexp.MustCompile(`^dev-(\d+)-\d{8}-([A-Za-z0-9]+)(?:[-+].*)?$`)
+	updateHTTPClient = &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("too many update redirects")
+			}
+			return validateUpdateURL(req.URL.String())
+		},
+	}
+)
+
+// UpdateSigningPublicKey is injected into release binaries with -ldflags -X.
+// An empty value deliberately disables OTA rather than falling back to unsigned updates.
+var UpdateSigningPublicKey string
 
 type updateCheck struct {
 	HasUpdate bool
@@ -184,31 +210,160 @@ func resolveManifestURL(cfg Config) string {
 }
 
 func fetchManifest(cfg Config) (*Manifest, string) {
-	url := resolveManifestURL(cfg)
-	if url == "" {
-		return nil, "未配置 manifest URL"
-	}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), updateManifestTimeout)
+	defer cancel()
+	manifest, err := fetchManifestContext(ctx, cfg)
 	if err != nil {
 		return nil, err.Error()
 	}
+	return manifest, ""
+}
+
+func fetchManifestContext(ctx context.Context, cfg Config) (*Manifest, error) {
+	if _, err := embeddedUpdateSigningPublicKey(); err != nil {
+		return nil, err
+	}
+	manifestURL := resolveManifestURL(cfg)
+	if manifestURL == "" {
+		return nil, errors.New("未配置 manifest URL")
+	}
+	body, err := fetchUpdateBytes(ctx, manifestURL, maxUpdateManifestBytes)
+	if err != nil {
+		return nil, fmt.Errorf("fetch manifest: %w", err)
+	}
+	signatureURL, err := manifestSignatureURL(manifestURL)
+	if err != nil {
+		return nil, err
+	}
+	signature, err := fetchUpdateBytes(ctx, signatureURL, maxUpdateSignatureBytes)
+	if err != nil {
+		return nil, fmt.Errorf("fetch manifest signature: %w", err)
+	}
+	if err := verifyManifestSignature(body, signature); err != nil {
+		return nil, err
+	}
+
+	var manifest Manifest
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return nil, errors.New("manifest schema 校验失败")
+	}
+	if err := validateManifest(manifest); err != nil {
+		return nil, fmt.Errorf("manifest schema 校验失败: %w", err)
+	}
+	return &manifest, nil
+}
+
+func fetchUpdateBytes(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
+	if err := validateUpdateURL(rawURL); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("accept-encoding", "identity")
 	req.Header.Set("cache-control", "no-cache")
-	res, err := http.DefaultClient.Do(req)
+	res, err := updateHTTPClient.Do(req)
 	if err != nil {
-		return nil, err.Error()
+		return nil, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Sprintf("manifest fetch failed: %d", res.StatusCode)
+		return nil, fmt.Errorf("request failed: %d", res.StatusCode)
 	}
-	var manifest Manifest
-	if err := json.NewDecoder(res.Body).Decode(&manifest); err != nil {
-		return nil, "manifest schema 校验失败"
+	if res.ContentLength > limit {
+		return nil, fmt.Errorf("response exceeds %d bytes", limit)
 	}
-	if manifest.Version == "" || manifest.Assets == nil {
-		return nil, "manifest schema 校验失败"
+	body, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+	if err != nil {
+		return nil, err
 	}
-	return &manifest, ""
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("response exceeds %d bytes", limit)
+	}
+	return body, nil
+}
+
+func manifestSignatureURL(rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid manifest URL: %w", err)
+	}
+	parsed.Path += ".sig"
+	parsed.RawPath = ""
+	return parsed.String(), nil
+}
+
+func verifyManifestSignature(message, signature []byte) error {
+	publicKey, err := embeddedUpdateSigningPublicKey()
+	if err != nil {
+		return err
+	}
+	rawSignature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(signature)))
+	if err != nil {
+		return fmt.Errorf("decode manifest signature: %w", err)
+	}
+	if !ed25519.Verify(publicKey, message, rawSignature) {
+		return errors.New("manifest signature verification failed")
+	}
+	return nil
+}
+
+func embeddedUpdateSigningPublicKey() (ed25519.PublicKey, error) {
+	publicKey, err := hex.DecodeString(strings.TrimSpace(UpdateSigningPublicKey))
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return nil, errors.New("invalid embedded update signing public key")
+	}
+	return ed25519.PublicKey(publicKey), nil
+}
+
+func validateManifest(manifest Manifest) error {
+	if strings.TrimSpace(manifest.Version) == "" || len(manifest.Assets) == 0 {
+		return errors.New("version and assets are required")
+	}
+	seen := make(map[string]struct{}, len(manifest.Assets))
+	for _, asset := range manifest.Assets {
+		if strings.TrimSpace(asset.Platform) == "" || strings.TrimSpace(asset.Arch) == "" {
+			return errors.New("asset platform and arch are required")
+		}
+		key := asset.Platform + "/" + asset.Arch
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("duplicate asset %s", key)
+		}
+		seen[key] = struct{}{}
+		if err := validateManifestAsset(asset); err != nil {
+			return fmt.Errorf("asset %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+func validateManifestAsset(asset ManifestAsset) error {
+	if err := validateUpdateURL(asset.URL); err != nil {
+		return err
+	}
+	if asset.Size <= 0 || asset.Size > maxUpdateAssetBytes {
+		return fmt.Errorf("size must be between 1 and %d bytes", maxUpdateAssetBytes)
+	}
+	digest, err := hex.DecodeString(strings.TrimSpace(asset.SHA256))
+	if err != nil || len(digest) != sha256.Size {
+		return errors.New("sha256 must be a 32-byte hex digest")
+	}
+	return nil
+}
+
+func validateUpdateURL(rawURL string) error {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Host == "" {
+		return errors.New("invalid update URL")
+	}
+	if parsed.User != nil || parsed.Fragment != "" {
+		return errors.New("update URL must not contain credentials or fragments")
+	}
+	if strings.EqualFold(parsed.Scheme, "https") {
+		return nil
+	}
+	return errors.New("update URL must use HTTPS")
 }
 
 func (a *App) FetchManifest() (*Manifest, string) {
@@ -258,19 +413,6 @@ func (a *App) VersionInfo() VersionInfo {
 	return base
 }
 
-func sha256HexFile(file string) (string, error) {
-	f, err := os.Open(file)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 type ApplyResult struct {
 	OK       bool   `json:"ok"`
 	Version  string `json:"version,omitempty"`
@@ -285,6 +427,14 @@ type ApplyUpdateOptions struct {
 }
 
 func (a *App) ApplyUpdate(opts ApplyUpdateOptions) ApplyResult {
+	if !a.updateMu.TryLock() {
+		return ApplyResult{OK: false, Message: "已有更新正在进行"}
+	}
+	defer a.updateMu.Unlock()
+	if a.updateRestartPending {
+		return ApplyResult{OK: false, Message: "更新已安装，正在等待进程重启"}
+	}
+
 	cfg, err := a.store.LoadConfig()
 	if err != nil {
 		return ApplyResult{OK: false, Message: err.Error()}
@@ -330,62 +480,16 @@ func (a *App) ApplyUpdate(opts ApplyUpdateOptions) ApplyResult {
 	if err != nil {
 		return ApplyResult{OK: false, Message: err.Error()}
 	}
-	if err := os.MkdirAll(updateDir, 0o755); err != nil {
-		return ApplyResult{OK: false, Message: err.Error()}
-	}
-	tmp := filepath.Join(updateDir, fmt.Sprintf("ao3-hub-%s.tmp", safePathSegment(manifest.Version)))
-	final := filepath.Join(updateDir, fmt.Sprintf("ao3-hub-%s", safePathSegment(manifest.Version)))
-
-	req, err := http.NewRequest(http.MethodGet, asset.URL, nil)
+	final, err := downloadUpdateAsset(context.Background(), updateDir, manifest.Version, *asset)
 	if err != nil {
 		return ApplyResult{OK: false, Message: err.Error()}
 	}
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return ApplyResult{OK: false, Message: err.Error()}
-	}
-	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return ApplyResult{OK: false, Message: fmt.Sprintf("下载失败: %d", res.StatusCode)}
-	}
-	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
-	if err != nil {
-		return ApplyResult{OK: false, Message: err.Error()}
-	}
-	if _, err := io.Copy(out, res.Body); err != nil {
-		_ = out.Close()
-		_ = os.Remove(tmp)
-		return ApplyResult{OK: false, Message: err.Error()}
-	}
-	if err := out.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return ApplyResult{OK: false, Message: err.Error()}
-	}
-
-	if asset.SHA256 != "" {
-		sum, err := sha256HexFile(tmp)
-		if err != nil {
-			_ = os.Remove(tmp)
-			return ApplyResult{OK: false, Message: err.Error()}
-		}
-		if !strings.EqualFold(sum, asset.SHA256) {
-			_ = os.Remove(tmp)
-			return ApplyResult{OK: false, Message: fmt.Sprintf("sha256 校验失败 expected=%s got=%s", asset.SHA256, sum)}
-		}
-	}
-	if err := os.Chmod(tmp, 0o755); err != nil {
-		_ = os.Remove(tmp)
-		return ApplyResult{OK: false, Message: err.Error()}
-	}
-	_ = os.Remove(final)
-	if err := os.Rename(tmp, final); err != nil {
-		_ = os.Remove(tmp)
-		return ApplyResult{OK: false, Message: err.Error()}
-	}
+	defer os.Remove(final)
 	execPath, err := installUpdate(final)
 	if err != nil {
 		return ApplyResult{OK: false, Message: err.Error()}
 	}
+	a.updateRestartPending = true
 	return ApplyResult{
 		OK:       true,
 		Version:  manifest.Version,
@@ -393,6 +497,85 @@ func (a *App) ApplyUpdate(opts ApplyUpdateOptions) ApplyResult {
 		Restart:  true,
 		execPath: execPath,
 	}
+}
+
+func downloadUpdateAsset(parent context.Context, updateDir, version string, asset ManifestAsset) (string, error) {
+	if err := validateManifestAsset(asset); err != nil {
+		return "", fmt.Errorf("invalid update asset: %w", err)
+	}
+	if err := os.MkdirAll(updateDir, 0o755); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(parent, updateDownloadTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("accept-encoding", "identity")
+	res, err := updateHTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return "", fmt.Errorf("下载失败: %d", res.StatusCode)
+	}
+	if res.ContentLength >= 0 && res.ContentLength != asset.Size {
+		return "", fmt.Errorf("下载大小不匹配: expected=%d got=%d", asset.Size, res.ContentLength)
+	}
+
+	out, err := os.CreateTemp(updateDir, ".ao3-hub-"+safePathSegment(version)+"-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := out.Name()
+	keep := false
+	defer func() {
+		if out != nil {
+			_ = out.Close()
+		}
+		if !keep {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(out, hash), io.LimitReader(res.Body, asset.Size+1))
+	if err != nil {
+		return "", err
+	}
+	if written != asset.Size {
+		return "", fmt.Errorf("下载大小不匹配: expected=%d got=%d", asset.Size, written)
+	}
+	gotSHA := hex.EncodeToString(hash.Sum(nil))
+	if !strings.EqualFold(gotSHA, asset.SHA256) {
+		return "", fmt.Errorf("sha256 校验失败 expected=%s got=%s", asset.SHA256, gotSHA)
+	}
+	if err := out.Sync(); err != nil {
+		return "", fmt.Errorf("sync update download: %w", err)
+	}
+	if err := out.Chmod(0o755); err != nil {
+		return "", fmt.Errorf("chmod update download: %w", err)
+	}
+	if err := out.Sync(); err != nil {
+		return "", fmt.Errorf("sync update metadata: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		out = nil
+		return "", err
+	}
+	out = nil
+	finalPath := strings.TrimSuffix(tmpPath, ".tmp")
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		return "", fmt.Errorf("finalize update download: %w", err)
+	}
+	if err := syncDirectory(updateDir); err != nil {
+		_ = os.Remove(finalPath)
+		return "", fmt.Errorf("sync update directory: %w", err)
+	}
+	keep = true
+	return finalPath, nil
 }
 
 func (a *App) updateDir() (string, error) {
@@ -408,8 +591,15 @@ func safePathSegment(value string) string {
 	if value == "" {
 		return strconv.FormatInt(time.Now().UnixMilli(), 10)
 	}
-	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_")
-	return replacer.Replace(value)
+	var out strings.Builder
+	for _, char := range value {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune("._+-", char) {
+			out.WriteRune(char)
+		} else {
+			out.WriteByte('_')
+		}
+	}
+	return out.String()
 }
 
 func installUpdate(newBinaryPath string) (string, error) {
@@ -420,42 +610,120 @@ func installUpdate(newBinaryPath string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
 		execPath = resolved
 	}
-	backupPath := execPath + ".bak"
-
-	_ = os.Remove(backupPath)
-	if err := os.Rename(execPath, backupPath); err != nil {
-		return "", fmt.Errorf("backup current binary: %w", err)
+	if err := installUpdateAt(newBinaryPath, execPath); err != nil {
+		return "", err
 	}
-	if err := copyFile(newBinaryPath, execPath); err != nil {
-		_ = os.Rename(backupPath, execPath)
-		return "", fmt.Errorf("install new binary: %w", err)
-	}
-	if err := os.Chmod(execPath, 0o755); err != nil {
-		_ = os.Rename(backupPath, execPath)
-		_ = os.Remove(newBinaryPath)
-		return "", fmt.Errorf("chmod new binary: %w", err)
-	}
-	_ = os.Remove(backupPath)
-	_ = os.Remove(newBinaryPath)
 	return execPath, nil
 }
 
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
+func installUpdateAt(newBinaryPath, execPath string) error {
+	in, err := os.Open(newBinaryPath)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-
-	out, err := os.Create(dst)
+	out, err := os.CreateTemp(filepath.Dir(execPath), "."+filepath.Base(execPath)+"-update-*.tmp")
 	if err != nil {
 		return err
 	}
+	preparedPath := out.Name()
+	prepared := true
+	defer func() {
+		if out != nil {
+			_ = out.Close()
+		}
+		if prepared {
+			_ = os.Remove(preparedPath)
+		}
+	}()
 	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
+		return fmt.Errorf("stage new binary: %w", err)
+	}
+	if err := out.Sync(); err != nil {
+		return fmt.Errorf("sync new binary: %w", err)
+	}
+	if err := out.Chmod(0o755); err != nil {
+		return fmt.Errorf("chmod new binary: %w", err)
+	}
+	if err := out.Sync(); err != nil {
+		return fmt.Errorf("sync new binary metadata: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		out = nil
+		return fmt.Errorf("close new binary: %w", err)
+	}
+	out = nil
+	if err := replacePreparedExecutable(preparedPath, execPath); err != nil {
 		return err
 	}
-	return out.Close()
+	prepared = false
+	return nil
+}
+
+func replacePreparedExecutable(preparedPath, execPath string) error {
+	if runtime.GOOS == "windows" {
+		return replacePreparedExecutableWithRename(preparedPath, execPath, os.Rename)
+	}
+
+	backupPath := execPath + ".bak"
+	if err := os.Remove(backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove previous binary backup: %w", err)
+	}
+	if err := os.Link(execPath, backupPath); err != nil {
+		return fmt.Errorf("link current binary backup: %w", err)
+	}
+	dir := filepath.Dir(execPath)
+	if err := syncDirectory(dir); err != nil {
+		removeErr := os.Remove(backupPath)
+		return errors.Join(fmt.Errorf("sync binary backup: %w", err), removeErr)
+	}
+	if err := os.Rename(preparedPath, execPath); err != nil {
+		removeErr := os.Remove(backupPath)
+		return errors.Join(fmt.Errorf("install prepared binary: %w", err), removeErr)
+	}
+	if err := syncDirectory(dir); err != nil {
+		installErr := fmt.Errorf("sync installed binary: %w", err)
+		if rollbackErr := os.Rename(backupPath, execPath); rollbackErr != nil {
+			return errors.Join(installErr, fmt.Errorf("rollback current binary: %w", rollbackErr))
+		}
+		if rollbackSyncErr := syncDirectory(dir); rollbackSyncErr != nil {
+			return errors.Join(installErr, fmt.Errorf("sync binary rollback: %w", rollbackSyncErr))
+		}
+		return installErr
+	}
+	return nil
+}
+
+// Windows cannot atomically replace a running executable with os.Rename. Keep
+// the prepared-file and explicit rollback path for future Windows packages.
+func replacePreparedExecutableWithRename(preparedPath, execPath string, rename func(string, string) error) error {
+	backupPath := execPath + ".bak"
+	if err := os.Remove(backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove previous binary backup: %w", err)
+	}
+	if err := rename(execPath, backupPath); err != nil {
+		return fmt.Errorf("backup current binary: %w", err)
+	}
+	if err := rename(preparedPath, execPath); err != nil {
+		installErr := fmt.Errorf("install prepared binary: %w", err)
+		if rollbackErr := rename(backupPath, execPath); rollbackErr != nil {
+			return errors.Join(installErr, fmt.Errorf("rollback current binary: %w", rollbackErr))
+		}
+		return installErr
+	}
+	return nil
+}
+
+func syncDirectory(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 func scheduleExec(delayMS int, execPath string) {

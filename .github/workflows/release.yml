@@ -9,7 +9,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || (github.ref_type == 'tag' && format('release-{0}', github.ref_name) || 'release-dev') }}
@@ -19,6 +19,7 @@ jobs:
   verify:
     name: Typecheck and build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -51,8 +52,9 @@ jobs:
   meta:
     name: Resolve release metadata
     needs: verify
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && (github.ref_type == 'tag' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       channel: ${{ steps.meta.outputs.channel }}
       notes: ${{ steps.meta.outputs.notes }}
@@ -113,6 +115,7 @@ jobs:
     name: Build ${{ matrix.asset }}
     needs: meta
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -134,6 +137,15 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      - name: Resolve update signing public key
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "${UPDATE_SIGNING_KEY}" ] || { echo "UPDATE_SIGNING_KEY secret is not set" >&2; exit 1; }
+          PUBLIC_KEY="$(go run ./scripts/sign -pubkey)"
+          echo "AO3HUB_UPDATE_PUBLIC_KEY=${PUBLIC_KEY}" >> "${GITHUB_ENV}"
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -171,6 +183,9 @@ jobs:
       - meta
       - build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -195,8 +210,10 @@ jobs:
           AO3HUB_RELEASE_REPO: ${{ github.repository }}
           AO3HUB_RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
           AO3HUB_RELEASE_VERSION: ${{ needs.meta.outputs.version }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
+          [ -n "${UPDATE_SIGNING_KEY}" ] || { echo "UPDATE_SIGNING_KEY secret is not set" >&2; exit 1; }
           chmod +x server/build/release/ao3-hub-*
           go run ./cmd/ao3hub-manifest \
             --repo "${AO3HUB_RELEASE_REPO}" \
@@ -207,7 +224,8 @@ jobs:
             --published-at "${AO3HUB_RELEASE_PUBLISHED_AT}" \
             --out server/build/release/manifest.json \
             server/build/release/ao3-hub-*
-          (cd server/build/release && sha256sum ao3-hub-* manifest.json > SHA256SUMS)
+          go run ./scripts/sign server/build/release/manifest.json
+          (cd server/build/release && sha256sum ao3-hub-* manifest.json manifest.json.sig > SHA256SUMS)
 
       - name: Move dev tag
         if: needs.meta.outputs.channel == 'dev'
@@ -229,10 +247,12 @@ jobs:
           TAG="${AO3HUB_RELEASE_TAG}"
           if gh release view "${TAG}" >/dev/null 2>&1; then
             gh release upload "${TAG}" server/build/release/* --clobber
+            gh release edit "${TAG}" --latest
           else
             gh release create "${TAG}" server/build/release/* \
               --title "${AO3HUB_RELEASE_TITLE}" \
               --generate-notes \
+              --latest \
               --verify-tag
           fi
 
@@ -269,6 +289,7 @@ jobs:
               --title "${AO3HUB_RELEASE_TITLE}" \
               --notes-file "${NOTES_FILE}" \
               --prerelease \
+              --latest=false \
               --verify-tag; then
               exit 0
             fi

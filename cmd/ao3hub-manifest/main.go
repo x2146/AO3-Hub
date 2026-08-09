@@ -84,6 +84,10 @@ func parseArgs(args []string) (options, error) {
 	if !regexp.MustCompile(`^[^/]+/[^/]+$`).MatchString(opts.repo) {
 		return opts, fmt.Errorf("invalid --repo value: %s", opts.repo)
 	}
+	baseURL, err := url.ParseRequestURI(opts.baseURL)
+	if err != nil || baseURL.Scheme != "https" || baseURL.Host == "" || baseURL.User != nil {
+		return opts, errors.New("--base-url must be an HTTPS URL without credentials")
+	}
 	if opts.version == "" {
 		version, err := packageVersion()
 		if err != nil {
@@ -130,6 +134,9 @@ func run(opts options) error {
 		info, err := os.Stat(file)
 		if err != nil {
 			return err
+		}
+		if info.Size() <= 0 {
+			return fmt.Errorf("release asset is empty: %s", file)
 		}
 		sum, err := sha256HexFile(file)
 		if err != nil {

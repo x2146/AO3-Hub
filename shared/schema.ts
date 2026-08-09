@@ -321,9 +321,9 @@ export const Manifest = z.object({
     z.object({
       platform: z.string(),
       arch: z.string(),
-      url: z.string(),
-      sha256: z.string().optional(),
-      size: z.number().int().nonnegative().optional(),
+      url: z.string().url(),
+      sha256: z.string().regex(/^[0-9a-fA-F]{64}$/),
+      size: z.number().int().positive(),
     }),
   ),
 });
