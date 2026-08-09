@@ -1,5 +1,7 @@
 package app
 
+import "encoding/json"
+
 type StoryStatus string
 
 const (
@@ -352,6 +354,54 @@ type StreamEvent struct {
 	Message        string        `json:"message,omitempty"`
 }
 
+func (event StreamEvent) MarshalJSON() ([]byte, error) {
+	switch event.Type {
+	case "progress":
+		return json.Marshal(struct {
+			Type           string        `json:"type"`
+			DoneBlocks     int           `json:"doneBlocks"`
+			TotalBlocks    int           `json:"totalBlocks"`
+			ErrorBlocks    int           `json:"errorBlocks"`
+			InflightBlocks int           `json:"inflightBlocks"`
+			Phase          ProgressPhase `json:"phase"`
+		}{event.Type, event.DoneBlocks, event.TotalBlocks, event.ErrorBlocks, event.InflightBlocks, event.Phase})
+	case "block-done":
+		return json.Marshal(struct {
+			Type         string `json:"type"`
+			ChapterIndex int    `json:"chapterIndex"`
+			BlockID      string `json:"blockId"`
+		}{event.Type, event.ChapterIndex, event.BlockID})
+	case "block-error":
+		return json.Marshal(struct {
+			Type         string `json:"type"`
+			ChapterIndex int    `json:"chapterIndex"`
+			BlockID      string `json:"blockId"`
+			Message      string `json:"message"`
+		}{event.Type, event.ChapterIndex, event.BlockID, event.Message})
+	case "chapter-done":
+		return json.Marshal(struct {
+			Type         string `json:"type"`
+			ChapterIndex int    `json:"chapterIndex"`
+		}{event.Type, event.ChapterIndex})
+	case "phase":
+		return json.Marshal(struct {
+			Type    string        `json:"type"`
+			Phase   ProgressPhase `json:"phase"`
+			Message string        `json:"message,omitempty"`
+		}{event.Type, event.Phase, event.Message})
+	case "llm-call":
+		return json.Marshal(struct {
+			Type         string        `json:"type"`
+			Phase        ProgressPhase `json:"phase,omitempty"`
+			Message      string        `json:"message,omitempty"`
+			ChapterIndex int           `json:"chapterIndex"`
+		}{event.Type, event.Phase, event.Message, event.ChapterIndex})
+	default:
+		type streamEvent StreamEvent
+		return json.Marshal(streamEvent(event))
+	}
+}
+
 type LLMCallStage string
 
 const (
@@ -415,8 +465,8 @@ type RequestSample struct {
 }
 
 type StatsFile struct {
-	Stats   TranslationStats              `json:"stats"`
-	Events  []LLMCallEvent                `json:"events"`
+	Stats   TranslationStats               `json:"stats"`
+	Events  []LLMCallEvent                 `json:"events"`
 	Samples map[LLMCallStage]RequestSample `json:"samples"`
 }
 

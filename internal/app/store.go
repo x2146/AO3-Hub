@@ -133,11 +133,16 @@ func (s *Store) LoadConfig() (Config, error) {
 		cfg = defaultConfig()
 		return cfg, s.writeJSON(s.path("config.json"), cfg)
 	}
+	previous := cfg
 	cfg = normalizeConfig(cfg)
 	if err := validateConfig(cfg); err != nil {
 		return Config{}, fmt.Errorf("invalid config.json: %w", err)
 	}
-	_ = s.writeJSON(s.path("config.json"), cfg)
+	if cfg != previous {
+		if err := s.writeJSON(s.path("config.json"), cfg); err != nil {
+			return Config{}, fmt.Errorf("migrate config.json: %w", err)
+		}
+	}
 	return cfg, nil
 }
 
@@ -366,6 +371,67 @@ func (s *Store) QueueStory(id string) error {
 	return s.setStoryState(id, PhaseQueued, StatusQueued, "", false)
 }
 
+func (s *Store) ReconcileStoryState(id string, progress Progress, status StoryStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	storyPath, err := s.storyPath(id)
+	if err != nil {
+		return err
+	}
+	if info, err := os.Stat(storyPath); err != nil || !info.IsDir() {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return errStoryNotFound
+	}
+
+	indexPath := s.path("index.json")
+	var index IndexFile
+	if _, err := s.readJSON(indexPath, &index); err != nil {
+		return err
+	}
+	found := false
+	for i := range index.Stories {
+		if index.Stories[i].ID != id {
+			continue
+		}
+		index.Stories[i].Status = status
+		index.Stories[i].UpdatedAt = nowISO()
+		found = true
+		break
+	}
+	if !found {
+		return errStoryNotFound
+	}
+
+	progressPath, err := s.storyPath(id, "progress.json")
+	if err != nil {
+		return err
+	}
+	previous, readErr := os.ReadFile(progressPath)
+	hadPrevious := readErr == nil
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return readErr
+	}
+	if err := s.writeJSON(progressPath, normalizeProgress(progress)); err != nil {
+		return err
+	}
+	if err := s.writeJSON(indexPath, index); err != nil {
+		var rollbackErr error
+		if hadPrevious {
+			rollbackErr = s.writeText(progressPath, string(previous))
+		} else if removeErr := os.Remove(progressPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			rollbackErr = removeErr
+		}
+		if rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("rollback progress: %w", rollbackErr))
+		}
+		return err
+	}
+	return nil
+}
+
 func (s *Store) setStoryState(id string, phase ProgressPhase, status StoryStatus, message string, finished bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -529,6 +595,24 @@ func (s *Store) RemoveStory(id string) error {
 		return err
 	}
 	return os.RemoveAll(path)
+}
+
+func (s *Store) RemoveIndexEntry(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	indexPath := s.path("index.json")
+	var previous IndexFile
+	if _, err := s.readJSON(indexPath, &previous); err != nil {
+		return err
+	}
+	next := IndexFile{Stories: make([]IndexEntry, 0, len(previous.Stories))}
+	for _, entry := range previous.Stories {
+		if entry.ID != id {
+			next.Stories = append(next.Stories, entry)
+		}
+	}
+	return s.writeJSON(indexPath, next)
 }
 
 func (s *Store) RemoveStoryAndIndex(id string) error {

@@ -139,16 +139,21 @@ func (a *App) writeSessionCookie(w http.ResponseWriter, r *http.Request, token s
 		MaxAge:   int(ttl.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   isSecureRequest(r),
+		Secure:   a.effectiveRequestScheme(r) == "https",
 	})
 }
 
-func isSecureRequest(r *http.Request) bool {
+func (a *App) effectiveRequestScheme(r *http.Request) string {
 	if r.TLS != nil {
-		return true
+		return "https"
 	}
-	xf := strings.Split(r.Header.Get("x-forwarded-proto"), ",")[0]
-	return strings.TrimSpace(xf) == "https"
+	if a.publicOriginHost != "" && strings.EqualFold(r.Host, a.publicOriginHost) {
+		proto := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("x-forwarded-proto"), ",")[0]))
+		if proto == a.publicOriginScheme {
+			return proto
+		}
+	}
+	return "http"
 }
 
 func (a *App) resolveUser(w http.ResponseWriter, r *http.Request) (*UserRecord, error) {

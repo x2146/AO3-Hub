@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -30,6 +31,12 @@ type App struct {
 	closeOnce            sync.Once
 	storyMu              sync.Mutex
 	storyGates           map[string]*storyGate
+	serverHost           string
+	publicOriginScheme   string
+	publicOriginHost     string
+	streamMu             sync.Mutex
+	streamSubscribers    int
+	streamByStory        map[string]int
 	inflightMu           sync.RWMutex
 	inflight             map[string]map[string]bool
 	loginOnce            sync.Once
@@ -38,6 +45,11 @@ type App struct {
 	updateRestartPending bool
 	updateCache          updateManifestCache
 }
+
+const (
+	maxStreamSubscribers         = 128
+	maxStreamSubscribersPerStory = 16
+)
 
 type storyGate struct {
 	token chan struct{}
@@ -75,16 +87,23 @@ func (a *App) RunContext(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := a.ResumeOnStartup(); err != nil {
-		return err
-	}
-	a.maybeAutoCheckUpdates(cfg)
 	host := resolveHost(cfg.Server.Host)
 	port, err := resolvePort(cfg.Server.Port)
 	if err != nil {
 		return err
 	}
-	addr := fmt.Sprintf("%s:%d", host, port)
+	publicOriginScheme, publicOriginHost, err := configuredPublicOrigin()
+	if err != nil {
+		return err
+	}
+	a.serverHost = host
+	a.publicOriginScheme = publicOriginScheme
+	a.publicOriginHost = publicOriginHost
+	if err := a.ResumeOnStartup(); err != nil {
+		return err
+	}
+	a.maybeAutoCheckUpdates(cfg)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           a.routes(),
@@ -184,6 +203,33 @@ func (a *App) releaseStoryGate(storyID string, gate *storyGate) {
 	}
 }
 
+func (a *App) acquireStreamSlot(storyID string) (func(), bool) {
+	a.streamMu.Lock()
+	if a.streamByStory == nil {
+		a.streamByStory = map[string]int{}
+	}
+	if a.streamSubscribers >= maxStreamSubscribers || a.streamByStory[storyID] >= maxStreamSubscribersPerStory {
+		a.streamMu.Unlock()
+		return nil, false
+	}
+	a.streamSubscribers++
+	a.streamByStory[storyID]++
+	a.streamMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			a.streamMu.Lock()
+			defer a.streamMu.Unlock()
+			a.streamSubscribers--
+			a.streamByStory[storyID]--
+			if a.streamByStory[storyID] == 0 {
+				delete(a.streamByStory, storyID)
+			}
+		})
+	}, true
+}
+
 func (a *App) routes() http.Handler {
 	mux := http.NewServeMux()
 	api := http.NewServeMux()
@@ -220,10 +266,14 @@ func securityHeaders(next http.Handler) http.Handler {
 
 func (a *App) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(a.serverHost) != "" && !a.trustedRequestHost(r) {
+			writeError(w, http.StatusForbidden, "untrusted request host")
+			return
+		}
 		origin := strings.TrimSpace(r.Header.Get("origin"))
 		if origin != "" {
 			w.Header().Add("vary", "Origin")
-			if !allowedRequestOrigin(origin, r.Host) {
+			if !a.allowedRequestOrigin(origin, r) {
 				writeError(w, http.StatusForbidden, "cross-origin request denied")
 				return
 			}
@@ -240,15 +290,69 @@ func (a *App) cors(next http.Handler) http.Handler {
 	})
 }
 
-func allowedRequestOrigin(origin, requestHost string) bool {
+func (a *App) allowedRequestOrigin(origin string, request *http.Request) bool {
 	parsed, err := url.Parse(origin)
-	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	scheme := strings.ToLower(parsed.Scheme)
+	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (scheme != "http" && scheme != "https") {
 		return false
 	}
-	if strings.EqualFold(parsed.Host, requestHost) {
+	return scheme == a.effectiveRequestScheme(request) &&
+		strings.EqualFold(parsed.Host, request.Host) &&
+		a.trustedRequestHost(request)
+}
+
+func (a *App) trustedRequestHost(request *http.Request) bool {
+	requestName, ok := authorityHostname(request.Host)
+	if !ok {
+		return false
+	}
+	if a.publicOriginHost != "" && strings.EqualFold(request.Host, a.publicOriginHost) {
 		return true
 	}
-	return false
+	boundName := strings.ToLower(strings.TrimSuffix(strings.Trim(strings.TrimSpace(a.serverHost), "[]"), "."))
+	if boundName == "" {
+		return false
+	}
+	requestIP := net.ParseIP(requestName)
+	boundIP := net.ParseIP(boundName)
+	if boundName == "0.0.0.0" || boundName == "::" {
+		return requestName == "localhost" || requestIP != nil
+	}
+	if boundName == "localhost" || boundIP != nil && boundIP.IsLoopback() {
+		return requestName == "localhost" || requestIP != nil && requestIP.IsLoopback()
+	}
+	return strings.EqualFold(requestName, boundName)
+}
+
+func configuredPublicOrigin() (string, string, error) {
+	raw := strings.TrimSpace(os.Getenv("AO3HUB_PUBLIC_ORIGIN"))
+	if raw == "" {
+		return "", "", nil
+	}
+	parsed, err := url.Parse(raw)
+	scheme := strings.ToLower(parsed.Scheme)
+	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (scheme != "http" && scheme != "https") {
+		return "", "", errors.New("invalid AO3HUB_PUBLIC_ORIGIN: expected an HTTP(S) origin without path, query, or credentials")
+	}
+	if _, ok := authorityHostname(parsed.Host); !ok {
+		return "", "", errors.New("invalid AO3HUB_PUBLIC_ORIGIN: invalid authority")
+	}
+	return scheme, parsed.Host, nil
+}
+
+func authorityHostname(authority string) (string, bool) {
+	if authority == "" || strings.ContainsAny(authority, "/?#@\\") {
+		return "", false
+	}
+	parsed, err := url.Parse("http://" + authority)
+	if err != nil || parsed.User != nil || parsed.Host == "" || parsed.Path != "" {
+		return "", false
+	}
+	hostname := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	if hostname == "" {
+		return "", false
+	}
+	return hostname, true
 }
 
 func (a *App) mountAuth(mux *http.ServeMux) {
@@ -863,6 +967,13 @@ func (a *App) handleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	releaseSlot, ok := a.acquireStreamSlot(id)
+	if !ok {
+		w.Header().Set("retry-after", "5")
+		writeError(w, http.StatusTooManyRequests, "too many progress streams")
+		return
+	}
+	defer releaseSlot()
 	ch, unsubscribe := a.bus.Subscribe(id)
 	defer unsubscribe()
 	progress, err := a.store.LoadProgress(id)
@@ -880,7 +991,7 @@ func (a *App) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("content-type", "text/event-stream")
-	w.Header().Set("cache-control", "no-cache")
+	w.Header().Set("cache-control", "no-store")
 	w.Header().Set("connection", "keep-alive")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -905,8 +1016,18 @@ func (a *App) handleStream(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return true
 	}
-	if !writeSSE("progress", StreamEvent{Type: "progress", DoneBlocks: progress.DoneBlocks, TotalBlocks: progress.TotalBlocks, Phase: progress.Phase}) ||
-		!writeSSE("phase", StreamEvent{Type: "phase", Phase: progress.Phase}) {
+	if !writeSSE("progress", StreamEvent{
+		Type:           "progress",
+		DoneBlocks:     progress.DoneBlocks,
+		TotalBlocks:    progress.TotalBlocks,
+		ErrorBlocks:    progress.ErrorBlocks,
+		InflightBlocks: progress.InflightBlocks,
+		Phase:          progress.Phase,
+	}) ||
+		!writeSSE("phase", StreamEvent{Type: "phase", Phase: progress.Phase, Message: progress.Message}) {
+		return
+	}
+	if terminalProgressPhase(progress.Phase) {
 		return
 	}
 	heartbeat := cfg.Stream.HeartbeatMS
@@ -928,6 +1049,9 @@ func (a *App) handleStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !writeSSE(event.Type, event) {
+				return
+			}
+			if event.Type == "phase" && terminalProgressPhase(event.Phase) {
 				return
 			}
 		}

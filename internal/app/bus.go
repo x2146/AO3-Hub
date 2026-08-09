@@ -64,11 +64,30 @@ func (b *EventBus) Emit(storyID string, event StreamEvent) {
 		return
 	}
 	for ch := range b.channels[storyID] {
+		if event.Type == "phase" && terminalProgressPhase(event.Phase) {
+			for {
+				select {
+				case <-ch:
+					continue
+				default:
+				}
+				break
+			}
+			select {
+			case ch <- event:
+			default:
+			}
+			continue
+		}
 		select {
 		case ch <- event:
 		default:
 		}
 	}
+}
+
+func terminalProgressPhase(phase ProgressPhase) bool {
+	return phase == PhaseReady || phase == PhaseError
 }
 
 func (b *EventBus) Close() {

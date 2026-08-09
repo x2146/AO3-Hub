@@ -426,7 +426,7 @@ func retryableLLMError(err error) (time.Duration, bool) {
 	}
 	var networkError net.Error
 	if errors.As(err, &networkError) {
-		return 0, networkError.Timeout() || networkError.Temporary()
+		return 0, true
 	}
 	return 0, false
 }

@@ -510,14 +510,46 @@ func (a *App) ResumeOnStartup() error {
 		return err
 	}
 	for _, entry := range idx.Stories {
-		if entry.Status == StatusReady || entry.Status == StatusError {
+		if !a.store.StoryExists(entry.ID) {
+			if err := a.store.RemoveIndexEntry(entry.ID); err != nil {
+				return fmt.Errorf("remove stale story %s: %w", entry.ID, err)
+			}
 			continue
 		}
 		progress, err := a.store.LoadProgress(entry.ID)
 		if err != nil || progress == nil {
+			message := "启动恢复失败：progress.json 缺失"
+			if err != nil {
+				message = "启动恢复失败：" + err.Error()
+			}
+			failed := Progress{
+				Phase:      PhaseError,
+				StartedAt:  nowISO(),
+				FinishedAt: nowISO(),
+				Message:    message,
+				Errors:     []ProgressError{},
+			}
+			if stateErr := a.store.ReconcileStoryState(entry.ID, failed, StatusError); stateErr != nil {
+				return fmt.Errorf("repair unrecoverable story %s: %w", entry.ID, stateErr)
+			}
 			continue
 		}
-		if progress.Phase == PhaseReady || progress.Phase == PhaseError {
+		status, valid := storyStatusForPhase(progress.Phase)
+		if !valid {
+			invalidPhase := progress.Phase
+			progress.Phase = PhaseError
+			progress.CurrentChapter = nil
+			progress.InflightBlocks = 0
+			progress.FinishedAt = nowISO()
+			progress.Message = fmt.Sprintf("启动恢复失败：未知进度阶段 %q", invalidPhase)
+			status = StatusError
+		}
+		if entry.Status != status || !valid {
+			if stateErr := a.store.ReconcileStoryState(entry.ID, *progress, status); stateErr != nil {
+				return fmt.Errorf("reconcile story %s: %w", entry.ID, stateErr)
+			}
+		}
+		if status == StatusReady || status == StatusError {
 			continue
 		}
 		if err := a.queue.Enqueue(Job{StoryID: entry.ID, Type: "translate"}); err != nil {
@@ -531,4 +563,25 @@ func (a *App) ResumeOnStartup() error {
 		}
 	}
 	return nil
+}
+
+func storyStatusForPhase(phase ProgressPhase) (StoryStatus, bool) {
+	switch phase {
+	case PhaseQueued:
+		return StatusQueued, true
+	case PhaseFetching:
+		return StatusFetching, true
+	case PhaseParsing:
+		return StatusParsing, true
+	case PhaseAnalyzing:
+		return StatusAnalyzing, true
+	case PhaseTranslating:
+		return StatusTranslating, true
+	case PhaseReady:
+		return StatusReady, true
+	case PhaseError:
+		return StatusError, true
+	default:
+		return StatusError, false
+	}
 }

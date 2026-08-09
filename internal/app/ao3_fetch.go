@@ -85,10 +85,6 @@ func fetchWith(ctx context.Context, rawURL, cookie, userAgent string) (*http.Res
 	return ao3HTTPClient.Do(req)
 }
 
-func (a *App) fetchDownloadHTML(workID string) (string, error) {
-	return a.fetchDownloadHTMLContext(context.Background(), workID)
-}
-
 func (a *App) fetchDownloadHTMLContext(parent context.Context, workID string) (string, error) {
 	if !workIDDirectRE.MatchString(workID) {
 		return "", errors.New("invalid AO3 work id")

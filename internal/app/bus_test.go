@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +32,20 @@ func newLifecycleTestApp(t *testing.T) *App {
 	app.queue = NewQueue(app)
 	t.Cleanup(app.Close)
 	return app
+}
+
+func loadIndexEntry(t *testing.T, store *Store, storyID string) *IndexEntry {
+	t.Helper()
+	index, err := store.LoadIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range index.Stories {
+		if index.Stories[i].ID == storyID {
+			return &index.Stories[i]
+		}
+	}
+	return nil
 }
 
 func TestQueueDeduplicatesPendingAndRunningStory(t *testing.T) {
@@ -151,6 +167,145 @@ func TestResumeMarksOverflowedStoryAsErrorAndContinues(t *testing.T) {
 	if len(index.Stories) != 1 || index.Stories[0].Status != StatusError {
 		t.Fatalf("overflowed story index = %+v", index)
 	}
+}
+
+func TestResumeRepairsUnrecoverableProgress(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		prepare     func(*testing.T, *Store, string)
+		wantMessage string
+	}{
+		{name: "missing", wantMessage: "progress.json 缺失"},
+		{
+			name: "corrupt",
+			prepare: func(t *testing.T, store *Store, storyID string) {
+				t.Helper()
+				path, err := store.storyPath(storyID, "progress.json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantMessage: "decode progress.json",
+		},
+		{
+			name: "unknown phase",
+			prepare: func(t *testing.T, store *Store, storyID string) {
+				t.Helper()
+				if err := store.SaveProgress(storyID, Progress{Phase: "mystery", Errors: []ProgressError{}}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantMessage: `未知进度阶段 "mystery"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := newLifecycleTestApp(t)
+			storyID := "broken-" + strings.ReplaceAll(test.name, " ", "-")
+			meta := Meta{ID: storyID, Title: test.name}
+			if err := app.store.SaveMeta(storyID, meta); err != nil {
+				t.Fatal(err)
+			}
+			if err := app.store.UpsertIndex(indexEntryFor(meta, StatusTranslating)); err != nil {
+				t.Fatal(err)
+			}
+			if test.prepare != nil {
+				test.prepare(t, app.store, storyID)
+			}
+
+			if err := app.ResumeOnStartup(); err != nil {
+				t.Fatal(err)
+			}
+			progress, err := app.store.LoadProgress(storyID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if progress == nil || progress.Phase != PhaseError || !strings.Contains(progress.Message, test.wantMessage) {
+				t.Fatalf("repaired progress = %+v", progress)
+			}
+			entry := loadIndexEntry(t, app.store, storyID)
+			if entry == nil || entry.Status != StatusError {
+				t.Fatalf("repaired index = %+v", entry)
+			}
+		})
+	}
+}
+
+func TestResumeRemovesStaleIndexEntryWithoutStoryDirectory(t *testing.T) {
+	app := newLifecycleTestApp(t)
+	for _, storyID := range []string{"stale-story", "../invalid"} {
+		if err := app.store.UpsertIndex(IndexEntry{ID: storyID, Title: "Stale", Status: StatusTranslating}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := app.ResumeOnStartup(); err != nil {
+		t.Fatal(err)
+	}
+	for _, storyID := range []string{"stale-story", "../invalid"} {
+		if entry := loadIndexEntry(t, app.store, storyID); entry != nil {
+			t.Fatalf("stale index entry was not removed: %+v", entry)
+		}
+	}
+}
+
+func TestResumeReconcilesIndexFromProgress(t *testing.T) {
+	t.Run("terminal", func(t *testing.T) {
+		app := newLifecycleTestApp(t)
+		const storyID = "ready-story"
+		meta := Meta{ID: storyID, Title: "Ready"}
+		if err := app.store.SaveMeta(storyID, meta); err != nil {
+			t.Fatal(err)
+		}
+		if err := app.store.SaveProgress(storyID, Progress{Phase: PhaseReady, FinishedAt: nowISO(), Errors: []ProgressError{}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := app.store.UpsertIndex(indexEntryFor(meta, StatusTranslating)); err != nil {
+			t.Fatal(err)
+		}
+		if err := app.ResumeOnStartup(); err != nil {
+			t.Fatal(err)
+		}
+		entry := loadIndexEntry(t, app.store, storyID)
+		if entry == nil || entry.Status != StatusReady {
+			t.Fatalf("reconciled terminal index = %+v", entry)
+		}
+	})
+
+	t.Run("nonterminal", func(t *testing.T) {
+		app := newLifecycleTestApp(t)
+		const storyID = "queued-story"
+		meta := Meta{ID: storyID, Title: "Queued"}
+		if err := app.store.SaveMeta(storyID, meta); err != nil {
+			t.Fatal(err)
+		}
+		if err := app.store.SaveProgress(storyID, Progress{Phase: PhaseQueued, Errors: []ProgressError{}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := app.store.UpsertIndex(indexEntryFor(meta, StatusReady)); err != nil {
+			t.Fatal(err)
+		}
+		started := make(chan struct{})
+		app.queue.run = func(ctx context.Context, _ Job) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		if err := app.ResumeOnStartup(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("reconciled nonterminal story was not resumed")
+		}
+		entry := loadIndexEntry(t, app.store, storyID)
+		if entry == nil || entry.Status != StatusQueued {
+			t.Fatalf("reconciled nonterminal index = %+v", entry)
+		}
+	})
 }
 
 func TestQueueCancelRemovesPendingAndWaitsForCleanup(t *testing.T) {
@@ -564,6 +719,43 @@ func TestStoreFinishStoryRollsBackProgressWhenIndexWriteFails(t *testing.T) {
 	}
 }
 
+func TestStoreReconcileStoryStateRestoresMissingProgressWhenIndexWriteFails(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const storyID = "repair-story"
+	meta := Meta{ID: storyID, Title: "Repair"}
+	if err := store.SaveMeta(storyID, meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertIndex(indexEntryFor(meta, StatusQueued)); err != nil {
+		t.Fatal(err)
+	}
+	indexTemp := filepath.Join(store.dir, "index.json.tmp")
+	if err := os.Mkdir(indexTemp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	progress := Progress{Phase: PhaseError, Message: "repair", Errors: []ProgressError{}}
+	if err := store.ReconcileStoryState(storyID, progress, StatusError); err == nil {
+		t.Fatal("expected reconcile index write failure")
+	}
+	if err := os.Remove(indexTemp); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadProgress(storyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != nil {
+		t.Fatalf("missing progress was not restored: %+v", loaded)
+	}
+	entry := loadIndexEntry(t, store, storyID)
+	if entry == nil || entry.Status != StatusQueued {
+		t.Fatalf("index changed after failed reconcile: %+v", entry)
+	}
+}
+
 func TestEventBusCloseAndUnsubscribeAreIdempotent(t *testing.T) {
 	bus := NewEventBus()
 	ch, unsubscribe := bus.Subscribe("story")
@@ -584,6 +776,190 @@ func TestEventBusCloseAndUnsubscribeAreIdempotent(t *testing.T) {
 	defer unsubscribeClosed()
 	if _, ok := <-closed; ok {
 		t.Fatal("subscription on closed bus remains open")
+	}
+}
+
+func TestEventBusPreservesTerminalEventWhenSubscriberBufferIsFull(t *testing.T) {
+	bus := NewEventBus()
+	ch, unsubscribe := bus.Subscribe("story")
+	defer unsubscribe()
+	for i := 0; i < cap(ch); i++ {
+		bus.Emit("story", StreamEvent{Type: "progress", Phase: PhaseTranslating})
+	}
+	bus.Emit("story", StreamEvent{Type: "phase", Phase: PhaseReady})
+
+	foundTerminal := false
+	for len(ch) > 0 {
+		event := <-ch
+		if event.Type == "phase" && event.Phase == PhaseReady {
+			foundTerminal = true
+		}
+	}
+	if !foundTerminal {
+		t.Fatal("terminal event was dropped from a full subscriber buffer")
+	}
+}
+
+func TestEventBusTerminalEmitDoesNotBlockConcurrentConsumer(t *testing.T) {
+	bus := NewEventBus()
+	ch, unsubscribe := bus.Subscribe("story")
+	defer unsubscribe()
+
+	stop := make(chan struct{})
+	consumerDone := make(chan struct{})
+	go func() {
+		defer close(consumerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ch:
+			}
+		}
+	}()
+
+	emitDone := make(chan struct{})
+	go func() {
+		defer close(emitDone)
+		for i := 0; i < 10_000; i++ {
+			bus.Emit("story", StreamEvent{Type: "progress", Phase: PhaseTranslating})
+			bus.Emit("story", StreamEvent{Type: "phase", Phase: PhaseReady})
+		}
+	}()
+
+	select {
+	case <-emitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal event emission blocked during concurrent consumption")
+	}
+	close(stop)
+	select {
+	case <-consumerDone:
+	case <-time.After(time.Second):
+		t.Fatal("event consumer did not stop")
+	}
+}
+
+func TestStreamEventMarshalIncludesRequiredZeroValues(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		event StreamEvent
+		keys  []string
+	}{
+		{
+			name:  "progress",
+			event: StreamEvent{Type: "progress", Phase: PhaseQueued},
+			keys:  []string{"doneBlocks", "totalBlocks", "errorBlocks", "inflightBlocks"},
+		},
+		{
+			name:  "first chapter",
+			event: StreamEvent{Type: "block-done", ChapterIndex: 0, BlockID: "block"},
+			keys:  []string{"chapterIndex"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := json.Marshal(test.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range test.keys {
+				if _, ok := body[key]; !ok {
+					t.Fatalf("%s missing from %s", key, data)
+				}
+			}
+		})
+	}
+}
+
+func TestTerminalStreamIncludesCompleteSnapshotAndCloses(t *testing.T) {
+	app := newLifecycleTestApp(t)
+	const storyID = "terminal-stream"
+	if err := app.store.SaveMeta(storyID, Meta{ID: storyID, Title: "Terminal"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.SaveProgress(storyID, Progress{
+		Phase:          PhaseError,
+		TotalBlocks:    8,
+		DoneBlocks:     0,
+		ErrorBlocks:    2,
+		InflightBlocks: 0,
+		Errors:         []ProgressError{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/stories/"+storyID+"/stream", nil)
+	request.SetPathValue("id", storyID)
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		app.handleStream(response, request)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("terminal SSE connection did not close")
+	}
+	body := response.Body.String()
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("terminal stream cache control = %q, want no-store", got)
+	}
+	for _, field := range []string{
+		`"doneBlocks":0`,
+		`"totalBlocks":8`,
+		`"errorBlocks":2`,
+		`"inflightBlocks":0`,
+		`"phase":"error"`,
+	} {
+		if !strings.Contains(body, field) {
+			t.Fatalf("terminal snapshot missing %s: %s", field, body)
+		}
+	}
+}
+
+func TestStreamSubscriberLimitsReleaseCapacity(t *testing.T) {
+	app := &App{}
+	releases := make([]func(), 0, maxStreamSubscribersPerStory)
+	for i := 0; i < maxStreamSubscribersPerStory; i++ {
+		release, ok := app.acquireStreamSlot("story")
+		if !ok {
+			t.Fatalf("subscriber %d was unexpectedly rejected", i)
+		}
+		releases = append(releases, release)
+	}
+	if _, ok := app.acquireStreamSlot("story"); ok {
+		t.Fatal("per-story subscriber limit was not enforced")
+	}
+
+	releases[0]()
+	releases[0]()
+	replacement, ok := app.acquireStreamSlot("story")
+	if !ok {
+		t.Fatal("released stream capacity was not reusable")
+	}
+	replacement()
+	for _, release := range releases[1:] {
+		release()
+	}
+
+	releases = releases[:0]
+	for i := 0; i < maxStreamSubscribers; i++ {
+		release, ok := app.acquireStreamSlot(fmt.Sprintf("story-%d", i))
+		if !ok {
+			t.Fatalf("global subscriber %d was unexpectedly rejected", i)
+		}
+		releases = append(releases, release)
+	}
+	if _, ok := app.acquireStreamSlot("overflow"); ok {
+		t.Fatal("global subscriber limit was not enforced")
+	}
+	for _, release := range releases {
+		release()
 	}
 }
 

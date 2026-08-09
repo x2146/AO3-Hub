@@ -152,7 +152,7 @@ func chatOpenAICompatible(ctx context.Context, config LLMConfig, messages []Chat
 func chatClaudeMessages(ctx context.Context, config LLMConfig, messages []ChatMessage, jsonMode bool) (ChatResult, error) {
 	system, claudeMessages := splitClaudeMessages(messages)
 	if len(claudeMessages) == 0 {
-		return ChatResult{}, errors.New("Claude Messages requires at least one user or assistant message")
+		return ChatResult{}, errors.New("claude messages requires at least one user or assistant message")
 	}
 	if jsonMode {
 		system = appendSystemInstruction(system, "Respond only with a valid JSON object. Do not wrap it in Markdown code fences or add any explanation.")
@@ -433,7 +433,7 @@ func chatOpenAICompatibleStream(ctx context.Context, config LLMConfig, messages 
 func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []ChatMessage, jsonMode bool) (ChatResult, error) {
 	system, claudeMessages := splitClaudeMessages(messages)
 	if len(claudeMessages) == 0 {
-		return ChatResult{}, errors.New("Claude Messages requires at least one user or assistant message")
+		return ChatResult{}, errors.New("claude messages requires at least one user or assistant message")
 	}
 	if jsonMode {
 		system = appendSystemInstruction(system, "Respond only with a valid JSON object. Do not wrap it in Markdown code fences or add any explanation.")

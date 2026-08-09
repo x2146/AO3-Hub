@@ -465,7 +465,7 @@ func TestSaveSourceIsAtomicOnWriteFailure(t *testing.T) {
 }
 
 func TestCORSRejectsUntrustedOrigins(t *testing.T) {
-	handler := (&App{}).cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := (&App{serverHost: "ao3hub.example"}).cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
@@ -483,20 +483,198 @@ func TestCORSRejectsUntrustedOrigins(t *testing.T) {
 
 	request = httptest.NewRequest(http.MethodPost, "http://ao3hub.example/api/config", nil)
 	request.Host = "ao3hub.example"
-	request.Header.Set("Origin", "https://ao3hub.example")
+	request.Header.Set("Origin", "http://ao3hub.example")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("same-host status = %d, want %d", response.Code, http.StatusNoContent)
 	}
 
+	request = httptest.NewRequest(http.MethodPost, "http://attacker.example/api/auth/setup", nil)
+	request.Host = "attacker.example"
+	request.Header.Set("Origin", "http://attacker.example")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("rebound host status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://attacker.example/api/health", nil)
+	request.Host = "attacker.example"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("rebound host without origin status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://ao3hub.example/api/health", nil)
+	request.Host = "ao3hub.example"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("trusted host without origin status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+
 	request = httptest.NewRequest(http.MethodPost, "http://ao3hub.example/api/config", nil)
 	request.Host = "ao3hub.example"
-	request.Header.Set("Origin", "https://ao3hub.example/path")
+	request.Header.Set("Origin", "https://ao3hub.example")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("cross-scheme status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://ao3hub.example/api/config", nil)
+	request.Host = "ao3hub.example"
+	request.Header.Set("Origin", "http://ao3hub.example/path")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("origin with path status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+
+	wildcardHandler := (&App{serverHost: "0.0.0.0"}).cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request = httptest.NewRequest(http.MethodPost, "http://192.0.2.10:3000/api/config", nil)
+	request.Host = "192.0.2.10:3000"
+	request.Header.Set("Origin", "http://192.0.2.10:3000")
+	response = httptest.NewRecorder()
+	wildcardHandler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("wildcard literal-IP status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://attacker.example:3000/api/config", nil)
+	request.Host = "attacker.example:3000"
+	request.Header.Set("Origin", "http://attacker.example:3000")
+	response = httptest.NewRecorder()
+	wildcardHandler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("wildcard rebound status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+
+	proxyApp := &App{
+		serverHost:         "127.0.0.1",
+		publicOriginScheme: "https",
+		publicOriginHost:   "ao3hub.example",
+	}
+	proxyHandler := proxyApp.cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request = httptest.NewRequest(http.MethodPost, "http://ao3hub.example/api/config", nil)
+	request.Host = "ao3hub.example"
+	request.RemoteAddr = "192.0.2.20:43100"
+	request.Header.Set("Origin", "https://ao3hub.example")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	response = httptest.NewRecorder()
+	proxyHandler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("configured HTTPS proxy status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://attacker.example/api/auth/setup", nil)
+	request.Host = "attacker.example"
+	request.RemoteAddr = "127.0.0.1:43100"
+	request.Header.Set("Origin", "http://attacker.example")
+	request.Header.Set("X-Forwarded-Proto", "http")
+	response = httptest.NewRecorder()
+	proxyHandler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("loopback forwarded-header spoof status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+}
+
+func TestSecureRequestOnlyTrustsConfiguredPublicOrigin(t *testing.T) {
+	app := &App{
+		publicOriginScheme: "https",
+		publicOriginHost:   "ao3hub.example",
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://ao3hub.example/", nil)
+	request.Header.Set("X-Forwarded-Proto", "https")
+	if got := app.effectiveRequestScheme(request); got != "https" {
+		t.Fatalf("configured public scheme = %q, want https", got)
+	}
+
+	request.Host = "attacker.example"
+	request.RemoteAddr = "127.0.0.1:1234"
+	if got := app.effectiveRequestScheme(request); got != "http" {
+		t.Fatalf("spoofed public scheme = %q, want http", got)
+	}
+
+	request.Host = "ao3hub.example"
+	if got := (&App{}).effectiveRequestScheme(request); got != "http" {
+		t.Fatalf("unconfigured forwarded scheme = %q, want http", got)
+	}
+}
+
+func TestConfiguredPublicOriginValidation(t *testing.T) {
+	t.Setenv("AO3HUB_PUBLIC_ORIGIN", "https://ao3hub.example:8443")
+	scheme, host, err := configuredPublicOrigin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scheme != "https" || host != "ao3hub.example:8443" {
+		t.Fatalf("configured origin = %s://%s", scheme, host)
+	}
+
+	for _, raw := range []string{
+		"ao3hub.example",
+		"ftp://ao3hub.example",
+		"https://user@ao3hub.example",
+		"https://ao3hub.example/path",
+		"https://ao3hub.example?",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv("AO3HUB_PUBLIC_ORIGIN", raw)
+			if _, _, err := configuredPublicOrigin(); err == nil {
+				t.Fatalf("accepted invalid public origin %q", raw)
+			}
+		})
+	}
+}
+
+func TestLoadConfigDoesNotRewriteStableConfig(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	configPath := store.path("config.json")
+	wantModTime := time.Unix(123, 0)
+	if err := os.Chtimes(configPath, wantModTime, wantModTime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(wantModTime) {
+		t.Fatalf("stable config was rewritten: mtime = %s", info.ModTime())
+	}
+}
+
+func TestLoadConfigPropagatesMigrationWriteFailure(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultConfig()
+	cfg.LLM.Mode = ""
+	configPath := store.path("config.json")
+	if err := store.writeJSON(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(configPath+".tmp", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadConfig(); err == nil || !strings.Contains(err.Error(), "migrate config.json") {
+		t.Fatalf("migration error = %v", err)
 	}
 }
 

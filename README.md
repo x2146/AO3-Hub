@@ -139,6 +139,12 @@ Restart=on-failure
 
 反代由 caddy/nginx 处理 TLS。
 
+使用公网域名反代时必须显式设置完整 Origin；服务仅在请求 Host 精确匹配时采信代理传入的协议：
+
+```bash
+AO3HUB_PUBLIC_ORIGIN=https://ao3hub.example.com AO3HUB_DATA_DIR=/var/lib/ao3hub ./ao3-hub
+```
+
 ## 用户与权限
 
 三层权限：
