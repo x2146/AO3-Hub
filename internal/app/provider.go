@@ -8,10 +8,36 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+const (
+	llmCallTimeout                 = 10 * time.Minute
+	maxLLMResponseBytes      int64 = 16 << 20
+	maxLLMErrorBytes         int64 = 64 << 10
+	maxSSELineBytes                = 256 << 10
+	maxSSEEventBytes               = 1 << 20
+	maxSSEStreamBytes        int64 = 32 << 20
+	maxLLMStreamContentBytes       = 16 << 20
+)
+
+var llmHTTPClient = &http.Client{
+	Transport: newLLMHTTPTransport(),
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return errors.New("LLM provider redirects are disabled")
+	},
+}
+
+func newLLMHTTPTransport() *http.Transport {
+	transport := newExternalHTTPTransport()
+	transport.ResponseHeaderTimeout = 5 * time.Minute
+	return transport
+}
 
 type ChatMessage struct {
 	Role    string `json:"role"`
@@ -44,6 +70,8 @@ func chat(ctx context.Context, config LLMConfig, messages []ChatMessage, jsonMod
 	if strings.TrimSpace(config.BaseURL) == "" {
 		return ChatResult{}, errors.New("LLM baseURL not configured")
 	}
+	ctx, cancel := context.WithTimeout(ctx, llmCallTimeout)
+	defer cancel()
 	start := time.Now()
 	var result ChatResult
 	var err error
@@ -70,6 +98,7 @@ func chat(ctx context.Context, config LLMConfig, messages []ChatMessage, jsonMod
 func chatOpenAICompatible(ctx context.Context, config LLMConfig, messages []ChatMessage, jsonMode bool) (ChatResult, error) {
 	body := map[string]any{
 		"model":       config.Model,
+		"max_tokens":  config.MaxTokensPerRequest,
 		"temperature": config.Temperature,
 		"messages":    messages,
 	}
@@ -80,26 +109,26 @@ func chatOpenAICompatible(ctx context.Context, config LLMConfig, messages []Chat
 	if err != nil {
 		return ChatResult{}, err
 	}
-	url := strings.TrimRight(config.BaseURL, "/") + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
+	endpoint, err := llmEndpoint(config.BaseURL, "/chat/completions")
+	if err != nil {
+		return ChatResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(buf))
 	if err != nil {
 		return ChatResult{}, err
 	}
 	req.Header.Set("authorization", "Bearer "+config.APIKey)
 	req.Header.Set("content-type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	res, err := llmHTTPClient.Do(req)
 	if err != nil {
 		return ChatResult{}, err
 	}
 	defer res.Body.Close()
-	textBytes, err := io.ReadAll(res.Body)
+	textBytes, err := readLLMResponse(res)
 	if err != nil {
 		return ChatResult{}, err
 	}
 	text := string(textBytes)
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return ChatResult{}, LLMError{Status: res.StatusCode, Body: text}
-	}
 	var raw struct {
 		Choices []struct {
 			Message struct {
@@ -138,27 +167,27 @@ func chatClaudeMessages(ctx context.Context, config LLMConfig, messages []ChatMe
 	if err != nil {
 		return ChatResult{}, err
 	}
-	url := strings.TrimRight(config.BaseURL, "/") + "/messages"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
+	endpoint, err := llmEndpoint(config.BaseURL, "/messages")
+	if err != nil {
+		return ChatResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(buf))
 	if err != nil {
 		return ChatResult{}, err
 	}
 	req.Header.Set("x-api-key", config.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("content-type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	res, err := llmHTTPClient.Do(req)
 	if err != nil {
 		return ChatResult{}, err
 	}
 	defer res.Body.Close()
-	textBytes, err := io.ReadAll(res.Body)
+	textBytes, err := readLLMResponse(res)
 	if err != nil {
 		return ChatResult{}, err
 	}
 	text := string(textBytes)
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return ChatResult{}, LLMError{Status: res.StatusCode, Body: text}
-	}
 	var raw struct {
 		Content []struct {
 			Type string `json:"type"`
@@ -216,9 +245,65 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
+func llmEndpoint(baseURL, suffix string) (string, error) {
+	base, err := url.ParseRequestURI(strings.TrimSpace(baseURL))
+	if err != nil || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+		return "", errors.New("invalid LLM baseURL")
+	}
+	switch strings.ToLower(base.Scheme) {
+	case "https":
+	case "http":
+		host := base.Hostname()
+		ip := net.ParseIP(host)
+		if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+			return "", errors.New("LLM baseURL must use HTTPS outside loopback")
+		}
+	default:
+		return "", errors.New("LLM baseURL must use HTTP or HTTPS")
+	}
+	base.Path = strings.TrimRight(base.Path, "/") + suffix
+	base.RawPath = ""
+	return base.String(), nil
+}
+
+func readLLMResponse(res *http.Response) ([]byte, error) {
+	limit := maxLLMResponseBytes
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		limit = maxLLMErrorBytes
+	}
+	body, err := readBoundedResponse(res, limit, "LLM provider response")
+	if err != nil {
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			return nil, LLMError{Status: res.StatusCode, Body: err.Error()}
+		}
+		return nil, err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, LLMError{Status: res.StatusCode, Body: string(body)}
+	}
+	return body, nil
+}
+
+func validateSSEContentType(res *http.Response) error {
+	mediaType, _, err := mime.ParseMediaType(res.Header.Get("content-type"))
+	if err != nil || mediaType != "text/event-stream" {
+		return fmt.Errorf("LLM stream returned unexpected content type %q", res.Header.Get("content-type"))
+	}
+	return nil
+}
+
+func appendBounded(builder *strings.Builder, value string, limit int) error {
+	if len(value) > limit-builder.Len() {
+		return fmt.Errorf("LLM stream content exceeds %d bytes", limit)
+	}
+	builder.WriteString(value)
+	return nil
+}
+
 func chatOpenAICompatibleStream(ctx context.Context, config LLMConfig, messages []ChatMessage, jsonMode bool) (ChatResult, error) {
 	body := map[string]any{
 		"model":          config.Model,
+		"max_tokens":     config.MaxTokensPerRequest,
 		"temperature":    config.Temperature,
 		"messages":       messages,
 		"stream":         true,
@@ -231,28 +316,34 @@ func chatOpenAICompatibleStream(ctx context.Context, config LLMConfig, messages 
 	if err != nil {
 		return ChatResult{}, err
 	}
-	url := strings.TrimRight(config.BaseURL, "/") + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
+	endpoint, err := llmEndpoint(config.BaseURL, "/chat/completions")
+	if err != nil {
+		return ChatResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(buf))
 	if err != nil {
 		return ChatResult{}, err
 	}
 	req.Header.Set("authorization", "Bearer "+config.APIKey)
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "text/event-stream")
-	res, err := http.DefaultClient.Do(req)
+	res, err := llmHTTPClient.Do(req)
 	if err != nil {
 		return ChatResult{}, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		textBytes, _ := io.ReadAll(res.Body)
-		return ChatResult{}, LLMError{Status: res.StatusCode, Body: string(textBytes)}
+		_, err := readLLMResponse(res)
+		return ChatResult{}, err
+	}
+	if err := validateSSEContentType(res); err != nil {
+		return ChatResult{}, err
 	}
 
 	var content strings.Builder
 	var usage map[string]any
 	done := false
-	err = scanSSE(res.Body, func(event, data string) error {
+	err = scanSSE(ctx, res.Body, defaultSSELimits(), func(event, data string) error {
 		if data == "[DONE]" {
 			done = true
 			return io.EOF
@@ -276,7 +367,9 @@ func chatOpenAICompatibleStream(ctx context.Context, config LLMConfig, messages 
 			return LLMError{Status: 500, Body: "stream error: " + truncate(string(chunk.Error), 200)}
 		}
 		for _, c := range chunk.Choices {
-			content.WriteString(c.Delta.Content)
+			if err := appendBounded(&content, c.Delta.Content, maxLLMStreamContentBytes); err != nil {
+				return err
+			}
 		}
 		if chunk.Usage != nil {
 			usage = chunk.Usage
@@ -318,8 +411,11 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 	if err != nil {
 		return ChatResult{}, err
 	}
-	url := strings.TrimRight(config.BaseURL, "/") + "/messages"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
+	endpoint, err := llmEndpoint(config.BaseURL, "/messages")
+	if err != nil {
+		return ChatResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(buf))
 	if err != nil {
 		return ChatResult{}, err
 	}
@@ -327,20 +423,23 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "text/event-stream")
-	res, err := http.DefaultClient.Do(req)
+	res, err := llmHTTPClient.Do(req)
 	if err != nil {
 		return ChatResult{}, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		textBytes, _ := io.ReadAll(res.Body)
-		return ChatResult{}, LLMError{Status: res.StatusCode, Body: string(textBytes)}
+		_, err := readLLMResponse(res)
+		return ChatResult{}, err
+	}
+	if err := validateSSEContentType(res); err != nil {
+		return ChatResult{}, err
 	}
 
 	var content strings.Builder
 	usage := map[string]any{}
 	done := false
-	err = scanSSE(res.Body, func(event, data string) error {
+	err = scanSSE(ctx, res.Body, defaultSSELimits(), func(event, data string) error {
 		if event == "error" {
 			return LLMError{Status: 500, Body: "stream error: " + truncate(data, 200)}
 		}
@@ -366,7 +465,9 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 			}
 		case "content_block_delta":
 			if head.Delta.Type == "text_delta" {
-				content.WriteString(head.Delta.Text)
+				if err := appendBounded(&content, head.Delta.Text, maxLLMStreamContentBytes); err != nil {
+					return err
+				}
 			}
 		case "message_delta":
 			for k, v := range head.Usage {
@@ -401,10 +502,28 @@ func chatClaudeMessagesStream(ctx context.Context, config LLMConfig, messages []
 	return ChatResult{Content: out, Usage: usageOut}, nil
 }
 
-func scanSSE(body io.Reader, handle func(event, data string) error) error {
-	reader := bufio.NewReaderSize(body, 64*1024)
+type sseLimits struct {
+	lineBytes  int
+	eventBytes int
+	totalBytes int64
+}
+
+func defaultSSELimits() sseLimits {
+	return sseLimits{
+		lineBytes:  maxSSELineBytes,
+		eventBytes: maxSSEEventBytes,
+		totalBytes: maxSSEStreamBytes,
+	}
+}
+
+func scanSSE(ctx context.Context, body io.Reader, limits sseLimits, handle func(event, data string) error) error {
+	if limits.lineBytes <= 0 || limits.eventBytes <= 0 || limits.totalBytes <= 0 {
+		return errors.New("invalid SSE limits")
+	}
+	reader := bufio.NewReaderSize(body, limits.lineBytes+1)
 	var event string
 	var data strings.Builder
+	var totalBytes int64
 	flush := func() error {
 		if data.Len() == 0 {
 			event = ""
@@ -417,9 +536,22 @@ func scanSSE(body io.Reader, handle func(event, data string) error) error {
 		return handle(ev, payload)
 	}
 	for {
-		line, err := reader.ReadString('\n')
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		line, err := reader.ReadSlice('\n')
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+		if errors.Is(err, bufio.ErrBufferFull) || len(line) > limits.lineBytes {
+			return fmt.Errorf("SSE line exceeds %d bytes", limits.lineBytes)
+		}
+		totalBytes += int64(len(line))
+		if totalBytes > limits.totalBytes {
+			return fmt.Errorf("SSE stream exceeds %d bytes", limits.totalBytes)
+		}
 		if len(line) > 0 {
-			trimmed := strings.TrimRight(line, "\r\n")
+			trimmed := strings.TrimRight(string(line), "\r\n")
 			switch {
 			case trimmed == "":
 				if err := flush(); err != nil {
@@ -430,10 +562,18 @@ func scanSSE(body io.Reader, handle func(event, data string) error) error {
 			case strings.HasPrefix(trimmed, "event:"):
 				event = strings.TrimSpace(strings.TrimPrefix(trimmed, "event:"))
 			case strings.HasPrefix(trimmed, "data:"):
+				value := strings.TrimPrefix(strings.TrimPrefix(trimmed, "data:"), " ")
+				additional := len(value)
+				if data.Len() > 0 {
+					additional++
+				}
+				if additional > limits.eventBytes-data.Len() {
+					return fmt.Errorf("SSE event exceeds %d bytes", limits.eventBytes)
+				}
 				if data.Len() > 0 {
 					data.WriteByte('\n')
 				}
-				data.WriteString(strings.TrimPrefix(strings.TrimPrefix(trimmed, "data:"), " "))
+				data.WriteString(value)
 			}
 		}
 		if err != nil {

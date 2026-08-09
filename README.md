@@ -196,6 +196,8 @@ CI 会从该 seed 推导公钥，通过 ldflags 注入发布二进制。首次�
 
 `force` 只跳过版本比较，不能跳过签名、HTTPS、size 或 sha256 校验。
 
+公开的版本接口只读取内存缓存，不会同步访问发布站点。开启 `autoCheck` 后，服务会在启动时及缓存过期后后台单飞检查；管理员手动检查会立即刷新并明确返回错误。
+
 更新检查按 channel 分开：
 
 - `stable`：只接受 semver 远端版本，按 `major.minor.patch` 比较；当前是 dev 构建时允许切换到 stable。

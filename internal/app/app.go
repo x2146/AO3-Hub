@@ -31,6 +31,7 @@ type App struct {
 	loginGuard           *loginAttemptGuard
 	updateMu             sync.Mutex
 	updateRestartPending bool
+	updateCache          updateManifestCache
 }
 
 func New() (*App, error) {
@@ -60,6 +61,7 @@ func (a *App) Run() error {
 	if err := a.ResumeOnStartup(); err != nil {
 		return err
 	}
+	a.maybeAutoCheckUpdates(cfg)
 	host := resolveHost(cfg.Server.Host)
 	port, err := resolvePort(cfg.Server.Port)
 	if err != nil {
@@ -849,7 +851,12 @@ func (a *App) mountUpdate(mux *http.ServeMux) {
 		writeJSON(w, http.StatusOK, a.VersionInfo())
 	})
 	mux.HandleFunc("POST /update/check", requireAdmin(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
-		writeJSON(w, http.StatusOK, a.VersionInfo())
+		info, err := a.CheckUpdate(r.Context())
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "检查更新失败: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, info)
 	}))
 	mux.HandleFunc("POST /update/apply", requireAdmin(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
 		var body struct {

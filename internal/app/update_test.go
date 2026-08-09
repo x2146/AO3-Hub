@@ -15,7 +15,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestCheckForUpdateStableStrategy(t *testing.T) {
@@ -97,6 +99,7 @@ type signedUpdateFixture struct {
 	manifestBody []byte
 	signature    []byte
 	server       *httptest.Server
+	requests     atomic.Int32
 }
 
 func newUpdateTestServer(t *testing.T, handler http.Handler) *httptest.Server {
@@ -117,6 +120,7 @@ func newSignedUpdateFixture(t *testing.T, privateKey ed25519.PrivateKey, mutate 
 	t.Helper()
 	fixture := &signedUpdateFixture{asset: []byte("verified update binary")}
 	fixture.server = newUpdateTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fixture.requests.Add(1)
 		switch r.URL.Path {
 		case "/manifest.json":
 			_, _ = w.Write(fixture.manifestBody)
@@ -198,6 +202,81 @@ func TestFetchManifestRejectsMissingKeyBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestVersionInfoOnlyReadsCachedManifest(t *testing.T) {
+	privateKey := setUpdateTestSigningKey(t)
+	fixture := newSignedUpdateFixture(t, privateKey, nil)
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultConfig()
+	cfg.Update.ManifestURL = fixture.server.URL + "/manifest.json"
+	cfg.Update.AutoCheck = false
+	if err := store.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{store: store}
+	if info := app.VersionInfo(); info.Latest != nil {
+		t.Fatalf("uncached version info unexpectedly has latest: %+v", info.Latest)
+	}
+	if got := fixture.requests.Load(); got != 0 {
+		t.Fatalf("public version info made %d outbound requests", got)
+	}
+	checked, err := app.CheckUpdate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checked.Latest == nil || checked.Latest.Version != "v9.9.9" {
+		t.Fatalf("checked version info = %+v", checked.Latest)
+	}
+	requests := fixture.requests.Load()
+	cached := app.VersionInfo()
+	if cached.Latest == nil || cached.Latest.Version != "v9.9.9" {
+		t.Fatalf("cached version info = %+v", cached.Latest)
+	}
+	if got := fixture.requests.Load(); got != requests {
+		t.Fatalf("cached version info made outbound requests: before=%d after=%d", requests, got)
+	}
+}
+
+func TestAutoCheckIsSingleflightAndRateLimited(t *testing.T) {
+	privateKey := setUpdateTestSigningKey(t)
+	fixture := newSignedUpdateFixture(t, privateKey, nil)
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultConfig()
+	cfg.Update.ManifestURL = fixture.server.URL + "/manifest.json"
+	cfg.Update.AutoCheck = true
+	if err := store.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{store: store}
+	for range 20 {
+		_ = app.VersionInfo()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if info := app.VersionInfo(); info.Latest != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("automatic update check did not populate the cache")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := fixture.requests.Load(); got != 2 {
+		t.Fatalf("automatic check made %d requests, want manifest and signature only", got)
+	}
+	for range 20 {
+		_ = app.VersionInfo()
+	}
+	if got := fixture.requests.Load(); got != 2 {
+		t.Fatalf("rate-limited cache made %d requests", got)
+	}
+}
+
 func TestApplyUpdateForceCannotBypassSignature(t *testing.T) {
 	privateKey := setUpdateTestSigningKey(t)
 	fixture := newSignedUpdateFixture(t, privateKey, nil)
@@ -258,6 +337,14 @@ func TestValidateUpdateURLRequiresHTTPSForLoopback(t *testing.T) {
 		if err := validateUpdateURL(rawURL); err == nil || !strings.Contains(err.Error(), "HTTPS") {
 			t.Fatalf("validateUpdateURL(%q) error = %v", rawURL, err)
 		}
+	}
+}
+
+func TestValidateConfigRejectsInsecureManifestURL(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Update.ManifestURL = "http://updates.example/manifest.json"
+	if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), "manifestURL") {
+		t.Fatalf("validation error = %v", err)
 	}
 }
 

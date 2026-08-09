@@ -400,6 +400,9 @@ func validateConfig(c Config) error {
 	if strings.TrimSpace(c.LLM.BaseURL) == "" {
 		return errors.New("llm.baseURL is required")
 	}
+	if _, err := llmEndpoint(c.LLM.BaseURL, ""); err != nil {
+		return fmt.Errorf("llm.baseURL is invalid: %w", err)
+	}
 	if strings.TrimSpace(c.LLM.Model) == "" {
 		return errors.New("llm.model is required")
 	}
@@ -435,6 +438,9 @@ func validateConfig(c Config) error {
 	}
 	if strings.TrimSpace(c.Update.ManifestURL) == "" {
 		return errors.New("update.manifestURL is required")
+	}
+	if err := validateUpdateURL(c.Update.ManifestURL); err != nil {
+		return fmt.Errorf("update.manifestURL is invalid: %w", err)
 	}
 	if strings.TrimSpace(c.Update.Channel) == "" {
 		return errors.New("update.channel is required")

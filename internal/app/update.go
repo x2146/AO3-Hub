@@ -18,12 +18,14 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
 	updateManifestTimeout         = 30 * time.Second
 	updateDownloadTimeout         = 30 * time.Minute
+	updateAutoCheckInterval       = 15 * time.Minute
 	maxUpdateManifestBytes        = 1 << 20
 	maxUpdateSignatureBytes       = 4 << 10
 	maxUpdateAssetBytes     int64 = 512 << 20
@@ -50,6 +52,16 @@ type updateCheck struct {
 	HasUpdate bool
 	Strategy  string
 	Reason    string
+}
+
+type updateManifestCache struct {
+	mu          sync.Mutex
+	manifest    Manifest
+	manifestKey string
+	hasManifest bool
+	checking    bool
+	attemptKey  string
+	attemptedAt time.Time
 }
 
 func normalizeVersion(version string) string {
@@ -385,7 +397,33 @@ func (a *App) VersionInfo() VersionInfo {
 	if err != nil {
 		return base
 	}
-	manifest, _ := fetchManifest(cfg)
+	manifest := a.cachedUpdateManifest(cfg)
+	a.maybeAutoCheckUpdates(cfg)
+	return versionInfoForManifest(base, cfg, manifest)
+}
+
+func (a *App) CheckUpdate(parent context.Context) (VersionInfo, error) {
+	base := VersionInfo{
+		Current:  Version,
+		Platform: platformName(),
+		Arch:     archName(),
+		BuiltAt:  BuiltAt,
+	}
+	cfg, err := a.store.LoadConfig()
+	if err != nil {
+		return base, err
+	}
+	ctx, cancel := context.WithTimeout(parent, updateManifestTimeout)
+	defer cancel()
+	manifest, err := fetchManifestContext(ctx, cfg)
+	if err != nil {
+		return base, err
+	}
+	a.cacheUpdateManifest(cfg, *manifest)
+	return versionInfoForManifest(base, cfg, manifest), nil
+}
+
+func versionInfoForManifest(base VersionInfo, cfg Config, manifest *Manifest) VersionInfo {
 	if manifest == nil {
 		return base
 	}
@@ -411,6 +449,70 @@ func (a *App) VersionInfo() VersionInfo {
 	}
 	base.Latest = latest
 	return base
+}
+
+func updateManifestCacheKey(cfg Config) string {
+	return normalizeUpdateChannel(cfg.Update.Channel) + "\x00" + resolveManifestURL(cfg)
+}
+
+func (a *App) cachedUpdateManifest(cfg Config) *Manifest {
+	key := updateManifestCacheKey(cfg)
+	a.updateCache.mu.Lock()
+	defer a.updateCache.mu.Unlock()
+	if !a.updateCache.hasManifest || a.updateCache.manifestKey != key {
+		return nil
+	}
+	manifest := a.updateCache.manifest
+	manifest.Assets = append([]ManifestAsset(nil), manifest.Assets...)
+	return &manifest
+}
+
+func (a *App) cacheUpdateManifest(cfg Config, manifest Manifest) {
+	a.updateCache.mu.Lock()
+	defer a.updateCache.mu.Unlock()
+	key := updateManifestCacheKey(cfg)
+	manifest.Assets = append([]ManifestAsset(nil), manifest.Assets...)
+	a.updateCache.manifest = manifest
+	a.updateCache.manifestKey = key
+	a.updateCache.hasManifest = true
+	a.updateCache.attemptKey = key
+	a.updateCache.attemptedAt = time.Now()
+}
+
+func (a *App) maybeAutoCheckUpdates(cfg Config) {
+	if !cfg.Update.AutoCheck {
+		return
+	}
+	key := updateManifestCacheKey(cfg)
+	now := time.Now()
+	a.updateCache.mu.Lock()
+	if a.updateCache.checking ||
+		(a.updateCache.attemptKey == key && now.Sub(a.updateCache.attemptedAt) < updateAutoCheckInterval) {
+		a.updateCache.mu.Unlock()
+		return
+	}
+	a.updateCache.checking = true
+	a.updateCache.attemptKey = key
+	a.updateCache.attemptedAt = now
+	a.updateCache.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), updateManifestTimeout)
+		defer cancel()
+		manifest, err := fetchManifestContext(ctx, cfg)
+		a.updateCache.mu.Lock()
+		a.updateCache.checking = false
+		if err != nil {
+			a.updateCache.mu.Unlock()
+			fmt.Fprintf(os.Stderr, "[ao3-hub] automatic update check failed: %v\n", err)
+			return
+		}
+		manifest.Assets = append([]ManifestAsset(nil), manifest.Assets...)
+		a.updateCache.manifest = *manifest
+		a.updateCache.manifestKey = key
+		a.updateCache.hasManifest = true
+		a.updateCache.mu.Unlock()
+	}()
 }
 
 type ApplyResult struct {

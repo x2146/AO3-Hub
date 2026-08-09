@@ -2,12 +2,35 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+func setLLMTestTLSClient(t *testing.T, servers ...*httptest.Server) {
+	t.Helper()
+	roots := x509.NewCertPool()
+	for _, server := range servers {
+		roots.AddCert(server.Certificate())
+	}
+	transport := newLLMHTTPTransport()
+	transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	original := llmHTTPClient
+	client := &http.Client{Transport: transport, CheckRedirect: original.CheckRedirect}
+	llmHTTPClient = client
+	t.Cleanup(func() {
+		client.CloseIdleConnections()
+		llmHTTPClient = original
+	})
+}
 
 func TestChatOpenAICompatible(t *testing.T) {
 	var gotPath string
@@ -22,6 +45,9 @@ func TestChatOpenAICompatible(t *testing.T) {
 		}
 		if body["response_format"] == nil {
 			t.Fatal("missing response_format for json mode")
+		}
+		if body["max_tokens"] != float64(1000) {
+			t.Fatalf("max_tokens = %v", body["max_tokens"])
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"choices": []map[string]any{
@@ -155,6 +181,29 @@ func TestChatClaudeMessagesRequiresNonSystemMessage(t *testing.T) {
 	}, []ChatMessage{{Role: "system", Content: "system prompt"}}, false)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestLLMEndpointRejectsCredentialLeaks(t *testing.T) {
+	for _, baseURL := range []string{
+		"http://provider.example/v1",
+		"https://user:secret@provider.example/v1",
+		"https://provider.example/v1?token=secret",
+	} {
+		if _, err := llmEndpoint(baseURL, "/messages"); err == nil {
+			t.Fatalf("llmEndpoint(%q) was accepted", baseURL)
+		}
+	}
+	if got, err := llmEndpoint("http://127.0.0.1:8080/v1/", "/messages"); err != nil || got != "http://127.0.0.1:8080/v1/messages" {
+		t.Fatalf("loopback endpoint = %q, %v", got, err)
+	}
+}
+
+func TestValidateConfigRejectsInsecureLLMBaseURL(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.LLM.BaseURL = "http://provider.example/v1"
+	if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), "baseURL") {
+		t.Fatalf("validation error = %v", err)
 	}
 }
 
@@ -416,5 +465,235 @@ func TestChatClaudeMessagesStreamReturnsErrorEvent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestClaudeAPIKeyIsNotForwardedOnRedirect(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		tls  bool
+	}{
+		{name: "cross origin", tls: true},
+		{name: "HTTPS downgrade", tls: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			received := make(chan string, 1)
+			targetHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received <- r.Header.Get("x-api-key")
+				writeJSON(w, http.StatusOK, map[string]any{"content": []map[string]string{{"type": "text", "text": "unexpected"}}})
+			})
+			var target *httptest.Server
+			if test.tls {
+				target = httptest.NewTLSServer(targetHandler)
+			} else {
+				target = httptest.NewServer(targetHandler)
+			}
+			defer target.Close()
+
+			source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.URL+"/stolen", http.StatusTemporaryRedirect)
+			}))
+			defer source.Close()
+			if test.tls {
+				setLLMTestTLSClient(t, source, target)
+			} else {
+				setLLMTestTLSClient(t, source)
+			}
+
+			_, err := chat(context.Background(), LLMConfig{
+				APIType:             LLMAPITypeClaudeMessages,
+				BaseURL:             source.URL,
+				APIKey:              "secret-key",
+				Model:               "test-model",
+				MaxTokensPerRequest: 1000,
+			}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+			if err == nil || !strings.Contains(err.Error(), "redirects are disabled") {
+				t.Fatalf("redirect error = %v", err)
+			}
+			select {
+			case key := <-received:
+				t.Fatalf("redirect target received x-api-key %q", key)
+			default:
+			}
+		})
+	}
+}
+
+func TestChatHonorsContextDeadline(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+	setLLMTestTLSClient(t, server)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := chat(ctx, LLMConfig{
+		APIType:             LLMAPITypeOpenAICompatible,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "test-model",
+		MaxTokensPerRequest: 1000,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	<-started
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline error = %v", err)
+	}
+}
+
+func TestChatResponseSizeLimits(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		limit  int64
+	}{
+		{name: "success", status: http.StatusOK, limit: maxLLMResponseBytes},
+		{name: "error", status: http.StatusBadGateway, limit: maxLLMErrorBytes},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("content-type", "application/json")
+				w.Header().Set("content-length", strconv.FormatInt(test.limit+1, 10))
+				w.WriteHeader(test.status)
+			}))
+			defer server.Close()
+			setLLMTestTLSClient(t, server)
+
+			_, err := chat(context.Background(), LLMConfig{
+				APIType:             LLMAPITypeOpenAICompatible,
+				BaseURL:             server.URL,
+				APIKey:              "test-key",
+				Model:               "test-model",
+				MaxTokensPerRequest: 1000,
+			}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+			if err == nil || !strings.Contains(err.Error(), "exceeds") {
+				t.Fatalf("size-limit error = %v", err)
+			}
+			if test.status != http.StatusOK {
+				var providerErr LLMError
+				if !errors.As(err, &providerErr) || providerErr.Status != test.status {
+					t.Fatalf("provider error = %#v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestChatStreamCanBeCanceled(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		flusher.Flush()
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+	setLLMTestTLSClient(t, server)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := chat(ctx, LLMConfig{
+		APIType:             LLMAPITypeOpenAICompatible,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "test-model",
+		MaxTokensPerRequest: 1000,
+		Stream:              true,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stream cancellation error = %v", err)
+	}
+}
+
+func TestChatStreamRejectsOversizedLine(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", strings.Repeat("x", maxSSELineBytes))
+	}))
+	defer server.Close()
+	setLLMTestTLSClient(t, server)
+
+	_, err := chat(context.Background(), LLMConfig{
+		APIType:             LLMAPITypeOpenAICompatible,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "test-model",
+		MaxTokensPerRequest: 1000,
+		Stream:              true,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	if err == nil || !strings.Contains(err.Error(), "SSE line exceeds") {
+		t.Fatalf("oversized line error = %v", err)
+	}
+}
+
+func TestChatStreamRejectsUnexpectedContentType(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	setLLMTestTLSClient(t, server)
+
+	_, err := chat(context.Background(), LLMConfig{
+		APIType:             LLMAPITypeOpenAICompatible,
+		BaseURL:             server.URL,
+		APIKey:              "test-key",
+		Model:               "test-model",
+		MaxTokensPerRequest: 1000,
+		Stream:              true,
+	}, []ChatMessage{{Role: "user", Content: "ping"}}, false)
+	if err == nil || !strings.Contains(err.Error(), "content type") {
+		t.Fatalf("content-type error = %v", err)
+	}
+}
+
+func TestScanSSEEnforcesEventAndTotalLimits(t *testing.T) {
+	t.Run("event", func(t *testing.T) {
+		err := scanSSE(context.Background(), strings.NewReader("data: abc\ndata: def\n\n"), sseLimits{
+			lineBytes:  32,
+			eventBytes: 5,
+			totalBytes: 128,
+		}, func(_, _ string) error { return nil })
+		if err == nil || !strings.Contains(err.Error(), "SSE event exceeds") {
+			t.Fatalf("event-limit error = %v", err)
+		}
+	})
+
+	t.Run("total", func(t *testing.T) {
+		err := scanSSE(context.Background(), strings.NewReader(": keep\n: keep\n"), sseLimits{
+			lineBytes:  32,
+			eventBytes: 32,
+			totalBytes: 10,
+		}, func(_, _ string) error { return nil })
+		if err == nil || !strings.Contains(err.Error(), "SSE stream exceeds") {
+			t.Fatalf("stream-limit error = %v", err)
+		}
+	})
+}
+
+func TestAppendBoundedRejectsCumulativeStreamContent(t *testing.T) {
+	var content strings.Builder
+	if err := appendBounded(&content, "1234", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendBounded(&content, "56", 5); err == nil || !strings.Contains(err.Error(), "stream content exceeds") {
+		t.Fatalf("content-limit error = %v", err)
 	}
 }
