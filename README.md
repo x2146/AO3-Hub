@@ -37,7 +37,7 @@ AO3-Hub/
 
 ## Dev
 
-需要 Go 和 Node.js/npm（前端构建/包管理）。
+需要 Go 1.25.12+ 和 Node.js 22+/npm 10+（前端构建/包管理）。
 
 ```bash
 npm install                   # 装所有 workspace

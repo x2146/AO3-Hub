@@ -39,6 +39,12 @@ jobs:
         timeout-minutes: 10
         run: npm ci
 
+      - name: Audit dependencies
+        timeout-minutes: 10
+        run: |
+          npm audit --registry=https://registry.npmjs.org
+          go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
       - name: Run CI checks
         run: npm run ci
 
