@@ -170,3 +170,38 @@ func TestFetchDownloadHTMLHonorsCancellation(t *testing.T) {
 		t.Fatalf("cancellation error = %v", err)
 	}
 }
+
+func TestNormalizeAO3WorkURLAcceptsOnlyConfiguredOrigin(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantURL string
+		wantID  string
+		ok      bool
+	}{
+		{name: "absolute", input: "https://archiveofourown.org/works/12345?view_full_work=true", wantURL: "https://archiveofourown.org/works/12345", wantID: "12345", ok: true},
+		{name: "chapter", input: "https://archiveofourown.org/works/12345/chapters/67890", wantURL: "https://archiveofourown.org/works/12345", wantID: "12345", ok: true},
+		{name: "relative", input: "/works/12345", wantURL: "https://archiveofourown.org/works/12345", wantID: "12345", ok: true},
+		{name: "direct id", input: "12345", wantURL: "https://archiveofourown.org/works/12345", wantID: "12345", ok: true},
+		{name: "foreign host", input: "https://evil.example/works/12345"},
+		{name: "host suffix", input: "https://archiveofourown.org.evil.example/works/12345"},
+		{name: "userinfo", input: "https://archiveofourown.org@evil.example/works/12345"},
+		{name: "encoded slash", input: "https://archiveofourown.org/works%2f12345"},
+		{name: "confused protocol", input: "https://archiveofourown.org/works/12345\\@evil.example"},
+		{name: "unrelated path", input: "https://archiveofourown.org/users/12345"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gotURL, gotID, err := normalizeAO3WorkURL(test.input)
+			if test.ok {
+				if err != nil || gotURL != test.wantURL || gotID != test.wantID {
+					t.Fatalf("normalize = %q, %q, %v; want %q, %q", gotURL, gotID, err, test.wantURL, test.wantID)
+				}
+				return
+			}
+			if !errors.Is(err, errInvalidAO3WorkURL) {
+				t.Fatalf("normalize error = %v, want %v", err, errInvalidAO3WorkURL)
+			}
+		})
+	}
+}

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -68,6 +69,87 @@ func TestQueueDeduplicatesPendingAndRunningStory(t *testing.T) {
 	}
 	if got := secondCalls.Load(); got != 1 {
 		t.Fatalf("second story calls = %d, want 1", got)
+	}
+}
+
+func TestQueueBoundsPendingJobsWithoutDroppingAcceptedWork(t *testing.T) {
+	app := newLifecycleTestApp(t)
+	started := make(chan struct{})
+	app.queue.run = func(ctx context.Context, job Job) error {
+		if job.StoryID == "running" {
+			close(started)
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if err := app.queue.Enqueue(Job{StoryID: "running", Type: "translate"}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	for i := 0; i < maxPendingJobs; i++ {
+		job := Job{StoryID: fmt.Sprintf("pending-%d", i), Type: "translate"}
+		if err := app.queue.Enqueue(job); err != nil {
+			t.Fatalf("accepted job %d: %v", i, err)
+		}
+	}
+	if err := app.queue.Enqueue(Job{StoryID: "overflow", Type: "translate"}); !errors.Is(err, errQueueFull) {
+		t.Fatalf("overflow error = %v, want %v", err, errQueueFull)
+	}
+	app.queue.mu.Lock()
+	pending := len(app.queue.pending)
+	app.queue.mu.Unlock()
+	if pending != maxPendingJobs {
+		t.Fatalf("pending jobs = %d, want %d", pending, maxPendingJobs)
+	}
+}
+
+func TestResumeMarksOverflowedStoryAsErrorAndContinues(t *testing.T) {
+	app := newLifecycleTestApp(t)
+	started := make(chan struct{})
+	app.queue.run = func(ctx context.Context, job Job) error {
+		if job.StoryID == "running" {
+			close(started)
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if err := app.queue.Enqueue(Job{StoryID: "running", Type: "translate"}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	for i := 0; i < maxPendingJobs; i++ {
+		if err := app.queue.Enqueue(Job{StoryID: fmt.Sprintf("pending-%d", i), Type: "translate"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const storyID = "overflow"
+	meta := Meta{ID: storyID, Title: "Overflow"}
+	if err := app.store.SaveMeta(storyID, meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.SaveProgress(storyID, Progress{Phase: PhaseQueued, Errors: []ProgressError{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.UpsertIndex(indexEntryFor(meta, StatusQueued)); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ResumeOnStartup(); err != nil {
+		t.Fatal(err)
+	}
+	progress, err := app.store.LoadProgress(storyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress == nil || progress.Phase != PhaseError || progress.Message != errQueueFull.Error() {
+		t.Fatalf("overflowed story progress = %+v", progress)
+	}
+	index, err := app.store.LoadIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(index.Stories) != 1 || index.Stories[0].Status != StatusError {
+		t.Fatalf("overflowed story index = %+v", index)
 	}
 }
 
@@ -399,8 +481,8 @@ func TestCreateFromURLFailureLeavesTerminalErrorStatus(t *testing.T) {
 	setAO3TestServers(t, server)
 	app := newLifecycleTestApp(t)
 
-	if _, err := app.CreateFromURL(server.URL+"/works/12345", ""); err == nil {
-		t.Fatal("expected AO3 fetch failure")
+	if _, err := app.CreateFromURL(server.URL+"/works/12345", ""); !errors.Is(err, errAO3Upstream) {
+		t.Fatalf("AO3 fetch error = %v, want %v", err, errAO3Upstream)
 	}
 	index, err := app.store.LoadIndex()
 	if err != nil {

@@ -19,11 +19,10 @@ const (
 )
 
 var (
-	workIDFromURLRE = regexp.MustCompile(`/works/(\d+)`)
-	workIDDirectRE  = regexp.MustCompile(`^(\d{5,12})$`)
-	downloadHrefRE  = regexp.MustCompile(`(?i)href="(/downloads/[^"]+\.html)"`)
-	ao3BaseURL      = "https://archiveofourown.org"
-	ao3HTTPClient   = &http.Client{
+	workIDDirectRE = regexp.MustCompile(`^(\d{5,12})$`)
+	downloadHrefRE = regexp.MustCompile(`(?i)href="(/downloads/[^"]+\.html)"`)
+	ao3BaseURL     = "https://archiveofourown.org"
+	ao3HTTPClient  = &http.Client{
 		Transport: newExternalHTTPTransport(),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxAO3Redirects {
@@ -35,17 +34,43 @@ var (
 			return nil
 		},
 	}
+	errInvalidAO3WorkURL = errors.New("invalid AO3 work URL")
 )
 
-func extractWorkID(input string) string {
-	if match := workIDFromURLRE.FindStringSubmatch(input); len(match) == 2 {
-		return match[1]
+func normalizeAO3WorkURL(input string) (string, string, error) {
+	value := strings.TrimSpace(input)
+	base, err := parseAO3BaseURL()
+	if err != nil {
+		return "", "", err
 	}
-	input = strings.TrimSpace(input)
-	if match := workIDDirectRE.FindStringSubmatch(input); len(match) == 2 {
-		return match[1]
+	if workIDDirectRE.MatchString(value) {
+		workURL := *base
+		workURL.Path = "/works/" + value
+		return workURL.String(), value, nil
 	}
-	return ""
+	if value == "" || hasUnsafeURLChars(value) {
+		return "", "", errInvalidAO3WorkURL
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.User != nil || parsed.Fragment != "" {
+		return "", "", errInvalidAO3WorkURL
+	}
+	if !parsed.IsAbs() {
+		if parsed.Host != "" || parsed.Opaque != "" || !strings.HasPrefix(value, "/") {
+			return "", "", errInvalidAO3WorkURL
+		}
+		parsed = base.ResolveReference(parsed)
+	}
+	if !sameURLOrigin(parsed, base) || strings.Contains(parsed.EscapedPath(), "%") {
+		return "", "", errInvalidAO3WorkURL
+	}
+	match := workPathRE.FindStringSubmatch(parsed.Path)
+	if len(match) != 2 || !workIDDirectRE.MatchString(match[1]) {
+		return "", "", errInvalidAO3WorkURL
+	}
+	workURL := *base
+	workURL.Path = "/works/" + match[1]
+	return workURL.String(), match[1], nil
 }
 
 func fetchWith(ctx context.Context, rawURL, cookie, userAgent string) (*http.Response, error) {

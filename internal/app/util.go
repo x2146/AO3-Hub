@@ -28,12 +28,16 @@ const (
 	DefaultClaudeMessagesModel     = "claude-sonnet-4-5"
 	maxJSONBodyBytes               = 1 << 20
 	maxUploadHTMLBytes             = 64 << 20
+	maxUploadRequestBytes          = maxUploadHTMLBytes + (1 << 20)
+	maxUploadParts                 = 16
 )
 
 var (
-	Version   = "dev-local"
-	BuiltAt   = ""
-	storyIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+	Version            = "dev-local"
+	BuiltAt            = ""
+	storyIDRE          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+	errInvalidStoryID  = errors.New("invalid story id")
+	errRequestTooLarge = errors.New("request body too large")
 )
 
 func init() {
@@ -135,7 +139,7 @@ func randomStoryID() string {
 
 func validateStoryID(id string) error {
 	if !storyIDRE.MatchString(id) {
-		return errors.New("invalid story id")
+		return errInvalidStoryID
 	}
 	return nil
 }

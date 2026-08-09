@@ -98,10 +98,15 @@ func (s *Store) writeText(path string, data string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(data), 0o600); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func (s *Store) readText(path string) (string, bool, error) {

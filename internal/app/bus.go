@@ -7,6 +7,13 @@ import (
 	"sync"
 )
 
+const maxPendingJobs = 128
+
+var (
+	errQueueClosed = errors.New("translation queue is closed")
+	errQueueFull   = errors.New("translation queue is full")
+)
+
 type EventBus struct {
 	mu       sync.Mutex
 	channels map[string]map[chan StreamEvent]struct{}
@@ -128,19 +135,23 @@ func NewQueue(app *App) *Queue {
 	return q
 }
 
-func (q *Queue) Enqueue(job Job) {
+func (q *Queue) Enqueue(job Job) error {
 	q.mu.Lock()
 	if q.closed || q.ctx.Err() != nil {
 		q.mu.Unlock()
-		return
+		return errQueueClosed
 	}
 	if _, ok := q.queued[job.StoryID]; ok {
 		q.mu.Unlock()
-		return
+		return nil
 	}
 	if _, ok := q.running[job.StoryID]; ok {
 		q.mu.Unlock()
-		return
+		return nil
+	}
+	if len(q.pending) >= maxPendingJobs {
+		q.mu.Unlock()
+		return errQueueFull
 	}
 	q.pending = append(q.pending, job)
 	q.queued[job.StoryID] = struct{}{}
@@ -150,6 +161,7 @@ func (q *Queue) Enqueue(job Job) {
 		go q.pump()
 	}
 	q.mu.Unlock()
+	return nil
 }
 
 func (q *Queue) CancelAndWait(storyID string) {

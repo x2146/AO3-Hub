@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -434,6 +436,34 @@ func TestStoreUsesPrivatePermissions(t *testing.T) {
 	assertMode(filepath.Join(dataDir, "config.json"), 0o600)
 }
 
+func TestSaveSourceIsAtomicOnWriteFailure(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const storyID = "story"
+	if err := store.SaveSource(storyID, "old source"); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath, err := store.storyPath(storyID, "source.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(sourcePath+".tmp", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSource(storyID, "new source"); err == nil {
+		t.Fatal("expected source write failure")
+	}
+	got, ok, err := store.LoadSource(storyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || got != "old source" {
+		t.Fatalf("source after failed write = %q, %v", got, ok)
+	}
+}
+
 func TestCORSRejectsUntrustedOrigins(t *testing.T) {
 	handler := (&App{}).cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -459,6 +489,126 @@ func TestCORSRejectsUntrustedOrigins(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("same-host status = %d, want %d", response.Code, http.StatusNoContent)
 	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://ao3hub.example/api/config", nil)
+	request.Host = "ao3hub.example"
+	request.Header.Set("Origin", "https://ao3hub.example/path")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("origin with path status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+}
+
+func TestSecurityHeadersCoverDocumentsAndAPIResponses(t *testing.T) {
+	handler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "http://ao3hub.example/api/health", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	for _, name := range []string{
+		"Content-Security-Policy",
+		"Cross-Origin-Opener-Policy",
+		"Cross-Origin-Resource-Policy",
+		"Permissions-Policy",
+		"Referrer-Policy",
+		"X-Content-Type-Options",
+		"X-Frame-Options",
+	} {
+		if value := response.Header().Get(name); value == "" {
+			t.Fatalf("missing %s", name)
+		}
+	}
+	if csp := response.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") || !strings.Contains(csp, "object-src 'none'") {
+		t.Fatalf("incomplete CSP: %q", csp)
+	}
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("API cache control = %q, want no-store", got)
+	}
+}
+
+func TestRetryEndpointReturnsNotFoundForMissingStory(t *testing.T) {
+	app := newLifecycleTestApp(t)
+	user, err := app.store.CreateUser("admin", "unused", RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := app.store.CreateSession(user.ID, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/stories/missing/retry", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: cookieName, Value: session.Token})
+	response := httptest.NewRecorder()
+	app.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("retry status = %d, want %d: %s", response.Code, http.StatusNotFound, response.Body.String())
+	}
+}
+
+func TestTranslationStatusPropagatesCorruptContext(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const storyID = "story"
+	if err := store.SaveStatsSample(storyID, RequestSample{Stage: StageTranslateBatch}); err != nil {
+		t.Fatal(err)
+	}
+	contextPath, err := store.storyPath(storyID, "context.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(contextPath, []byte(`{"broken":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{store: store}
+	request := httptest.NewRequest(http.MethodGet, "/api/stories/story/translation-status", nil)
+	request.SetPathValue("id", storyID)
+	response := httptest.NewRecorder()
+	app.handleTranslationStatus(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestRunContextStopsCleanlyWhenCanceled(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	app := newLifecycleTestApp(t)
+	cfg, err := app.store.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Server.Host = "127.0.0.1"
+	cfg.Server.Port = port
+	if err := app.store.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- app.RunContext(ctx)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunContext did not stop after cancellation")
+	}
 }
 
 func TestDecodeJSONRejectsOversizeAndTrailingValues(t *testing.T) {
@@ -471,5 +621,30 @@ func TestDecodeJSONRejectsOversizeAndTrailingValues(t *testing.T) {
 	request = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(bytes.Repeat([]byte(" "), maxJSONBodyBytes+1)))
 	if err := decodeJSON(request, &body); err == nil || !strings.Contains(err.Error(), "too large") {
 		t.Fatalf("expected oversized body error, got %v", err)
+	}
+}
+
+func TestReadUploadHTMLBoundsMultipartParts(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	file, err := writer.CreateFormFile("file", "work.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("<html></html>")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxUploadParts; i++ {
+		if err := writer.WriteField("extra", "x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	if _, _, err := readUploadHTML(request); err == nil || !strings.Contains(err.Error(), "too many") {
+		t.Fatalf("multipart error = %v", err)
 	}
 }

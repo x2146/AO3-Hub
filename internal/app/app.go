@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -65,6 +66,10 @@ func New() (*App, error) {
 }
 
 func (a *App) Run() error {
+	return a.RunContext(context.Background())
+}
+
+func (a *App) RunContext(ctx context.Context) error {
 	defer a.Close()
 	cfg, err := a.store.LoadConfig()
 	if err != nil {
@@ -80,7 +85,6 @@ func (a *App) Run() error {
 		return err
 	}
 	addr := fmt.Sprintf("%s:%d", host, port)
-	fmt.Printf("[ao3-hub] %s listening on http://%s\n", versionLabel(Version), addr)
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           a.routes(),
@@ -89,7 +93,38 @@ func (a *App) Run() error {
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    1 << 20,
 	}
-	return server.ListenAndServe()
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("[ao3-hub] %s listening on http://%s\n", versionLabel(Version), listener.Addr())
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- server.Serve(listener)
+	}()
+	select {
+	case err := <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		shutdownErr := make(chan error, 1)
+		go func() {
+			shutdownErr <- server.Shutdown(shutdownCtx)
+		}()
+		a.Close()
+		if err := <-shutdownErr; err != nil {
+			_ = server.Close()
+			return fmt.Errorf("shut down HTTP server: %w", err)
+		}
+		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
 }
 
 func (a *App) Close() {
@@ -97,11 +132,11 @@ func (a *App) Close() {
 		if a.cancel != nil {
 			a.cancel()
 		}
-		if a.queue != nil {
-			a.queue.Close()
-		}
 		if a.bus != nil {
 			a.bus.Close()
+		}
+		if a.queue != nil {
+			a.queue.Close()
 		}
 	})
 }
@@ -164,7 +199,23 @@ func (a *App) routes() http.Handler {
 
 	mux.Handle("/api/", http.StripPrefix("/api", a.cors(a.attachUser(api))))
 	mux.HandleFunc("/", a.serveAsset)
-	return mux
+	return securityHeaders(mux)
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-security-policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'")
+		w.Header().Set("cross-origin-opener-policy", "same-origin")
+		w.Header().Set("cross-origin-resource-policy", "same-origin")
+		w.Header().Set("permissions-policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("referrer-policy", "no-referrer")
+		w.Header().Set("x-content-type-options", "nosniff")
+		w.Header().Set("x-frame-options", "DENY")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("cache-control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *App) cors(next http.Handler) http.Handler {
@@ -191,7 +242,7 @@ func (a *App) cors(next http.Handler) http.Handler {
 
 func allowedRequestOrigin(origin, requestHost string) bool {
 	parsed, err := url.Parse(origin)
-	if err != nil || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return false
 	}
 	if strings.EqualFold(parsed.Host, requestHost) {
@@ -425,7 +476,12 @@ func (a *App) mountStories(mux *http.ServeMux) {
 		for _, entry := range idx.Stories {
 			item := StoryListItem{IndexEntry: entry}
 			if entry.Status != StatusReady {
-				if p, _ := a.store.LoadProgress(entry.ID); p != nil {
+				p, err := a.store.LoadProgress(entry.ID)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				if p != nil {
 					item.Progress = p
 				}
 			}
@@ -448,15 +504,31 @@ func (a *App) mountStories(mux *http.ServeMux) {
 		}
 		out, err := a.CreateFromURL(body.URL, body.Mode)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, errInvalidAO3WorkURL), errors.Is(err, errInvalidTranslationMode):
+				status = http.StatusBadRequest
+			case errors.Is(err, errImportTooLarge):
+				status = http.StatusRequestEntityTooLarge
+			case errors.Is(err, errAO3Upstream):
+				status = http.StatusBadGateway
+			case errors.Is(err, errQueueClosed), errors.Is(err, errQueueFull):
+				status = http.StatusServiceUnavailable
+			}
+			writeError(w, status, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, out)
 	}))
 	mux.HandleFunc("POST /stories/upload", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxUploadRequestBytes)
 		html, mode, err := readUploadHTML(r)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "empty or invalid html")
+			status := http.StatusBadRequest
+			if requestTooLarge(err) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			writeError(w, status, "empty or invalid html")
 			return
 		}
 		cfg, err := a.store.LoadConfig()
@@ -470,15 +542,32 @@ func (a *App) mountStories(mux *http.ServeMux) {
 		}
 		out, err := a.CreateFromHTML(html, mode)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, errImportTooLarge):
+				status = http.StatusRequestEntityTooLarge
+			case errors.Is(err, errInvalidImport), errors.Is(err, errInvalidTranslationMode):
+				status = http.StatusBadRequest
+			case errors.Is(err, errQueueClosed), errors.Is(err, errQueueFull):
+				status = http.StatusServiceUnavailable
+			}
+			writeError(w, status, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, out)
 	}))
 	mux.HandleFunc("GET /stories/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if err := validateStoryID(id); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		meta, err := a.store.LoadMeta(id)
-		if err != nil || meta == nil {
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if meta == nil {
 			writeError(w, http.StatusNotFound, "not found")
 			return
 		}
@@ -502,19 +591,28 @@ func (a *App) mountStories(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "invalid retry payload")
 			return
 		}
-		if body.ChapterIndex != nil && *body.ChapterIndex < 0 {
-			writeError(w, http.StatusBadRequest, "invalid retry payload")
-			return
-		}
 		if err := a.RetryStory(r.PathValue("id"), body.BlockIDs, body.ChapterIndex, body.Mode); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, errStoryNotFound):
+				status = http.StatusNotFound
+			case errors.Is(err, errInvalidStoryID), errors.Is(err, errInvalidRetrySelection), errors.Is(err, errInvalidTranslationMode):
+				status = http.StatusBadRequest
+			case errors.Is(err, errQueueClosed), errors.Is(err, errQueueFull):
+				status = http.StatusServiceUnavailable
+			}
+			writeError(w, status, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}))
 	mux.HandleFunc("DELETE /stories/{id}", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
 		if err := a.DeleteStory(r.PathValue("id")); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			status := http.StatusInternalServerError
+			if errors.Is(err, errInvalidStoryID) {
+				status = http.StatusBadRequest
+			}
+			writeError(w, status, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -527,6 +625,10 @@ func (a *App) mountStories(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /stories/{id}/translation-status/reset", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
 		id := r.PathValue("id")
+		if err := validateStoryID(id); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if !a.store.StoryExists(id) {
 			writeError(w, http.StatusNotFound, "not found")
 			return
@@ -539,8 +641,12 @@ func (a *App) mountStories(mux *http.ServeMux) {
 	}))
 	mux.HandleFunc("POST /stories/{id}/reanalyze", requireAuth(func(w http.ResponseWriter, r *http.Request, _ *UserRecord) {
 		if err := a.ReanalyzeStory(r.PathValue("id")); err != nil {
-			if errors.Is(err, errStoryNotFound) {
+			if errors.Is(err, errInvalidStoryID) {
+				writeError(w, http.StatusBadRequest, err.Error())
+			} else if errors.Is(err, errStoryNotFound) {
 				writeError(w, http.StatusNotFound, "not found")
+			} else if errors.Is(err, errQueueClosed) || errors.Is(err, errQueueFull) {
+				writeError(w, http.StatusServiceUnavailable, err.Error())
 			} else {
 				writeError(w, http.StatusInternalServerError, err.Error())
 			}
@@ -552,6 +658,10 @@ func (a *App) mountStories(mux *http.ServeMux) {
 
 func (a *App) handleTranslationStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if err := validateStoryID(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if !a.store.StoryExists(id) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
@@ -561,8 +671,16 @@ func (a *App) handleTranslationStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	transCtx, _ := a.store.LoadContext(id)
-	meta, _ := a.store.LoadMeta(id)
+	transCtx, err := a.store.LoadContext(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	meta, err := a.store.LoadMeta(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	mode := TranslationModeNormal
 	if meta != nil && meta.TranslationMode != "" {
 		mode = meta.TranslationMode
@@ -593,6 +711,7 @@ func readUploadHTML(r *http.Request) (string, TranslationMode, error) {
 		var html string
 		var mode TranslationMode
 		seenFile := false
+		partCount := 0
 		for {
 			part, err := reader.NextPart()
 			if errors.Is(err, io.EOF) {
@@ -600,6 +719,11 @@ func readUploadHTML(r *http.Request) (string, TranslationMode, error) {
 			}
 			if err != nil {
 				return "", "", err
+			}
+			partCount++
+			if partCount > maxUploadParts {
+				_ = part.Close()
+				return "", "", errors.New("too many multipart fields")
 			}
 			switch part.FormName() {
 			case "file", "html":
@@ -646,22 +770,47 @@ func readLimited(reader io.Reader, maxBytes int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > maxBytes {
-		return nil, errors.New("request body too large")
+		return nil, errRequestTooLarge
 	}
 	return data, nil
 }
 
+func requestTooLarge(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	return errors.Is(err, errRequestTooLarge) || errors.As(err, &maxBytesErr)
+}
+
 func (a *App) handleChapter(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if err := validateStoryID(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	n, err := strconv.Atoi(r.PathValue("n"))
 	if err != nil || n < 0 {
 		writeError(w, http.StatusBadRequest, "invalid chapter index")
 		return
 	}
-	meta, _ := a.store.LoadMeta(id)
-	original, _ := a.store.LoadOriginal(id)
-	translated, _ := a.store.LoadTranslated(id)
-	progress, _ := a.store.LoadProgress(id)
+	meta, err := a.store.LoadMeta(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	original, err := a.store.LoadOriginal(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	translated, err := a.store.LoadTranslated(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	progress, err := a.store.LoadProgress(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if meta == nil || original == nil || translated == nil || progress == nil {
 		writeError(w, http.StatusNotFound, "not found")
 		return
@@ -706,8 +855,28 @@ func (a *App) handleChapter(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleStream(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if err := validateStoryID(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if !a.store.StoryExists(id) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	ch, unsubscribe := a.bus.Subscribe(id)
+	defer unsubscribe()
+	progress, err := a.store.LoadProgress(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if progress == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	cfg, err := a.store.LoadConfig()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.Header().Set("content-type", "text/event-stream")
@@ -724,7 +893,10 @@ func (a *App) handleStream(w http.ResponseWriter, r *http.Request) {
 		case string:
 			text = v
 		default:
-			buf, _ := json.Marshal(v)
+			buf, err := json.Marshal(v)
+			if err != nil {
+				return false
+			}
 			text = string(buf)
 		}
 		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, text); err != nil {
@@ -733,13 +905,10 @@ func (a *App) handleStream(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return true
 	}
-	if progress, _ := a.store.LoadProgress(id); progress != nil {
-		writeSSE("progress", StreamEvent{Type: "progress", DoneBlocks: progress.DoneBlocks, TotalBlocks: progress.TotalBlocks, Phase: progress.Phase})
-		writeSSE("phase", StreamEvent{Type: "phase", Phase: progress.Phase})
+	if !writeSSE("progress", StreamEvent{Type: "progress", DoneBlocks: progress.DoneBlocks, TotalBlocks: progress.TotalBlocks, Phase: progress.Phase}) ||
+		!writeSSE("phase", StreamEvent{Type: "phase", Phase: progress.Phase}) {
+		return
 	}
-	ch, unsubscribe := a.bus.Subscribe(id)
-	defer unsubscribe()
-	cfg, _ := a.store.LoadConfig()
 	heartbeat := cfg.Stream.HeartbeatMS
 	if heartbeat <= 0 {
 		heartbeat = 15000

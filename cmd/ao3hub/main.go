@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"ao3hub/internal/app"
 )
@@ -18,7 +21,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := srv.Run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := srv.RunContext(ctx); err != nil {
 		log.Fatal(fmt.Errorf("server stopped: %w", err))
 	}
 }

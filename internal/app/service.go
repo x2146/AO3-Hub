@@ -7,6 +7,23 @@ import (
 	"strings"
 )
 
+const (
+	maxImportChapters         = 2000
+	maxImportBlocks           = 50000
+	maxImportBlocksPerChapter = 20000
+	maxImportBlockBytes       = 2 << 20
+	maxImportContentBytes     = 32 << 20
+	maxImportTags             = 1000
+)
+
+var (
+	errImportTooLarge         = errors.New("AO3 work exceeds import limits")
+	errInvalidImport          = errors.New("invalid AO3 work document")
+	errAO3Upstream            = errors.New("AO3 upstream response failed")
+	errInvalidRetrySelection  = errors.New("invalid retry selection")
+	errInvalidTranslationMode = errors.New("invalid translation mode")
+)
+
 type storySource struct {
 	URL         string
 	DownloadURL string
@@ -28,15 +45,10 @@ func indexEntryFor(meta Meta, status StoryStatus) IndexEntry {
 	}
 }
 
-func (a *App) persistParsed(html string, source storySource, mode TranslationMode) (Meta, ChapterFile, bool, error) {
-	parsed, err := parseAO3HTML(html)
-	if err != nil {
+func (a *App) persistParseResult(html string, parsed parseResult, source storySource, mode TranslationMode) (Meta, ChapterFile, bool, error) {
+	if err := validateParsedImport(parsed); err != nil {
 		return Meta{}, ChapterFile{}, false, err
 	}
-	return a.persistParseResult(html, parsed, source, mode)
-}
-
-func (a *App) persistParseResult(html string, parsed parseResult, source storySource, mode TranslationMode) (Meta, ChapterFile, bool, error) {
 	id := source.WorkID
 	if id == "" {
 		id = parsed.Meta.WorkIDGuess
@@ -59,7 +71,14 @@ func (a *App) persistParseResult(html string, parsed parseResult, source storySo
 	meta.URL = url
 	meta.DownloadURL = source.DownloadURL
 
-	existing, _ := a.store.LoadMeta(id)
+	existing, err := a.store.LoadMeta(id)
+	if err != nil {
+		return Meta{}, ChapterFile{}, false, err
+	}
+	translated, err := a.store.LoadTranslated(id)
+	if err != nil {
+		return Meta{}, ChapterFile{}, false, err
+	}
 	switch {
 	case strings.TrimSpace(string(mode)) != "":
 		meta.TranslationMode = normalizeTranslationMode(mode)
@@ -79,7 +98,6 @@ func (a *App) persistParseResult(html string, parsed parseResult, source storySo
 		return Meta{}, ChapterFile{}, false, err
 	}
 
-	translated, _ := a.store.LoadTranslated(id)
 	var nextTranslated ChapterFile
 	if translatedMatchesOriginal(translated, parsed.Original) {
 		nextTranslated = *translated
@@ -121,6 +139,57 @@ func (a *App) persistParseResult(html string, parsed parseResult, source storySo
 	}
 
 	return meta, parsed.Original, isNew, nil
+}
+
+func validateParsedImport(parsed parseResult) error {
+	if len(parsed.Original.Chapters) > maxImportChapters {
+		return fmt.Errorf("%w: more than %d chapters", errImportTooLarge, maxImportChapters)
+	}
+	meta := parsed.Meta.Meta
+	contentBytes := len(meta.Title) + len(meta.ChineseTitle) + len(meta.Author) + len(meta.AuthorURL) + len(meta.Summary) + len(meta.Notes) + len(meta.Endnotes) + len(meta.Language) + len(meta.PublishedAt) + len(meta.UpdatedAt)
+	tagGroups := [][]string{meta.Tags.Fandom, meta.Tags.Relationship, meta.Tags.Character, meta.Tags.Additional, meta.Tags.Warnings, meta.Tags.Categories}
+	tagCount := 0
+	for _, group := range tagGroups {
+		tagCount += len(group)
+		for _, tag := range group {
+			contentBytes += len(tag)
+		}
+	}
+	contentBytes += len(meta.Tags.Rating)
+	if tagCount > maxImportTags {
+		return fmt.Errorf("%w: more than %d tags", errImportTooLarge, maxImportTags)
+	}
+	if contentBytes > maxImportContentBytes {
+		return fmt.Errorf("%w: extracted content exceeds %d bytes", errImportTooLarge, maxImportContentBytes)
+	}
+	totalBlocks := 0
+	for _, chapter := range parsed.Original.Chapters {
+		if len(chapter.Blocks) > maxImportBlocksPerChapter {
+			return fmt.Errorf("%w: chapter contains more than %d blocks", errImportTooLarge, maxImportBlocksPerChapter)
+		}
+		totalBlocks += len(chapter.Blocks)
+		if totalBlocks > maxImportBlocks {
+			return fmt.Errorf("%w: more than %d blocks", errImportTooLarge, maxImportBlocks)
+		}
+		contentBytes += len(chapter.Title)
+		for _, block := range chapter.Blocks {
+			if len(block.HTML) > maxImportBlockBytes {
+				return fmt.Errorf("%w: block exceeds %d bytes", errImportTooLarge, maxImportBlockBytes)
+			}
+			contentBytes += len(block.HTML)
+			if contentBytes > maxImportContentBytes {
+				return fmt.Errorf("%w: extracted content exceeds %d bytes", errImportTooLarge, maxImportContentBytes)
+			}
+		}
+	}
+	return nil
+}
+
+func validateRequestedMode(mode TranslationMode) error {
+	if mode != "" && !validTranslationMode(mode) {
+		return errInvalidTranslationMode
+	}
+	return nil
 }
 
 func (a *App) lifecycleContext() context.Context {
@@ -209,13 +278,28 @@ func (a *App) failPreparedStory(id string, cause error) error {
 	)
 }
 
+func (a *App) enqueueStory(id string) error {
+	if err := a.queue.Enqueue(Job{StoryID: id, Type: "translate"}); err != nil {
+		stateErr := a.finishStory(id, PhaseError, StatusError, err.Error())
+		if stateErr != nil {
+			return errors.Join(err, fmt.Errorf("persist queue rejection: %w", stateErr))
+		}
+		a.bus.Emit(id, StreamEvent{Type: "phase", Phase: PhaseError, Message: err.Error()})
+		return err
+	}
+	return nil
+}
+
 func (a *App) CreateFromURL(url string, mode TranslationMode) (map[string]string, error) {
-	workID := extractWorkID(url)
-	if workID == "" {
-		return nil, errors.New("无法从 URL 提取 work id")
+	if err := validateRequestedMode(mode); err != nil {
+		return nil, err
+	}
+	canonicalURL, workID, err := normalizeAO3WorkURL(url)
+	if err != nil {
+		return nil, err
 	}
 	var out map[string]string
-	err := a.withExclusiveStory(workID, true, func() error {
+	err = a.withExclusiveStory(workID, true, func() error {
 		if err := a.prepareEntry(workID, "Fetching…", "", StatusFetching); err != nil {
 			return err
 		}
@@ -223,12 +307,16 @@ func (a *App) CreateFromURL(url string, mode TranslationMode) (map[string]string
 
 		html, err := a.fetchDownloadHTMLContext(a.lifecycleContext(), workID)
 		if err != nil {
-			return a.failPreparedStory(workID, err)
+			return a.failPreparedStory(workID, fmt.Errorf("%w: %w", errAO3Upstream, err))
 		}
 
-		meta, _, _, err := a.persistParsed(html, storySource{
-			URL:         url,
-			DownloadURL: fmt.Sprintf("https://archiveofourown.org/works/%s?view_full_work=true", workID),
+		parsed, err := parseAO3HTML(html)
+		if err != nil {
+			return a.failPreparedStory(workID, fmt.Errorf("%w: %w", errAO3Upstream, err))
+		}
+		meta, _, _, err := a.persistParseResult(html, parsed, storySource{
+			URL:         canonicalURL,
+			DownloadURL: canonicalURL + "?view_full_work=true",
 			WorkID:      workID,
 		}, mode)
 		if err != nil {
@@ -237,7 +325,9 @@ func (a *App) CreateFromURL(url string, mode TranslationMode) (map[string]string
 		if err := a.store.UpsertIndex(indexEntryFor(meta, StatusQueued)); err != nil {
 			return a.failPreparedStory(workID, err)
 		}
-		a.queue.Enqueue(Job{StoryID: workID, Type: "translate"})
+		if err := a.enqueueStory(workID); err != nil {
+			return err
+		}
 		out = map[string]string{"id": workID, "status": string(StatusQueued)}
 		return nil
 	})
@@ -245,9 +335,12 @@ func (a *App) CreateFromURL(url string, mode TranslationMode) (map[string]string
 }
 
 func (a *App) CreateFromHTML(html string, mode TranslationMode) (map[string]string, error) {
+	if err := validateRequestedMode(mode); err != nil {
+		return nil, err
+	}
 	parsed, err := parseAO3HTML(html)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", errInvalidImport, err)
 	}
 	storyID := parsed.Meta.WorkIDGuess
 	if storyID == "" {
@@ -265,7 +358,9 @@ func (a *App) CreateFromHTML(html string, mode TranslationMode) (map[string]stri
 		if err := a.store.UpsertIndex(indexEntryFor(meta, StatusQueued)); err != nil {
 			return err
 		}
-		a.queue.Enqueue(Job{StoryID: storyID, Type: "translate"})
+		if err := a.enqueueStory(storyID); err != nil {
+			return err
+		}
 		out = map[string]string{"id": storyID, "status": string(StatusQueued)}
 		return nil
 	})
@@ -274,6 +369,9 @@ func (a *App) CreateFromHTML(html string, mode TranslationMode) (map[string]stri
 
 func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode TranslationMode) error {
 	if err := validateStoryID(id); err != nil {
+		return err
+	}
+	if err := validateRequestedMode(mode); err != nil {
 		return err
 	}
 	return a.withExclusiveStory(id, true, func() error {
@@ -291,6 +389,29 @@ func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode T
 		if original == nil {
 			return errStoryNotFound
 		}
+		if chapterIndex != nil && (*chapterIndex < 0 || *chapterIndex >= len(original.Chapters)) {
+			return errInvalidRetrySelection
+		}
+		idSet := map[string]bool{}
+		for _, blockID := range blockIDs {
+			idSet[blockID] = true
+		}
+		if len(idSet) > 0 {
+			matchedIDs := map[string]bool{}
+			for ci, chapter := range original.Chapters {
+				if chapterIndex != nil && ci != *chapterIndex {
+					continue
+				}
+				for _, block := range chapter.Blocks {
+					if idSet[block.ID] {
+						matchedIDs[block.ID] = true
+					}
+				}
+			}
+			if len(matchedIDs) != len(idSet) {
+				return errInvalidRetrySelection
+			}
+		}
 		if strings.TrimSpace(string(mode)) != "" {
 			nextMode := normalizeTranslationMode(mode)
 			meta, err := a.store.LoadMeta(id)
@@ -307,35 +428,31 @@ func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode T
 				}
 			}
 		}
-		idSet := map[string]bool{}
-		if len(blockIDs) > 0 {
-			for _, blockID := range blockIDs {
-				idSet[blockID] = true
-			}
-		}
 		for ci := range translated.Chapters {
 			if chapterIndex != nil && ci != *chapterIndex {
 				continue
 			}
+			if ci >= len(original.Chapters) {
+				continue
+			}
 			for bi := range translated.Chapters[ci].Blocks {
+				if bi >= len(original.Chapters[ci].Blocks) {
+					continue
+				}
 				block := translated.Chapters[ci].Blocks[bi]
-				if len(idSet) > 0 && !idSet[block.ID] {
+				ob := original.Chapters[ci].Blocks[bi]
+				if len(idSet) > 0 && !idSet[ob.ID] {
 					continue
 				}
 				if len(idSet) == 0 && block.Status != BlockError {
 					continue
 				}
-				if ci >= len(original.Chapters) || bi >= len(original.Chapters[ci].Blocks) {
-					continue
-				}
-				ob := original.Chapters[ci].Blocks[bi]
 				if !isTranslatable(ob) {
-					block.Status = BlockDone
-					block.HTML = ob.HTML
-					block.Error = ""
-					translated.Chapters[ci].Blocks[bi] = block
+					translated.Chapters[ci].Blocks[bi] = Block{ID: ob.ID, Type: ob.Type, HTML: ob.HTML, Status: BlockDone}
 					continue
 				}
+				block.ID = ob.ID
+				block.Type = ob.Type
 				block.Status = BlockPending
 				block.HTML = ""
 				block.Error = ""
@@ -348,8 +465,7 @@ func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode T
 		if err := a.store.QueueStory(id); err != nil {
 			return err
 		}
-		a.queue.Enqueue(Job{StoryID: id, Type: "translate"})
-		return nil
+		return a.enqueueStory(id)
 	})
 }
 
@@ -384,8 +500,7 @@ func (a *App) ReanalyzeStory(id string) error {
 		if err := a.store.QueueStory(id); err != nil {
 			return err
 		}
-		a.queue.Enqueue(Job{StoryID: id, Type: "translate"})
-		return nil
+		return a.enqueueStory(id)
 	})
 }
 
@@ -405,7 +520,15 @@ func (a *App) ResumeOnStartup() error {
 		if progress.Phase == PhaseReady || progress.Phase == PhaseError {
 			continue
 		}
-		a.queue.Enqueue(Job{StoryID: entry.ID, Type: "translate"})
+		if err := a.queue.Enqueue(Job{StoryID: entry.ID, Type: "translate"}); err != nil {
+			if errors.Is(err, errQueueFull) {
+				if stateErr := a.finishStory(entry.ID, PhaseError, StatusError, err.Error()); stateErr != nil {
+					return fmt.Errorf("mark unresumed story %s: %w", entry.ID, stateErr)
+				}
+				continue
+			}
+			return fmt.Errorf("resume story %s: %w", entry.ID, err)
+		}
 	}
 	return nil
 }
