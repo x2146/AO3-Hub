@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ import { isInFlight } from "../lib/status";
 
 export function Library() {
   const qc = useQueryClient();
+  const actionPendingRef = useRef(false);
   const { user } = useAuth();
   const { data: config } = useQuery({
     queryKey: ["config", "public"],
@@ -35,19 +37,40 @@ export function Library() {
   const del = useMutation({
     mutationFn: (id: string) => api.remove(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["stories"] }),
+    onSettled: () => {
+      actionPendingRef.current = false;
+    },
   });
 
   const retry = useMutation({
     mutationFn: (id: string) => api.retry(id, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["stories"] }),
+    onSettled: () => {
+      actionPendingRef.current = false;
+    },
   });
+  const actionPending = del.isPending || retry.isPending;
+
+  const retryStory = (id: string) => {
+    if (actionPendingRef.current) return;
+    actionPendingRef.current = true;
+    retry.mutate(id);
+  };
+
+  const deleteStory = (id: string) => {
+    if (actionPendingRef.current) return;
+    actionPendingRef.current = true;
+    del.mutate(id);
+  };
 
   if (isLoading) {
     return <p className="text-muted-foreground">载入书架…</p>;
   }
   if (error) {
     return (
-      <p className="text-destructive">加载失败：{(error as Error).message}</p>
+      <p role="alert" className="break-words text-destructive">
+        加载失败：{error.message}
+      </p>
     );
   }
 
@@ -141,8 +164,8 @@ export function Library() {
                         variant="outline"
                         size="sm"
                         className="gap-1"
-                        disabled={retrying}
-                        onClick={() => retry.mutate(s.id)}
+                        disabled={actionPending}
+                        onClick={() => retryStory(s.id)}
                       >
                         <RotateCcw className="size-3" />
                         {retrying ? "重试中…" : "重试失败"}
@@ -153,9 +176,10 @@ export function Library() {
                         variant="ghost"
                         size="icon"
                         className="opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
-                        disabled={del.isPending && del.variables === s.id}
+                        disabled={actionPending}
                         onClick={() => {
-                          if (confirm(`删除「${s.title}」？`)) del.mutate(s.id);
+                          if (confirm(`删除「${s.title}」？`))
+                            deleteStory(s.id);
                         }}
                         aria-label="删除"
                       >

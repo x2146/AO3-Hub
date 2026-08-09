@@ -59,6 +59,7 @@ export function UsersPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [resetTarget, setResetTarget] = useState<PublicUser | null>(null);
+  const mutating = create.isPending || update.isPending || remove.isPending;
 
   if (loading || !me || me.role !== "admin") return null;
 
@@ -75,7 +76,12 @@ export function UsersPage() {
             管理 admin / user 账号。user 不能访问「Settings」「Users」。
           </p>
         </div>
-        <Button variant="default" onClick={() => setShowCreate(true)} className="gap-1.5">
+        <Button
+          variant="default"
+          onClick={() => setShowCreate(true)}
+          className="gap-1.5"
+          disabled={mutating}
+        >
           <UserPlus className="size-3.5" /> 新建
         </Button>
       </header>
@@ -83,7 +89,9 @@ export function UsersPage() {
       {isLoading ? (
         <p className="text-muted-foreground">载入用户…</p>
       ) : error ? (
-        <p className="text-destructive">加载失败：{(error as Error).message}</p>
+        <p role="alert" className="break-words text-destructive">
+          加载失败：{error.message}
+        </p>
       ) : users.length === 0 ? (
         <p className="text-muted-foreground">还没有用户。</p>
       ) : (
@@ -120,7 +128,7 @@ export function UsersPage() {
                         role: u.role === "admin" ? "user" : "admin",
                       })
                     }
-                    disabled={update.isPending || u.id === me.id}
+                    disabled={mutating || u.id === me.id}
                     title={u.id === me.id ? "不能修改自己的角色" : ""}
                   >
                     设为 {u.role === "admin" ? "user" : "admin"}
@@ -129,6 +137,7 @@ export function UsersPage() {
                     variant="ghost"
                     size="icon"
                     onClick={() => setResetTarget(u)}
+                    disabled={mutating}
                     aria-label="重置密码"
                   >
                     <KeyRound className="size-3.5" />
@@ -140,7 +149,7 @@ export function UsersPage() {
                       if (u.id === me.id) return;
                       if (confirm(`删除用户「${u.username}」？`)) remove.mutate(u.id);
                     }}
-                    disabled={u.id === me.id}
+                    disabled={mutating || u.id === me.id}
                     aria-label="删除"
                   >
                     <Trash2 className="size-3.5" />
@@ -153,8 +162,8 @@ export function UsersPage() {
       )}
 
       {(create.error || update.error || remove.error) && (
-        <p className="text-destructive text-[12px]">
-          {((create.error || update.error || remove.error) as Error).message}
+        <p role="alert" className="break-words text-destructive text-[12px]">
+          {(create.error ?? update.error ?? remove.error)?.message}
         </p>
       )}
 
@@ -165,7 +174,7 @@ export function UsersPage() {
           await create.mutateAsync(v);
           setShowCreate(false);
         }}
-        pending={create.isPending}
+        pending={mutating}
       />
       <ResetDialog
         target={resetTarget}
@@ -175,7 +184,7 @@ export function UsersPage() {
           await update.mutateAsync({ id: resetTarget.id, password });
           setResetTarget(null);
         }}
-        pending={update.isPending}
+        pending={mutating}
       />
     </div>
   );
@@ -226,7 +235,7 @@ function CreateDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>新建用户</DialogTitle>
         </DialogHeader>
@@ -330,9 +339,11 @@ function ResetDialog({
 
   return (
     <Dialog open={!!target} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>重置「{target?.username}」的密码</DialogTitle>
+          <DialogTitle className="break-words pr-8 [overflow-wrap:anywhere]">
+            重置「{target?.username}」的密码
+          </DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-1.5">

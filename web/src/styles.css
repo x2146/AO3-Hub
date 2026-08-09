@@ -143,6 +143,7 @@
 
 .prose-reader .rich-html {
   min-height: 1lh;
+  overflow-wrap: anywhere;
 }
 
 .prose-reader a {
@@ -259,7 +260,10 @@
 }
 
 .prose-reader table {
+  display: block;
   width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
 }
 

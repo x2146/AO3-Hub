@@ -69,14 +69,14 @@ export function TranslationStatusPanel({
   });
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !autoRefresh) return;
     const unsub = subscribeStream(storyID, (event) => {
       if (event.type === "llm-call" || event.type === "phase") {
         qc.invalidateQueries({ queryKey: ["translation-status", storyID] });
       }
     });
     return unsub;
-  }, [open, storyID, qc]);
+  }, [open, autoRefresh, storyID, qc]);
 
   const resetStats = useMutation({
     mutationFn: () => api.resetTranslationStats(storyID),
@@ -90,6 +90,13 @@ export function TranslationStatusPanel({
       qc.invalidateQueries({ queryKey: ["stories"] });
     },
   });
+  const actionPending = resetStats.isPending || reanalyze.isPending;
+
+  useEffect(() => {
+    if (open) return;
+    resetStats.reset();
+    reanalyze.reset();
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -152,8 +159,8 @@ export function TranslationStatusPanel({
             <p className="text-muted-foreground text-[13px]">载入状态…</p>
           )}
           {error && (
-            <p className="text-destructive text-[13px]">
-              加载失败：{(error as Error).message}
+            <p role="alert" className="break-words text-destructive text-[13px]">
+              加载失败：{error.message}
             </p>
           )}
           {(resetStats.isError || reanalyze.isError) && (
@@ -176,6 +183,7 @@ export function TranslationStatusPanel({
                 <OverviewTab
                   data={data}
                   canManage={!!user}
+                  actionPending={actionPending}
                   onReset={() => {
                     if (confirm("重置该作品的全部翻译统计？")) {
                       resetStats.mutate();
@@ -221,6 +229,7 @@ export function TranslationStatusPanel({
 function OverviewTab({
   data,
   canManage,
+  actionPending,
   onReset,
   resetting,
   onReanalyze,
@@ -228,6 +237,7 @@ function OverviewTab({
 }: {
   data: TranslationStatusView;
   canManage: boolean;
+  actionPending: boolean;
   onReset: () => void;
   resetting: boolean;
   onReanalyze: () => void;
@@ -306,7 +316,7 @@ function OverviewTab({
               variant="outline"
               size="sm"
               className="gap-1.5"
-              disabled={reanalyzing}
+              disabled={actionPending}
               onClick={onReanalyze}
             >
               <Sparkles className="size-3.5" />
@@ -316,7 +326,7 @@ function OverviewTab({
               variant="ghost"
               size="sm"
               className="gap-1.5 text-destructive"
-              disabled={resetting}
+              disabled={actionPending}
               onClick={onReset}
             >
               <Trash2 className="size-3.5" />

@@ -4,6 +4,8 @@ import {
   DEFAULT_DEV_UPDATE_MANIFEST_URL,
   DEFAULT_UPDATE_MANIFEST_URL,
   CONFIG_LIMITS,
+  Config as ConfigSchema,
+  type Config,
 } from "@ao3hub/shared";
 import { Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,56 +14,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { api } from "../lib/api";
+import { api, type ConfigUpdate } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
-type LocalConfig = {
-  server: {
-    host: string;
-    port: number;
-  };
-  auth: {
-    sessionTtlDays: number;
-  };
-  stream: {
-    heartbeatMs: number;
-  };
-  import: {
-    minHtmlLength: number;
-  };
-  ui: {
-    libraryRefetchIntervalMs: number;
-  };
-  llm: {
-    apiType: "openai-compatible" | "claude-messages";
-    baseURL: string;
-    apiKey: string;
-    model: string;
-    temperature: number;
-    concurrency: number;
-    blocksPerRequest: number;
-    maxTokensPerRequest: number;
-    maxAutoRetries: number;
-    mode: "normal" | "refined";
-    analysisMaxInputTokens: number;
-    stream: boolean;
-  };
-  ao3: {
-    cookie: string;
-    userAgent: string;
-  };
-  reader: {
-    defaultMeasure: number;
-    defaultFont: number;
-    defaultZhScale: number;
-  };
-  update: {
-    manifestURL: string;
-    channel: string;
-    autoCheck: boolean;
-    restartDelayMs: number;
-  };
-};
+type LocalConfig = Config;
 
 const defaultManifestURLForChannel = (channel: string) =>
   channel.trim().toLowerCase() === "dev"
@@ -105,6 +61,7 @@ export function Settings() {
     ok: boolean;
     msg: string;
   } | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!data) return;
@@ -155,7 +112,7 @@ export function Settings() {
   }, [data]);
 
   const save = useMutation({
-    mutationFn: (body: any) => api.saveConfig(body),
+    mutationFn: (body: ConfigUpdate) => api.saveConfig(body),
     onSuccess: async () => {
       setApiKeyDirty(false);
       setCookieDirty(false);
@@ -205,19 +162,46 @@ export function Settings() {
     return <p className="text-muted-foreground">载入配置…</p>;
 
   const onSave = () => {
-    const body: any = {
-      server: { ...form.server },
-      auth: { ...form.auth },
-      stream: { ...form.stream },
-      import: { ...form.import },
-      ui: { ...form.ui },
-      llm: { ...form.llm },
-      ao3: { ...form.ao3 },
-      reader: { ...form.reader },
-      update: { ...form.update },
+    save.reset();
+    const parsed = ConfigSchema.safeParse(form);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      const field = issue?.path.join(".");
+      setValidationError(
+        `${field ? `${field}：` : ""}${issue?.message ?? "配置无效"}`,
+      );
+      return;
+    }
+    const valid = parsed.data;
+    const body: ConfigUpdate = {
+      server: valid.server,
+      auth: valid.auth,
+      stream: valid.stream,
+      import: valid.import,
+      ui: valid.ui,
+      llm: {
+        apiType: valid.llm.apiType,
+        baseURL: valid.llm.baseURL,
+        model: valid.llm.model,
+        temperature: valid.llm.temperature,
+        concurrency: valid.llm.concurrency,
+        blocksPerRequest: valid.llm.blocksPerRequest,
+        maxTokensPerRequest: valid.llm.maxTokensPerRequest,
+        maxAutoRetries: valid.llm.maxAutoRetries,
+        mode: valid.llm.mode,
+        analysisMaxInputTokens: valid.llm.analysisMaxInputTokens,
+        stream: valid.llm.stream,
+        ...(apiKeyDirty ? { apiKey: valid.llm.apiKey } : {}),
+      },
+      ao3: {
+        userAgent: valid.ao3.userAgent,
+        ...(cookieDirty ? { cookie: valid.ao3.cookie } : {}),
+      },
+      reader: valid.reader,
+      update: valid.update,
     };
-    if (!apiKeyDirty) delete body.llm.apiKey;
-    if (!cookieDirty) delete body.ao3.cookie;
+    setValidationError(null);
+    setTestResult(null);
     save.mutate(body);
   };
 
@@ -275,6 +259,7 @@ export function Settings() {
         </p>
       </header>
 
+      <fieldset disabled={save.isPending} className="contents">
       <section className="space-y-5">
         <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
           Server
@@ -802,16 +787,26 @@ export function Settings() {
           />
         </Field>
       </section>
+      </fieldset>
 
       <Separator />
 
       <div className="flex items-center gap-3">
-        <Button variant="default" onClick={onSave} disabled={save.isPending}>
+        <Button
+          variant="default"
+          onClick={onSave}
+          disabled={save.isPending || test.isPending}
+        >
           {save.isPending ? "保存中…" : "保存"}
         </Button>
         {save.isError && (
-          <span className="text-destructive text-[12px]">
-            {(save.error as Error).message}
+          <span role="alert" className="break-words text-destructive text-[12px]">
+            {save.error instanceof Error ? save.error.message : "保存失败"}
+          </span>
+        )}
+        {validationError && (
+          <span role="alert" className="break-words text-destructive text-[12px]">
+            {validationError}
           </span>
         )}
         {save.isSuccess && (

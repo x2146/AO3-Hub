@@ -40,7 +40,11 @@ const BLOCK_ROOT_RE =
 
 export function Reader() {
   const { id, chapter } = useParams({ from: "/r/$id/$chapter" });
-  const chapterIndex = Number(chapter);
+  const parsedChapterIndex = Number(chapter);
+  const chapterIndex =
+    /^\d+$/.test(chapter) && Number.isSafeInteger(parsedChapterIndex)
+      ? parsedChapterIndex
+      : null;
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user } = useAuth();
@@ -83,20 +87,33 @@ export function Reader() {
   }, [settings, settingsInitialized]);
 
   useEffect(() => {
-    const onScroll = () => {
+    let frame = 0;
+    const updateScrollProgress = () => {
+      frame = 0;
       const h = document.documentElement.scrollHeight - window.innerHeight;
       setScrollProgress(
         h > 0 ? Math.min(1, Math.max(0, window.scrollY / h)) : 0,
       );
     };
-    onScroll();
+    const onScroll = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(updateScrollProgress);
+    };
+    updateScrollProgress();
     window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
   }, [chapterIndex]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["chapter", id, chapterIndex],
-    queryFn: ({ signal }) => api.getChapter(id, chapterIndex, signal),
+    queryFn: ({ signal }) => {
+      if (chapterIndex === null) throw new Error("章节编号无效");
+      return api.getChapter(id, chapterIndex, signal);
+    },
+    enabled: chapterIndex !== null,
   });
 
   useEffect(() => {
@@ -157,6 +174,19 @@ export function Reader() {
     window.scrollTo({ top: 0 });
   }, [chapterIndex]);
 
+  if (chapterIndex === null) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-32 text-center">
+        <p role="alert" className="text-destructive">
+          章节编号无效。
+        </p>
+        <Button variant="outline" asChild>
+          <Link to="/">返回书架</Link>
+        </Button>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="py-32 text-center">
@@ -166,9 +196,9 @@ export function Reader() {
   }
   if (error || !data) {
     return (
-      <div className="py-32 text-center space-y-3">
+      <div className="flex flex-col items-center gap-3 py-32 text-center">
         <p className="text-destructive">
-          载入失败：{(error as Error)?.message ?? "unknown"}
+          载入失败：{error?.message ?? "unknown"}
         </p>
         <Button variant="outline" asChild>
           <Link to="/">返回书架</Link>
@@ -278,7 +308,7 @@ export function Reader() {
         style={{ width: "min(var(--reader-measure), calc(100vw - 32px))" }}
       >
         <header className="mb-12 border-b border-border pb-8">
-          <h1 className="text-[clamp(2rem,6vw,3.6rem)] font-semibold leading-[0.98] tracking-tight">
+          <h1 className="break-words text-[clamp(2rem,6vw,3.6rem)] font-semibold leading-[0.98] tracking-tight [overflow-wrap:anywhere]">
             {titleEn}
           </h1>
           {chineseTitle && (

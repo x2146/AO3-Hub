@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { AppLayout } from "./components/AppLayout";
+import { Button } from "./components/ui/button";
 import { Library } from "./pages/Library";
 import { ImportPage } from "./pages/Import";
 import { Settings } from "./pages/Settings";
@@ -30,7 +31,8 @@ function safeRedirectPath(value: unknown): string | undefined {
     !value.startsWith("/") ||
     value.startsWith("//") ||
     value.includes("\\") ||
-    /[\u0000-\u001f\u007f]/.test(value)
+    /[\u0000-\u001f\u007f]/.test(value) ||
+    /^\/(?:login|setup)(?:[/?#]|$)/.test(value)
   ) {
     return undefined;
   }
@@ -38,13 +40,13 @@ function safeRedirectPath(value: unknown): string | undefined {
 }
 
 function RootShell() {
-  const { loading, user, needsSetup } = useAuth();
+  const { loading, user, needsSetup, error: authError, refresh } = useAuth();
   const router = useRouter();
   const routerState = useRouterState();
   const pathname = routerState.location.pathname;
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || authError) return;
     if (needsSetup && pathname !== "/setup") {
       router.navigate({ to: "/setup", replace: true });
       return;
@@ -71,12 +73,26 @@ function RootShell() {
     if (ADMIN_PATHS.includes(pathname) && user.role !== "admin") {
       router.navigate({ to: "/", replace: true });
     }
-  }, [loading, user, needsSetup, pathname, router]);
+  }, [loading, user, needsSetup, authError, pathname, router]);
 
   if (loading) {
     return (
       <AppLayout>
         <p className="text-muted-foreground">载入中…</p>
+      </AppLayout>
+    );
+  }
+  if (authError) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-start gap-3">
+          <p role="alert" className="break-words text-destructive">
+            无法确认登录状态：{authError}
+          </p>
+          <Button variant="outline" onClick={() => void refresh()}>
+            重试
+          </Button>
+        </div>
       </AppLayout>
     );
   }

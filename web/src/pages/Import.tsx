@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Download, UploadCloud } from "lucide-react";
@@ -21,13 +21,14 @@ export function ImportPage() {
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modeChoice, setModeChoice] = useState<ModeChoice>("default");
+  const requestPendingRef = useRef(false);
 
   const { data: cfg } = useQuery({
     queryKey: ["config", "public"],
     queryFn: ({ signal }) => api.getPublicConfig(signal),
   });
-  const defaultMode: TranslationMode = (cfg?.llm?.mode ?? "normal") as TranslationMode;
-  const effectiveMode: TranslationMode =
+  const defaultMode = cfg?.llm.mode;
+  const effectiveMode: TranslationMode | undefined =
     modeChoice === "default" ? defaultMode : modeChoice;
   const requestMode = modeChoice === "default" ? undefined : modeChoice;
 
@@ -40,23 +41,31 @@ export function ImportPage() {
     mutationFn: (file: File) => api.uploadHtml(file, requestMode),
     onSuccess: (d) => onDone(d.id),
     onError: (e: Error) => setError(e.message),
+    onSettled: () => {
+      requestPendingRef.current = false;
+    },
   });
 
   const create = useMutation({
     mutationFn: (u: string) => api.createFromUrl(u, requestMode),
     onSuccess: (d) => onDone(d.id),
     onError: (e: Error) => setError(e.message),
+    onSettled: () => {
+      requestPendingRef.current = false;
+    },
   });
+  const isPending = upload.isPending || create.isPending;
 
   const handleFiles = useCallback(
     (files: FileList | null) => {
       setError(null);
-      if (!files || !files[0]) return;
+      if (!files || !files[0] || requestPendingRef.current) return;
       const f = files[0];
       if (!/\.html?$/i.test(f.name) && !f.type.includes("html")) {
         setError("文件应为 .html");
         return;
       }
+      requestPendingRef.current = true;
       upload.mutate(f);
     },
     [upload],
@@ -78,7 +87,12 @@ export function ImportPage() {
         <div className="flex flex-wrap gap-2">
           {(
             [
-              ["default", `跟随默认（${defaultMode === "refined" ? "精翻" : "普通"}）`],
+              [
+                "default",
+                defaultMode
+                  ? `跟随默认（${defaultMode === "refined" ? "精翻" : "普通"}）`
+                  : "跟随服务端默认",
+              ],
               ["normal", "普通"],
               ["refined", "精翻"],
             ] as const
@@ -88,6 +102,7 @@ export function ImportPage() {
               type="button"
               variant={modeChoice === value ? "default" : "outline"}
               size="sm"
+              disabled={isPending}
               onClick={() => setModeChoice(value)}
             >
               {label}
@@ -95,7 +110,9 @@ export function ImportPage() {
           ))}
         </div>
         <p className="text-muted-foreground text-[12px] leading-relaxed">
-          {effectiveMode === "refined"
+          {effectiveMode === undefined
+            ? "默认模式暂未读取，将由服务端配置决定。"
+            : effectiveMode === "refined"
             ? "精翻：先用 LLM 通读全文，输出全文摘要、角色术语表与基调，再分块翻译。质量高，但首次需要额外的预读成本。"
             : "普通：直接分块翻译，速度快、token 成本低。"}
         </p>
@@ -109,11 +126,11 @@ export function ImportPage() {
         }}
       >
         <TabsList>
-          <TabsTrigger value="upload" className="gap-1.5">
+          <TabsTrigger value="upload" className="gap-1.5" disabled={isPending}>
             <UploadCloud className="size-3.5" />
             上传 HTML
           </TabsTrigger>
-          <TabsTrigger value="url" className="gap-1.5">
+          <TabsTrigger value="url" className="gap-1.5" disabled={isPending}>
             <Download className="size-3.5" />
             贴 URL
           </TabsTrigger>
@@ -134,7 +151,7 @@ export function ImportPage() {
             className={cn(
               "flex flex-col items-center justify-center gap-2 rounded-card border-2 border-dashed border-border p-12 text-center transition-colors",
               dragOver && "border-accent bg-accent/5",
-              upload.isPending
+              isPending
                 ? "opacity-60"
                 : "cursor-pointer hover:bg-secondary/50",
             )}
@@ -143,8 +160,11 @@ export function ImportPage() {
               type="file"
               accept=".html,text/html"
               className="hidden"
-              onChange={(e) => handleFiles(e.target.files)}
-              disabled={upload.isPending}
+              onChange={(e) => {
+                handleFiles(e.currentTarget.files);
+                e.currentTarget.value = "";
+              }}
+              disabled={isPending}
             />
             <UploadCloud className="size-7 text-muted-foreground" />
             <p className="text-[20px] font-semibold">
@@ -161,7 +181,8 @@ export function ImportPage() {
             onSubmit={(e) => {
               e.preventDefault();
               setError(null);
-              if (!url.trim()) return;
+              if (!url.trim() || requestPendingRef.current) return;
+              requestPendingRef.current = true;
               create.mutate(url.trim());
             }}
             className="space-y-4"
@@ -176,13 +197,13 @@ export function ImportPage() {
                 onChange={(e) => setUrl(e.target.value)}
                 required
                 autoFocus
-                disabled={create.isPending}
+                disabled={isPending}
               />
             </div>
             <Button
               type="submit"
               variant="default"
-              disabled={create.isPending || !url.trim()}
+              disabled={isPending || !url.trim()}
             >
               {create.isPending ? "抓取中…" : "下载并翻译"}
             </Button>
@@ -194,7 +215,10 @@ export function ImportPage() {
       </Tabs>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-[13px] text-destructive">
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-control border border-destructive/30 bg-destructive/10 px-4 py-3 text-[13px] text-destructive"
+        >
           <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
           <span>{error}</span>
         </div>

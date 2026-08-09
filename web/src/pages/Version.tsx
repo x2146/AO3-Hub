@@ -14,10 +14,16 @@ export function Version() {
     queryKey: ["version"],
     queryFn: ({ signal }) => api.version(signal),
   });
+  const check = useMutation({
+    mutationFn: () => api.checkUpdate(),
+    onSuccess: (next) => qc.setQueryData(["version"], next),
+  });
   const apply = useMutation({
     mutationFn: (body: ApplyUpdateRequest) => api.applyUpdate(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["version"] }),
   });
+  const isChecking = isFetching || check.isPending;
+  const actionPending = isChecking || apply.isPending;
 
   if (isLoading) return <p className="text-muted-foreground">读取版本…</p>;
   if (error || !data) {
@@ -42,17 +48,17 @@ export function Version() {
         </h1>
       </header>
 
-      <dl className="grid grid-cols-[140px_1fr] gap-y-3 text-[14px]">
+      <dl className="grid grid-cols-[minmax(0,96px)_minmax(0,1fr)] gap-y-3 text-[14px] sm:grid-cols-[140px_minmax(0,1fr)]">
         <dt className="text-muted-foreground">Current</dt>
-        <dd className="font-mono">{data.current}</dd>
+        <dd className="min-w-0 break-all font-mono">{data.current}</dd>
         <dt className="text-muted-foreground">Platform</dt>
-        <dd className="font-mono">
+        <dd className="min-w-0 break-all font-mono">
           {data.platform}/{data.arch}
         </dd>
         {data.builtAt && (
           <>
             <dt className="text-muted-foreground">Built</dt>
-            <dd className="font-mono">{data.builtAt}</dd>
+            <dd className="min-w-0 break-all font-mono">{data.builtAt}</dd>
           </>
         )}
       </dl>
@@ -67,14 +73,21 @@ export function Version() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => refetch()}
-            disabled={isFetching}
+            onClick={() => {
+              if (user?.role === "admin") check.mutate();
+              else void refetch();
+            }}
+            disabled={actionPending}
             className="gap-1.5"
           >
             <RefreshCw
-              className={isFetching ? "size-3.5 animate-spin" : "size-3.5"}
+              className={isChecking ? "size-3.5 animate-spin" : "size-3.5"}
             />
-            {isFetching ? "检查中…" : "重新检查"}
+            {isChecking
+              ? "检查中…"
+              : user?.role === "admin"
+                ? "重新检查"
+                : "刷新"}
           </Button>
         </div>
         {!latest && (
@@ -82,10 +95,19 @@ export function Version() {
             未配置 manifest URL，或暂时无法访问。去 Settings 配置后再来。
           </p>
         )}
+        {check.isError && (
+          <p role="alert" className="break-words text-destructive text-[12px]">
+            {check.error instanceof Error
+              ? check.error.message
+              : "检查更新失败"}
+          </p>
+        )}
         {latest && (
           <div className="space-y-3">
-            <div className="flex items-baseline gap-3">
-              <span className="font-mono text-[16px]">{latest.version}</span>
+            <div className="flex flex-wrap items-baseline gap-3">
+              <span className="min-w-0 break-all font-mono text-[16px]">
+                {latest.version}
+              </span>
               {latest.hasUpdate ? (
                 <Badge variant="accent">有新版</Badge>
               ) : (
@@ -99,7 +121,7 @@ export function Version() {
               </p>
             )}
             {latest.notes && (
-              <pre className="whitespace-pre-wrap rounded-card border border-border bg-surface/60 p-4 font-mono text-[12px] leading-relaxed">
+              <pre className="max-w-full whitespace-pre-wrap break-words rounded-card border border-border bg-surface/60 p-4 font-mono text-[12px] leading-relaxed [overflow-wrap:anywhere]">
                 {latest.notes}
               </pre>
             )}
@@ -113,7 +135,7 @@ export function Version() {
                 <Button
                   variant="default"
                   onClick={() => apply.mutate({})}
-                  disabled={!latest.hasUpdate || apply.isPending}
+                  disabled={!latest.hasUpdate || actionPending}
                 >
                   {apply.isPending ? "下载安装中…" : "下载并安装"}
                 </Button>
@@ -122,18 +144,14 @@ export function Version() {
                   onClick={() =>
                     apply.mutate({ force: true, forceVersion: latest.version })
                   }
-                  disabled={apply.isPending}
+                  disabled={actionPending}
                 >
                   强制拉取此版本
                 </Button>
               </div>
             )}
             {apply.data && (
-              <p
-                className={`text-[12px] ${
-                  apply.data.ok ? "text-success" : "text-destructive"
-                }`}
-              >
+              <p className="break-words text-[12px] text-success">
                 {apply.data.message}
               </p>
             )}

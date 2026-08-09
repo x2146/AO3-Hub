@@ -7,7 +7,6 @@ import type {
   CreateUserRequest,
   Meta,
   Progress,
-  PublicUser,
   Role,
   StoryList,
   StreamEvent,
@@ -35,12 +34,42 @@ const PublicConfigSchema = z.object({
   ui: Schema.UiConfig,
   llm: z.object({ mode: Schema.TranslationMode }),
 });
+const OkSchema = z.object({ ok: z.literal(true) });
+const StoryMutationSchema = z.object({
+  id: z.string().min(1),
+  status: Schema.StoryStatus,
+});
+const UserResponseSchema = z.object({ user: Schema.PublicUser });
+const UsersResponseSchema = z.object({ users: z.array(Schema.PublicUser) });
+const ConfigTestResponseSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), content: z.string().optional() }),
+  z.object({ ok: z.literal(false), error: z.string().optional() }),
+]);
+const ApplyUpdateResponseSchema = z.object({
+  ok: z.literal(true),
+  message: z.string(),
+  version: z.string().optional(),
+  restart: z.boolean().optional(),
+});
+
+export type ConfigUpdate = Omit<Config, "llm" | "ao3"> & {
+  llm: Omit<Config["llm"], "apiKey"> & { apiKey?: string };
+  ao3: Omit<Config["ao3"], "cookie"> & { cookie?: string };
+};
+
 export class HttpError extends Error {
   status: number;
   constructor(status: number, message: string) {
     super(message);
     this.name = "HttpError";
     this.status = status;
+  }
+}
+
+export class ApiProtocolError extends Error {
+  constructor(path: string, message: string) {
+    super(`API response schema mismatch for ${path}: ${message}`);
+    this.name = "ApiProtocolError";
   }
 }
 
@@ -80,9 +109,12 @@ async function responseBody(res: Response): Promise<unknown> {
 
 function errorMessage(body: unknown, status: number): string {
   if (typeof body === "string") return body || String(status);
-  if (body && typeof body === "object" && "error" in body) {
-    const error = (body as { error?: unknown }).error;
-    if (typeof error === "string" && error) return error;
+  if (body && typeof body === "object") {
+    const detail = body as { error?: unknown; message?: unknown };
+    if (typeof detail.error === "string" && detail.error) return detail.error;
+    if (typeof detail.message === "string" && detail.message) {
+      return detail.message;
+    }
   }
   return body == null ? String(status) : JSON.stringify(body);
 }
@@ -101,9 +133,7 @@ async function parseResponse<T>(
   if (!schema) return body as T;
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    throw new Error(
-      `API response schema mismatch for ${path}: ${parsed.error.message}`,
-    );
+    throw new ApiProtocolError(path, parsed.error.message);
   }
   return parsed.data;
 }
@@ -144,10 +174,14 @@ export const api = {
       Schema.ChapterView,
     ),
   createFromUrl: (url: string, mode?: TranslationMode) =>
-    http<{ id: string; status: string }>("/stories", {
+    http(
+      "/stories",
+      {
       method: "POST",
       body: JSON.stringify(mode ? { url, mode } : { url }),
-    }),
+      },
+      StoryMutationSchema,
+    ),
   uploadHtml: async (file: File | string, mode?: TranslationMode) => {
     const requestEpoch = authStateEpoch;
     const form = new FormData();
@@ -166,10 +200,10 @@ export const api = {
       credentials: "same-origin",
       body: form,
     });
-    return parseResponse<{ id: string; status: string }>(
+    return parseResponse(
       res,
       "/stories/upload",
-      undefined,
+      StoryMutationSchema,
       requestEpoch,
     );
   },
@@ -181,12 +215,16 @@ export const api = {
       mode?: TranslationMode;
     } = {},
   ) =>
-    http<{ ok: true }>(`/stories/${pathSegment(id)}/retry`, {
+    http(
+      `/stories/${pathSegment(id)}/retry`,
+      {
       method: "POST",
       body: JSON.stringify(body),
-    }),
+      },
+      OkSchema,
+    ),
   remove: (id: string) =>
-    http<{ ok: true }>(`/stories/${pathSegment(id)}`, { method: "DELETE" }),
+    http(`/stories/${pathSegment(id)}`, { method: "DELETE" }, OkSchema),
 
   getTranslationStatus: (id: string, signal?: AbortSignal) =>
     http<TranslationStatusView>(
@@ -195,64 +233,88 @@ export const api = {
       Schema.TranslationStatusView,
     ),
   resetTranslationStats: (id: string) =>
-    http<{ ok: true }>(`/stories/${pathSegment(id)}/translation-status/reset`, {
-      method: "POST",
-    }),
+    http(
+      `/stories/${pathSegment(id)}/translation-status/reset`,
+      { method: "POST" },
+      OkSchema,
+    ),
   reanalyze: (id: string) =>
-    http<{ ok: true }>(`/stories/${pathSegment(id)}/reanalyze`, {
-      method: "POST",
-    }),
+    http(`/stories/${pathSegment(id)}/reanalyze`, { method: "POST" }, OkSchema),
 
   getConfig: (signal?: AbortSignal) =>
     http("/config", { signal }, ConfigResponseSchema),
   getPublicConfig: (signal?: AbortSignal) =>
     http("/config/public", { signal }, PublicConfigSchema),
-  saveConfig: (body: any) =>
-    http<{ ok: true }>("/config", {
+  saveConfig: (body: ConfigUpdate) =>
+    http(
+      "/config",
+      {
       method: "PUT",
       body: JSON.stringify(body),
-    }),
+      },
+      OkSchema,
+    ),
   testConfig: () =>
-    http<{ ok: boolean; content?: string; error?: string }>("/config/test", {
-      method: "POST",
-    }),
+    http("/config/test", { method: "POST" }, ConfigTestResponseSchema),
 
   version: (signal?: AbortSignal) =>
     http<VersionInfo>("/update/version", { signal }, Schema.VersionInfo),
-  checkUpdate: () => http<VersionInfo>("/update/check", { method: "POST" }),
+  checkUpdate: () =>
+    http<VersionInfo>("/update/check", { method: "POST" }, Schema.VersionInfo),
   applyUpdate: (body: ApplyUpdateRequest = {}) =>
-    http<{ ok: boolean; message: string; version?: string }>("/update/apply", {
+    http(
+      "/update/apply",
+      {
       method: "POST",
       body: JSON.stringify(body),
-    }),
+      },
+      ApplyUpdateResponseSchema,
+    ),
 
-  me: () => http<AuthMe>("/auth/me", undefined, Schema.AuthMe),
+  me: (signal?: AbortSignal) =>
+    http<AuthMe>("/auth/me", { signal }, Schema.AuthMe),
   login: (username: string, password: string) =>
-    http<{ user: PublicUser }>("/auth/login", {
+    http(
+      "/auth/login",
+      {
       method: "POST",
       body: JSON.stringify({ username, password }),
-    }),
-  logout: () => http<{ ok: true }>("/auth/logout", { method: "POST" }),
+      },
+      UserResponseSchema,
+    ),
+  logout: () => http("/auth/logout", { method: "POST" }, OkSchema),
   setup: (username: string, password: string) =>
-    http<{ user: PublicUser }>("/auth/setup", {
+    http(
+      "/auth/setup",
+      {
       method: "POST",
       body: JSON.stringify({ username, password }),
-    }),
+      },
+      UserResponseSchema,
+    ),
 
   listUsers: (signal?: AbortSignal) =>
-    http<{ users: PublicUser[] }>("/users", { signal }),
+    http("/users", { signal }, UsersResponseSchema),
   createUser: (body: CreateUserRequest) =>
-    http<{ user: PublicUser }>("/users", {
+    http(
+      "/users",
+      {
       method: "POST",
       body: JSON.stringify(body),
-    }),
+      },
+      UserResponseSchema,
+    ),
   updateUser: (id: string, body: { password?: string; role?: Role }) =>
-    http<{ user: PublicUser }>(`/users/${pathSegment(id)}`, {
+    http(
+      `/users/${pathSegment(id)}`,
+      {
       method: "PUT",
       body: JSON.stringify(body),
-    }),
+      },
+      UserResponseSchema,
+    ),
   deleteUser: (id: string) =>
-    http<{ ok: true }>(`/users/${pathSegment(id)}`, { method: "DELETE" }),
+    http(`/users/${pathSegment(id)}`, { method: "DELETE" }, OkSchema),
 };
 
 export function subscribeStream(
@@ -280,6 +342,12 @@ export function subscribeStream(
           throw new Error(
             `SSE event type mismatch: listener ${t}, payload ${parsed.data.type}`,
           );
+        }
+        if (
+          parsed.data.type === "phase" &&
+          (parsed.data.phase === "ready" || parsed.data.phase === "error")
+        ) {
+          es.close();
         }
         onEvent(parsed.data);
       } catch (error) {

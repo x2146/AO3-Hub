@@ -397,26 +397,26 @@ export type RetryRequest = z.infer<typeof RetryRequest>;
 export const StreamEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("progress"),
-    doneBlocks: z.number().int().nonnegative(),
-    totalBlocks: z.number().int().nonnegative(),
+    doneBlocks: z.number().int().nonnegative().default(0),
+    totalBlocks: z.number().int().nonnegative().default(0),
     errorBlocks: z.number().int().nonnegative().optional(),
     inflightBlocks: z.number().int().nonnegative().optional(),
     phase: ProgressPhase,
   }),
   z.object({
     type: z.literal("block-done"),
-    chapterIndex: z.number().int().nonnegative(),
+    chapterIndex: z.number().int().nonnegative().default(0),
     blockId: z.string(),
   }),
   z.object({
     type: z.literal("block-error"),
-    chapterIndex: z.number().int().nonnegative(),
+    chapterIndex: z.number().int().nonnegative().default(0),
     blockId: z.string(),
     message: z.string(),
   }),
   z.object({
     type: z.literal("chapter-done"),
-    chapterIndex: z.number().int().nonnegative(),
+    chapterIndex: z.number().int().nonnegative().default(0),
   }),
   z.object({
     type: z.literal("phase"),
