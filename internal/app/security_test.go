@@ -585,6 +585,28 @@ func TestCORSRejectsUntrustedOrigins(t *testing.T) {
 	}
 }
 
+func TestCORSRejectsMalformedOriginWithoutPanic(t *testing.T) {
+	handler := (&App{serverHost: "ao3hub.example"}).cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for _, origin := range []string{
+		"http://ao3hub example",
+		"http://ao3hub\x7f.example",
+		"http://[::1",
+		"%zz://ao3hub.example",
+	} {
+		request := httptest.NewRequest(http.MethodPost, "http://ao3hub.example/api/config", nil)
+		request.Host = "ao3hub.example"
+		request.Header.Set("Origin", origin)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("malformed origin %q status = %d, want %d", origin, response.Code, http.StatusForbidden)
+		}
+	}
+}
+
 func TestSecureRequestOnlyTrustsConfiguredPublicOrigin(t *testing.T) {
 	app := &App{
 		publicOriginScheme: "https",
@@ -624,6 +646,8 @@ func TestConfiguredPublicOriginValidation(t *testing.T) {
 		"https://user@ao3hub.example",
 		"https://ao3hub.example/path",
 		"https://ao3hub.example?",
+		"https://ao3hub example",
+		"https://[::1",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			t.Setenv("AO3HUB_PUBLIC_ORIGIN", raw)

@@ -292,8 +292,11 @@ func (a *App) cors(next http.Handler) http.Handler {
 
 func (a *App) allowedRequestOrigin(origin string, request *http.Request) bool {
 	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
 	scheme := strings.ToLower(parsed.Scheme)
-	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (scheme != "http" && scheme != "https") {
+	if parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (scheme != "http" && scheme != "https") {
 		return false
 	}
 	return scheme == a.effectiveRequestScheme(request) &&
@@ -330,8 +333,11 @@ func configuredPublicOrigin() (string, string, error) {
 		return "", "", nil
 	}
 	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", "", errors.New("invalid AO3HUB_PUBLIC_ORIGIN: expected an HTTP(S) origin without path, query, or credentials")
+	}
 	scheme := strings.ToLower(parsed.Scheme)
-	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (scheme != "http" && scheme != "https") {
+	if parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (scheme != "http" && scheme != "https") {
 		return "", "", errors.New("invalid AO3HUB_PUBLIC_ORIGIN: expected an HTTP(S) origin without path, query, or credentials")
 	}
 	if _, ok := authorityHostname(parsed.Host); !ok {
