@@ -14,6 +14,7 @@ import {
   Trash2,
   X,
   Zap,
+  type LucideIcon,
 } from "lucide-react";
 import type {
   LlmCallEvent,
@@ -23,15 +24,44 @@ import type {
   TranslationStatusView,
 } from "@ao3hub/shared";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { api, subscribeStream } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -44,11 +74,11 @@ type Props = {
   returnFocusRef?: RefObject<HTMLButtonElement>;
 };
 
-const STAGE_COLOR: Record<LlmCallStage, string> = {
-  "analysis-chapter": "bg-accent/15 text-accent",
-  "analysis-merge": "bg-accent/15 text-accent",
-  "analysis-full": "bg-accent/15 text-accent",
-  "translate-batch": "bg-success/15 text-success",
+const STAGE_VARIANT: Record<LlmCallStage, "accent" | "success"> = {
+  "analysis-chapter": "accent",
+  "analysis-merge": "accent",
+  "analysis-full": "accent",
+  "translate-batch": "success",
 };
 
 export function TranslationStatusPanel({
@@ -60,6 +90,7 @@ export function TranslationStatusPanel({
   const qc = useQueryClient();
   const { user } = useAuth();
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [confirmAction, setConfirmAction] = useState<"reset" | "reanalyze" | null>(null);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["translation-status", storyID],
@@ -99,28 +130,31 @@ export function TranslationStatusPanel({
   }, [open]);
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent
-        hideClose
-        aria-describedby={undefined}
+    <>
+    <Sheet open={open} onOpenChange={(next) => !next && onClose()}>
+      <SheetContent
+        side="right"
+        showCloseButton={false}
         onCloseAutoFocus={(event) => {
           if (!returnFocusRef?.current) return;
           event.preventDefault();
           returnFocusRef.current.focus();
         }}
-        className="left-auto right-0 top-0 h-svh w-full max-w-[640px] translate-x-0 translate-y-0 gap-0 overflow-y-auto rounded-none border-y-0 border-r-0 p-0"
+        className="w-full gap-0 overflow-y-auto p-0 sm:max-w-2xl"
       >
         <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-card/95 backdrop-blur px-5 py-3">
           <div className="flex items-center gap-2 min-w-0">
-            <Activity className="size-4 text-accent shrink-0" />
+            <Activity className="shrink-0 text-primary" />
             <div className="min-w-0">
-              <DialogTitle className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <SheetTitle>
                 翻译状态
-              </DialogTitle>
+              </SheetTitle>
+              <SheetDescription className="truncate">
+                <code>{storyID}</code>
+              </SheetDescription>
               <p className="text-[11px] text-muted-foreground font-mono truncate">
-                {storyID}
                 {data?.mode === "refined" && (
-                  <span className="ml-2 text-accent">refined</span>
+                  <Badge variant="accent">refined</Badge>
                 )}
               </p>
             </div>
@@ -134,40 +168,40 @@ export function TranslationStatusPanel({
               aria-label={autoRefresh ? "暂停自动刷新" : "开启自动刷新"}
             >
               <RefreshCw
-                className={cn(
-                  "size-3.5",
-                  autoRefresh && isFetching && "animate-spin",
-                )}
+                data-icon="inline-start"
+                className={cn(autoRefresh && isFetching && "animate-spin")}
               />
               {autoRefresh ? "Live" : "Paused"}
             </Button>
-            <DialogClose asChild>
+            <SheetClose asChild>
               <Button
                 variant="ghost"
-                size="icon"
-                className="h-8 w-8"
+                size="icon-sm"
                 aria-label="关闭"
               >
-                <X className="size-3.5" />
+                <X data-icon="inline-start" />
               </Button>
-            </DialogClose>
+            </SheetClose>
           </div>
         </header>
 
         <div className="px-5 py-4">
-          {isLoading && (
-            <p className="text-muted-foreground text-[13px]">载入状态…</p>
-          )}
+          {isLoading && <Skeleton className="h-40 w-full" />}
           {error && (
-            <p role="alert" className="break-words text-destructive text-[13px]">
-              加载失败：{error.message}
-            </p>
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertTitle>状态加载失败</AlertTitle>
+              <AlertDescription>{error.message}</AlertDescription>
+            </Alert>
           )}
           {(resetStats.isError || reanalyze.isError) && (
-            <p role="alert" className="mb-3 text-destructive text-[13px]">
-              操作失败：
-              {(resetStats.error ?? reanalyze.error)?.message ?? "未知错误"}
-            </p>
+            <Alert variant="destructive" className="mb-3">
+              <AlertCircle />
+              <AlertTitle>操作失败</AlertTitle>
+              <AlertDescription>
+                {(resetStats.error ?? reanalyze.error)?.message ?? "未知错误"}
+              </AlertDescription>
+            </Alert>
           )}
           {data && (
             <Tabs defaultValue="overview">
@@ -184,21 +218,9 @@ export function TranslationStatusPanel({
                   data={data}
                   canManage={!!user}
                   actionPending={actionPending}
-                  onReset={() => {
-                    if (confirm("重置该作品的全部翻译统计？")) {
-                      resetStats.mutate();
-                    }
-                  }}
+                  onReset={() => setConfirmAction("reset")}
                   resetting={resetStats.isPending}
-                  onReanalyze={() => {
-                    if (
-                      confirm(
-                        "重新预读分析并翻译？将清空已生成的 context 并以精翻模式重新入队。",
-                      )
-                    ) {
-                      reanalyze.mutate();
-                    }
-                  }}
+                  onReanalyze={() => setConfirmAction("reanalyze")}
                   reanalyzing={reanalyze.isPending}
                 />
               </TabsContent>
@@ -221,8 +243,39 @@ export function TranslationStatusPanel({
             </Tabs>
           )}
         </div>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
+    <AlertDialog open={!!confirmAction} onOpenChange={(next) => !next && setConfirmAction(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogMedia>
+            {confirmAction === "reset" ? <Trash2 /> : <Sparkles />}
+          </AlertDialogMedia>
+          <AlertDialogTitle>
+            {confirmAction === "reset" ? "重置翻译统计？" : "重新预读并翻译？"}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {confirmAction === "reset"
+              ? "这会清除该作品的全部翻译调用统计，但不会删除现有译文。"
+              : "这会清空已生成的上下文，并以精翻模式重新进入任务队列。"}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogAction
+            variant={confirmAction === "reset" ? "destructive" : "default"}
+            onClick={() => {
+              if (confirmAction === "reset") resetStats.mutate();
+              if (confirmAction === "reanalyze") reanalyze.mutate();
+              setConfirmAction(null);
+            }}
+          >
+            确认
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
 
@@ -252,28 +305,28 @@ function OverviewTab({
     total.calls > 0 ? Math.round(total.durationMs / total.calls) : 0;
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-5">
       <div className="grid grid-cols-2 gap-3">
         <StatCard
-          icon={<Cpu className="size-3.5" />}
+          icon={Cpu}
           label="API 调用"
           value={total.calls.toLocaleString()}
           sub={`成功率 ${successRate}%`}
         />
         <StatCard
-          icon={<Zap className="size-3.5" />}
+          icon={Zap}
           label="总 Token"
           value={total.totalTokens.toLocaleString()}
           sub={`入 ${total.promptTokens.toLocaleString()} · 出 ${total.completionTokens.toLocaleString()}`}
         />
         <StatCard
-          icon={<CheckCircle2 className="size-3.5 text-success" />}
+          icon={CheckCircle2}
           label="成功 / 失败"
           value={`${total.successes} / ${total.failures}`}
           sub={`重试 ${total.retries}`}
         />
         <StatCard
-          icon={<Clock className="size-3.5" />}
+          icon={Clock}
           label="均时 / 总时"
           value={formatDuration(avgDuration)}
           sub={`累计 ${formatDuration(total.durationMs)}`}
@@ -284,7 +337,7 @@ function OverviewTab({
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
           按阶段
         </p>
-        <div className="space-y-2">
+        <div className="flex flex-col gap-2">
           {(Object.keys(data.stats.byStage) as LlmCallStage[]).length === 0 && (
             <p className="text-[12px] text-muted-foreground">暂无调用记录</p>
           )}
@@ -319,17 +372,16 @@ function OverviewTab({
               disabled={actionPending}
               onClick={onReanalyze}
             >
-              <Sparkles className="size-3.5" />
+              <Sparkles data-icon="inline-start" />
               {reanalyzing ? "重新入队…" : "重新预读 + 翻译"}
             </Button>
             <Button
-              variant="ghost"
+              variant="destructive"
               size="sm"
-              className="gap-1.5 text-destructive"
               disabled={actionPending}
               onClick={onReset}
             >
-              <Trash2 className="size-3.5" />
+              <Trash2 data-icon="inline-start" />
               {resetting ? "重置中…" : "重置统计"}
             </Button>
           </div>
@@ -340,31 +392,31 @@ function OverviewTab({
 }
 
 function StatCard({
-  icon,
+  icon: Icon,
   label,
   value,
   sub,
 }: {
-  icon: React.ReactNode;
+  icon: LucideIcon;
   label: string;
   value: string;
   sub?: string;
 }) {
   return (
-    <div className="rounded-card border border-border bg-secondary/40 px-4 py-3">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground">
-        {icon}
-        <span>{label}</span>
-      </div>
-      <p className="mt-1.5 text-[22px] font-semibold tabular-nums leading-none">
-        {value}
-      </p>
+    <Card className="gap-3 py-4">
+      <CardHeader className="px-4">
+        <CardTitle>{value}</CardTitle>
+        <CardDescription>{label}</CardDescription>
+        <CardAction>
+          <Icon className="text-primary" />
+        </CardAction>
+      </CardHeader>
       {sub && (
-        <p className="mt-1.5 text-[11px] text-muted-foreground font-mono tabular-nums">
-          {sub}
-        </p>
+        <CardContent className="px-4">
+          <CardDescription>{sub}</CardDescription>
+        </CardContent>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -380,10 +432,7 @@ function StageRow({
   return (
     <div className="rounded-control border border-border px-3 py-2 text-[12px]">
       <div className="flex items-center justify-between">
-        <Badge
-          variant="outline"
-          className={cn("font-mono", STAGE_COLOR[stage])}
-        >
+        <Badge variant={STAGE_VARIANT[stage]}>
           {STAGE_LABEL[stage]}
         </Badge>
         <span className="text-muted-foreground tabular-nums font-mono">
@@ -407,18 +456,19 @@ function ContextTab({ data }: { data: TranslationStatusView }) {
   const ctx = data.context;
   if (!ctx) {
     return (
-      <div className="rounded-control border border-dashed border-border p-6 text-center">
-        <FileText className="size-5 mx-auto text-muted-foreground" />
-        <p className="mt-2 text-[13px] text-muted-foreground">
-          {data.mode === "refined"
+      <PanelEmpty
+        icon={FileText}
+        title="暂无预读分析"
+        description={
+          data.mode === "refined"
             ? "预读分析尚未生成"
-            : "当前为快翻模式，无预读分析"}
-        </p>
-      </div>
+            : "当前为快翻模式，不会生成预读上下文"
+        }
+      />
     );
   }
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       {ctx.summary && (
         <Section title="全文摘要">
           <p className="text-[13px] leading-relaxed whitespace-pre-wrap">
@@ -435,7 +485,7 @@ function ContextTab({ data }: { data: TranslationStatusView }) {
         <Section title={`Ships (${ctx.ships.length})`}>
           <div className="flex flex-wrap gap-1.5">
             {ctx.ships.map((s) => (
-              <Badge key={s} variant="accent" className="font-mono normal-case">
+              <Badge key={s} variant="accent">
                 {s}
               </Badge>
             ))}
@@ -444,7 +494,7 @@ function ContextTab({ data }: { data: TranslationStatusView }) {
       )}
       {ctx.characters.length > 0 && (
         <Section title={`角色 (${ctx.characters.length})`}>
-          <ul className="space-y-1.5">
+          <ul className="flex flex-col gap-1.5">
             {ctx.characters.map((c) => (
               <li
                 key={c.name}
@@ -485,7 +535,7 @@ function ContextTab({ data }: { data: TranslationStatusView }) {
       )}
       {ctx.chapterSummaries.length > 0 && (
         <Section title={`分章摘要 (${ctx.chapterSummaries.length})`}>
-          <ol className="space-y-2">
+          <ol className="flex flex-col gap-2">
             {ctx.chapterSummaries.map((c) => (
               <li
                 key={c.index}
@@ -522,20 +572,24 @@ function SamplesTab({
   const entries = Object.entries(samples) as [LlmCallStage, RequestSample][];
   if (entries.length === 0) {
     return (
-      <p className="rounded-control border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
-        尚无样本。开始翻译后会捕获每个阶段的最新一次请求。
-      </p>
+      <PanelEmpty
+        icon={FileText}
+        title="尚无请求样本"
+        description="开始翻译后会捕获每个阶段的最新一次请求。"
+      />
     );
   }
   if (!canSeeRaw) {
     return (
-      <p className="rounded-control border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
-        请求 ctx 仅登录用户可见。
-      </p>
+      <PanelEmpty
+        icon={FileText}
+        title="内容不可见"
+        description="请求上下文仅登录用户可见。"
+      />
     );
   }
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       {entries.map(([stage, sample]) => (
         <SampleCard key={stage} stage={stage} sample={sample} />
       ))}
@@ -555,10 +609,7 @@ function SampleCard({
     <div className="rounded-control border border-border overflow-hidden">
       <div className="flex items-center justify-between bg-secondary/40 px-3 py-2 text-[12px]">
         <div className="flex items-center gap-2">
-          <Badge
-            variant="outline"
-            className={cn("font-mono", STAGE_COLOR[stage])}
-          >
+          <Badge variant={STAGE_VARIANT[stage]}>
             {STAGE_LABEL[stage]}
           </Badge>
           {sample.chapterIndex !== undefined && (
@@ -576,7 +627,7 @@ function SampleCard({
           {formatTime(sample.capturedAt)}
         </span>
       </div>
-      <div className="px-3 py-3 space-y-3">
+      <div className="flex flex-col gap-3 px-3 py-3">
         <details
           className="group"
           open={showSystem}
@@ -626,13 +677,11 @@ function EventsTab({ events }: { events: LlmCallEvent[] }) {
   const recent = useMemo(() => [...events].reverse(), [events]);
   if (recent.length === 0) {
     return (
-      <p className="rounded-control border border-dashed border-border p-6 text-center text-[13px] text-muted-foreground">
-        尚无调用记录。
-      </p>
+      <PanelEmpty icon={Activity} title="尚无调用记录" description="新的模型调用会显示在这里。" />
     );
   }
   return (
-    <ul className="space-y-1">
+    <ul className="flex flex-col gap-1">
       {recent.map((e) => (
         <li
           key={e.id}
@@ -646,13 +695,8 @@ function EventsTab({ events }: { events: LlmCallEvent[] }) {
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <Badge
-                variant="outline"
-                className={cn(
-                  "shrink-0",
-                  e.status === "error"
-                    ? "bg-destructive/15 text-destructive"
-                    : STAGE_COLOR[e.stage],
-                )}
+                variant={e.status === "error" ? "destructive" : STAGE_VARIANT[e.stage]}
+                className="shrink-0"
               >
                 {STAGE_LABEL[e.stage]}
               </Badge>
@@ -662,7 +706,7 @@ function EventsTab({ events }: { events: LlmCallEvent[] }) {
                 </span>
               )}
               {e.attempt > 0 && (
-                <span className="text-accent">retry #{e.attempt}</span>
+                <span className="text-primary">retry #{e.attempt}</span>
               )}
             </div>
             <span className="text-muted-foreground tabular-nums">
@@ -696,14 +740,15 @@ function ErrorsTab({ events }: { events: LlmCallEvent[] }) {
   );
   if (errors.length === 0) {
     return (
-      <div className="rounded-control border border-success/30 bg-success/5 p-6 text-center">
-        <CheckCircle2 className="size-5 mx-auto text-success" />
-        <p className="mt-2 text-[13px] text-success">无错误记录</p>
-      </div>
+      <Alert>
+        <CheckCircle2 />
+        <AlertTitle>无错误记录</AlertTitle>
+        <AlertDescription>最近的翻译调用均未记录错误。</AlertDescription>
+      </Alert>
     );
   }
   return (
-    <ul className="space-y-2">
+    <ul className="flex flex-col gap-2">
       {errors.map((e) => (
         <li
           key={e.id}
@@ -711,7 +756,7 @@ function ErrorsTab({ events }: { events: LlmCallEvent[] }) {
         >
           <div className="flex items-center justify-between gap-2 text-[11px] font-mono">
             <div className="flex items-center gap-2">
-              <AlertCircle className="size-3.5 text-destructive" />
+              <AlertCircle />
               <span className="font-semibold">{STAGE_LABEL[e.stage]}</span>
               {e.chapterIndex !== undefined && (
                 <span className="text-muted-foreground">
@@ -719,7 +764,7 @@ function ErrorsTab({ events }: { events: LlmCallEvent[] }) {
                 </span>
               )}
               {e.attempt > 0 && (
-                <span className="text-accent">retry #{e.attempt}</span>
+                <span className="text-primary">retry #{e.attempt}</span>
               )}
             </div>
             <span className="text-muted-foreground tabular-nums">
@@ -759,6 +804,28 @@ function Section({
       </p>
       <div>{children}</div>
     </section>
+  );
+}
+
+function PanelEmpty({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+}) {
+  return (
+    <Empty className="min-h-44">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Icon />
+        </EmptyMedia>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription>{description}</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -807,7 +874,7 @@ export function TranslationStatusButton({
         }}
         aria-label="翻译状态"
       >
-        <Activity className="size-3.5" />
+        <Activity data-icon="inline-start" />
         {label ?? "状态"}
       </Button>
       <TranslationStatusPanel

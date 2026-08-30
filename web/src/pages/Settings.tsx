@@ -7,13 +7,28 @@ import {
   Config as ConfigSchema,
   type Config,
 } from "@ao3hub/shared";
-import { Check, X } from "lucide-react";
+import { Check, Cpu, ServerCog, Settings2, X } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Field as FieldPrimitive,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api, type ConfigUpdate } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
@@ -146,20 +161,31 @@ export function Settings() {
     },
   });
 
-  if (authLoading) return <p className="text-muted-foreground">确认权限…</p>;
-  if (!isAdmin) return <p className="text-destructive">需要管理员权限。</p>;
-  if (isError) {
+  if (authLoading) return <SettingsSkeleton />;
+  if (!isAdmin) {
     return (
-      <div className="space-y-3">
-        <p className="text-destructive">载入配置失败：{error.message}</p>
-        <Button variant="outline" onClick={() => refetch()}>
-          重试
-        </Button>
-      </div>
+      <Alert variant="destructive">
+        <Settings2 />
+        <AlertTitle>需要管理员权限</AlertTitle>
+        <AlertDescription>当前账号无法访问服务配置。</AlertDescription>
+      </Alert>
     );
   }
-  if (isLoading || !form)
-    return <p className="text-muted-foreground">载入配置…</p>;
+  if (isError) {
+    return (
+      <Alert variant="destructive">
+        <ServerCog />
+        <AlertTitle>配置加载失败</AlertTitle>
+        <AlertDescription>
+          {error.message}
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
+            重试
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  if (isLoading || !form) return <SettingsSkeleton />;
 
   const onSave = () => {
     save.reset();
@@ -248,22 +274,24 @@ export function Settings() {
   };
 
   return (
-    <div className="mx-auto max-w-[720px] space-y-12 fade-in">
-      <header>
-        <h1 className="text-[clamp(2rem,5vw,3rem)] font-semibold tracking-tight">
-          Settings
-        </h1>
-        <p className="text-muted-foreground mt-3 text-[14px]">
-          配置服务监听、LLM provider、AO3 cookie、OTA
-          manifest。所有数据存在服务端 data/config.json。
+    <div className="mx-auto flex max-w-4xl flex-col gap-8 fade-in">
+      <header className="flex flex-col gap-2">
+        <Badge variant="accent">
+          <Settings2 />
+          System configuration
+        </Badge>
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">服务设置</h1>
+        <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+          配置服务监听、LLM Provider、AO3 凭据、阅读器默认值与 OTA 更新。配置保存在服务端 data/config.json。
         </p>
       </header>
 
-      <fieldset disabled={save.isPending} className="contents">
-      <section className="space-y-5">
-        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
-          Server
-        </h2>
+      <fieldset
+        disabled={save.isPending}
+        data-disabled={save.isPending || undefined}
+        className="contents"
+      >
+      <SettingsCard title="服务与会话" description="监听地址、会话时长和后台刷新频率。">
         <div className="grid gap-4 sm:grid-cols-2">
           <Field id="server-host" label="Host">
             <Input
@@ -369,31 +397,32 @@ export function Settings() {
             />
           </Field>
         </div>
-      </section>
+      </SettingsCard>
 
-      <section className="space-y-5">
-        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
-          LLM Provider
-        </h2>
+      <SettingsCard title="LLM Provider" description="模型端点、请求策略与默认翻译模式。">
         <Field id="llm-api-type" label="API Type">
-          <div id="llm-api-type" className="flex flex-wrap gap-2">
+          <ToggleGroup
+            id="llm-api-type"
+            type="single"
+            value={form.llm.apiType}
+            onValueChange={(value) =>
+              value && setLlmAPIType(value as LocalConfig["llm"]["apiType"])
+            }
+            variant="outline"
+            className="flex-wrap"
+          >
             {[
               ["openai-compatible", "OpenAI compatible"],
               ["claude-messages", "Claude Messages"],
             ].map(([apiType, label]) => (
-              <Button
+              <ToggleGroupItem
                 key={apiType}
-                type="button"
-                variant={form.llm.apiType === apiType ? "default" : "outline"}
-                size="sm"
-                onClick={() =>
-                  setLlmAPIType(apiType as LocalConfig["llm"]["apiType"])
-                }
+                value={apiType}
               >
                 {label}
-              </Button>
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
         </Field>
         <Field id="llm-baseurl" label="Base URL">
           <Input
@@ -524,7 +553,7 @@ export function Settings() {
               }
             />
           </Field>
-          <div className="flex items-end gap-3 pb-2">
+          <FieldPrimitive orientation="horizontal" className="self-end pb-2">
             <Switch
               id="llm-stream"
               checked={form.llm.stream}
@@ -535,36 +564,37 @@ export function Settings() {
                 })
               }
             />
-            <label htmlFor="llm-stream" className="text-[13px] leading-none">
+            <FieldLabel htmlFor="llm-stream">
               启用流式 LLM 请求（SSE 透明接收，减少长请求超时）
-            </label>
-          </div>
+            </FieldLabel>
+          </FieldPrimitive>
         </div>
         <Field id="llm-mode" label="翻译模式（默认）">
-          <div id="llm-mode" className="flex flex-wrap gap-2">
+          <ToggleGroup
+            id="llm-mode"
+            type="single"
+            value={form.llm.mode}
+            onValueChange={(value) =>
+              value && setForm({
+                ...form,
+                llm: { ...form.llm, mode: value as LocalConfig["llm"]["mode"] },
+              })
+            }
+            variant="outline"
+            className="flex-wrap"
+          >
             {[
               ["normal", "普通"],
               ["refined", "精翻（AO3 同人专家 + 全文预读）"],
             ].map(([mode, label]) => (
-              <Button
+              <ToggleGroupItem
                 key={mode}
-                type="button"
-                variant={form.llm.mode === mode ? "default" : "outline"}
-                size="sm"
-                onClick={() =>
-                  setForm({
-                    ...form,
-                    llm: {
-                      ...form.llm,
-                      mode: mode as LocalConfig["llm"]["mode"],
-                    },
-                  })
-                }
+                value={mode}
               >
                 {label}
-              </Button>
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
         </Field>
         <Field
           id="llm-analysis-tokens"
@@ -587,35 +617,25 @@ export function Settings() {
             }
           />
         </Field>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Button
             variant="outline"
             onClick={() => test.mutate()}
             disabled={test.isPending}
           >
-            {test.isPending ? "测试中…" : "测试连通"}
+            {test.isPending && <Spinner data-icon="inline-start" />}
+            {test.isPending ? "测试中" : "测试连通"}
           </Button>
           {testResult && (
-            <span
-              className={`inline-flex items-center gap-1 text-[12px] ${
-                testResult.ok ? "text-success" : "text-destructive"
-              }`}
-            >
-              {testResult.ok ? (
-                <Check className="size-3.5" />
-              ) : (
-                <X className="size-3.5" />
-              )}
+            <Badge variant={testResult.ok ? "success" : "destructive"}>
+              {testResult.ok ? <Check /> : <X />}
               {testResult.msg}
-            </span>
+            </Badge>
           )}
         </div>
-      </section>
+      </SettingsCard>
 
-      <section className="space-y-5">
-        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
-          AO3
-        </h2>
+      <SettingsCard title="AO3 访问" description="用于抓取受限作品的 Cookie 与 User Agent。">
         <Field
           id="ao3-cookie"
           label={`Cookie${data?.ao3.hasCookie ? "（已配置，不修改则保留）" : ""}`}
@@ -650,12 +670,9 @@ export function Settings() {
             }
           />
         </Field>
-      </section>
+      </SettingsCard>
 
-      <section className="space-y-5">
-        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
-          Reader Defaults
-        </h2>
+      <SettingsCard title="阅读器默认值" description="新设备首次打开阅读器时使用的排版参数。">
         <div className="grid gap-4 sm:grid-cols-3">
           <Field id="reader-font" label="Font px">
             <Input
@@ -715,12 +732,9 @@ export function Settings() {
             />
           </Field>
         </div>
-      </section>
+      </SettingsCard>
 
-      <section className="space-y-5">
-        <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
-          OTA Update
-        </h2>
+      <SettingsCard title="OTA 更新" description="发行通道、Manifest 地址与重启策略。">
         <Field id="ota-manifest" label="Manifest URL">
           <Input
             id="ota-manifest"
@@ -736,23 +750,24 @@ export function Settings() {
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field id="ota-channel" label="Channel">
-            <div id="ota-channel" className="flex gap-2">
+            <ToggleGroup
+              id="ota-channel"
+              type="single"
+              value={form.update.channel}
+              onValueChange={(value) => value && setUpdateChannel(value)}
+              variant="outline"
+            >
               {["stable", "dev"].map((channel) => (
-                <Button
+                <ToggleGroupItem
                   key={channel}
-                  type="button"
-                  variant={
-                    form.update.channel === channel ? "default" : "outline"
-                  }
-                  size="sm"
-                  onClick={() => setUpdateChannel(channel)}
+                  value={channel}
                 >
                   {channel}
-                </Button>
+                </ToggleGroupItem>
               ))}
-            </div>
+            </ToggleGroup>
           </Field>
-          <div className="flex items-end gap-3 pb-2">
+          <FieldPrimitive orientation="horizontal" className="self-end pb-2">
             <Switch
               id="ota-auto"
               checked={form.update.autoCheck}
@@ -763,10 +778,10 @@ export function Settings() {
                 })
               }
             />
-            <label htmlFor="ota-auto" className="text-[13px] leading-none">
+            <FieldLabel htmlFor="ota-auto">
               启动时自动检查更新
-            </label>
-          </div>
+            </FieldLabel>
+          </FieldPrimitive>
         </div>
         <Field id="ota-restart-delay" label="Restart delay ms">
           <Input
@@ -786,35 +801,39 @@ export function Settings() {
             }
           />
         </Field>
-      </section>
+      </SettingsCard>
       </fieldset>
 
       <Separator />
 
-      <div className="flex items-center gap-3">
+      {(save.isError || validationError) && (
+        <Alert variant="destructive">
+          <Settings2 />
+          <AlertTitle>无法保存配置</AlertTitle>
+          <AlertDescription>
+            {validationError ||
+              (save.error instanceof Error ? save.error.message : "保存失败")}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="sticky bottom-4 flex flex-wrap items-center gap-3 rounded-xl border bg-background/90 p-3 shadow-float backdrop-blur-xl">
         <Button
-          variant="default"
           onClick={onSave}
           disabled={save.isPending || test.isPending}
         >
-          {save.isPending ? "保存中…" : "保存"}
+          {save.isPending && <Spinner data-icon="inline-start" />}
+          {save.isPending ? "保存中" : "保存全部设置"}
         </Button>
-        {save.isError && (
-          <span role="alert" className="break-words text-destructive text-[12px]">
-            {save.error instanceof Error ? save.error.message : "保存失败"}
-          </span>
-        )}
-        {validationError && (
-          <span role="alert" className="break-words text-destructive text-[12px]">
-            {validationError}
-          </span>
-        )}
         {save.isSuccess && (
-          <span className="inline-flex items-center gap-1 text-success text-[12px]">
-            <Check className="size-3.5" />
+          <Badge variant="success">
+            <Check />
             已保存
-          </span>
+          </Badge>
         )}
+        <span className="ml-auto text-xs text-muted-foreground">
+          API Key 与 Cookie 留空时会保留现有值
+        </span>
       </div>
     </div>
   );
@@ -830,9 +849,53 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
-      <Label htmlFor={id}>{label}</Label>
+    <FieldPrimitive>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
       {children}
+    </FieldPrimitive>
+  );
+}
+
+function SettingsCard({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-5">{children}</CardContent>
+    </Card>
+  );
+}
+
+function SettingsSkeleton() {
+  return (
+    <div className="mx-auto flex max-w-4xl flex-col gap-6">
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-6 w-40" />
+        <Skeleton className="h-10 w-64" />
+        <Skeleton className="h-5 w-3/4" />
+      </div>
+      {Array.from({ length: 3 }).map((_, index) => (
+        <Card key={index}>
+          <CardHeader>
+            <Skeleton className="h-6 w-36" />
+            <Skeleton className="h-4 w-2/3" />
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

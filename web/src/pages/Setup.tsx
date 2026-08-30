@@ -1,11 +1,29 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ShieldCheck } from "lucide-react";
+import { ShieldCheck, UserRoundCheck } from "lucide-react";
 import { PASSWORD_MIN, USERNAME_RE } from "@ao3hub/shared";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { useAuth } from "../lib/auth";
+
+type InvalidField = "username" | "password" | "confirm" | "form" | null;
 
 export function SetupPage() {
   const navigate = useNavigate();
@@ -14,27 +32,30 @@ export function SetupPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [invalidField, setInvalidField] = useState<InvalidField>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (loading) return;
-    if (!needsSetup) {
-      navigate({ to: user ? "/" : "/login", replace: true });
-    }
+    if (!needsSetup) navigate({ to: user ? "/" : "/login", replace: true });
   }, [needsSetup, user, loading, navigate]);
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
     setError(null);
+    setInvalidField(null);
     if (!USERNAME_RE.test(username.trim())) {
-      setError("用户名只允许字母、数字、下划线、短横线，3–32 字符");
+      setInvalidField("username");
+      setError("用户名只允许字母、数字、下划线、短横线，长度为 3–32 字符");
       return;
     }
     if (password.length < PASSWORD_MIN) {
-      setError(`密码至少 ${PASSWORD_MIN} 个字符`);
+      setInvalidField("password");
+      setError(`密码至少需要 ${PASSWORD_MIN} 个字符`);
       return;
     }
     if (password !== confirm) {
+      setInvalidField("confirm");
       setError("两次输入的密码不一致");
       return;
     }
@@ -43,6 +64,7 @@ export function SetupPage() {
       await setup(username.trim(), password);
       navigate({ to: "/", replace: true });
     } catch (err) {
+      setInvalidField("form");
       setError(err instanceof Error ? err.message : "初始化失败");
     } finally {
       setSubmitting(false);
@@ -50,66 +72,102 @@ export function SetupPage() {
   };
 
   return (
-    <div className="mx-auto max-w-[460px] space-y-8 fade-in">
-      <header className="space-y-2 text-center">
-        <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-accent/10 text-accent">
-          <ShieldCheck className="size-5" />
-        </div>
-        <h1 className="text-[clamp(2rem,5vw,2.8rem)] font-semibold tracking-tight">
-          初始化管理员
-        </h1>
-        <p className="text-muted-foreground text-[13px] leading-relaxed">
-          创建首个 admin 账号。后续可在「用户」页添加更多用户。
-        </p>
-      </header>
-      <form onSubmit={onSubmit} className="space-y-5">
-        <div className="space-y-1.5">
-          <Label htmlFor="setup-username">用户名</Label>
-          <Input
-            id="setup-username"
-            autoComplete="username"
-            autoFocus
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-            disabled={submitting}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="setup-password">密码</Label>
-          <Input
-            id="setup-password"
-            type="password"
-            autoComplete="new-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            disabled={submitting}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="setup-confirm">确认密码</Label>
-          <Input
-            id="setup-confirm"
-            type="password"
-            autoComplete="new-password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            required
-            disabled={submitting}
-          />
-        </div>
-        {error && <p className="text-destructive text-[12px]">{error}</p>}
-        <Button
-          type="submit"
-          variant="default"
-          size="lg"
-          className="w-full"
-          disabled={submitting || !username || !password || !confirm}
-        >
-          {submitting ? "创建中…" : "创建管理员"}
-        </Button>
-      </form>
+    <div className="mx-auto flex min-h-[calc(100svh-11rem)] w-full max-w-lg items-center fade-in">
+      <Card className="w-full">
+        <CardHeader className="gap-4 text-center">
+          <div className="mx-auto flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+            <ShieldCheck />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <CardTitle>初始化 AO3 Hub</CardTitle>
+            <CardDescription>
+              创建第一个管理员账号。完成后可在用户页面继续添加普通用户或管理员。
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <form id="setup-form" onSubmit={onSubmit}>
+            <FieldGroup>
+              <Field
+                data-invalid={invalidField === "username" || undefined}
+                data-disabled={submitting || undefined}
+              >
+                <FieldLabel htmlFor="setup-username">管理员用户名</FieldLabel>
+                <Input
+                  id="setup-username"
+                  autoComplete="username"
+                  autoFocus
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  aria-invalid={invalidField === "username" || undefined}
+                  required
+                  disabled={submitting}
+                />
+                <FieldDescription>3–32 个字符，可使用字母、数字、下划线和短横线。</FieldDescription>
+                {invalidField === "username" && <FieldError>{error}</FieldError>}
+              </Field>
+              <Field
+                data-invalid={invalidField === "password" || undefined}
+                data-disabled={submitting || undefined}
+              >
+                <FieldLabel htmlFor="setup-password">密码</FieldLabel>
+                <Input
+                  id="setup-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  aria-invalid={invalidField === "password" || undefined}
+                  required
+                  disabled={submitting}
+                />
+                <FieldDescription>至少 {PASSWORD_MIN} 个字符。</FieldDescription>
+                {invalidField === "password" && <FieldError>{error}</FieldError>}
+              </Field>
+              <Field
+                data-invalid={invalidField === "confirm" || undefined}
+                data-disabled={submitting || undefined}
+              >
+                <FieldLabel htmlFor="setup-confirm">确认密码</FieldLabel>
+                <Input
+                  id="setup-confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirm}
+                  onChange={(event) => setConfirm(event.target.value)}
+                  aria-invalid={invalidField === "confirm" || undefined}
+                  required
+                  disabled={submitting}
+                />
+                {invalidField === "confirm" && <FieldError>{error}</FieldError>}
+              </Field>
+              {invalidField === "form" && error && (
+                <Alert variant="destructive">
+                  <ShieldCheck />
+                  <AlertTitle>初始化失败</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+            </FieldGroup>
+          </form>
+        </CardContent>
+        <CardFooter>
+          <Button
+            form="setup-form"
+            type="submit"
+            size="lg"
+            className="w-full"
+            disabled={submitting || !username || !password || !confirm}
+          >
+            {submitting ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <UserRoundCheck data-icon="inline-start" />
+            )}
+            {submitting ? "创建中" : "创建管理员"}
+          </Button>
+        </CardFooter>
+      </Card>
     </div>
   );
 }

@@ -9,7 +9,9 @@ import {
 } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { AppLayout } from "./components/AppLayout";
+import { Alert, AlertDescription, AlertTitle } from "./components/ui/alert";
 import { Button } from "./components/ui/button";
+import { Skeleton } from "./components/ui/skeleton";
 import { Library } from "./pages/Library";
 import { ImportPage } from "./pages/Import";
 import { Settings } from "./pages/Settings";
@@ -78,21 +80,25 @@ function RootShell() {
   if (loading) {
     return (
       <AppLayout>
-        <p className="text-muted-foreground">载入中…</p>
+        <div className="flex flex-col gap-4">
+          <Skeleton className="h-10 w-56" />
+          <Skeleton className="h-40 w-full" />
+        </div>
       </AppLayout>
     );
   }
   if (authError) {
     return (
       <AppLayout>
-        <div className="flex flex-col items-start gap-3">
-          <p role="alert" className="break-words text-destructive">
-            无法确认登录状态：{authError}
-          </p>
-          <Button variant="outline" onClick={() => void refresh()}>
-            重试
-          </Button>
-        </div>
+        <Alert variant="destructive">
+          <AlertTitle>无法确认登录状态</AlertTitle>
+          <AlertDescription>
+            {authError}
+            <Button variant="outline" size="sm" onClick={() => void refresh()}>
+              重试
+            </Button>
+          </AlertDescription>
+        </Alert>
       </AppLayout>
     );
   }
@@ -107,7 +113,7 @@ function RootShell() {
   if (unauthorized || (needsSetup && pathname !== "/setup")) {
     return (
       <AppLayout>
-        <p className="text-muted-foreground">正在跳转…</p>
+        <Skeleton className="h-10 w-48" />
       </AppLayout>
     );
   }

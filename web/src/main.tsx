@@ -4,7 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { router } from "./router";
 import { ApiProtocolError, HttpError } from "./lib/api";
+import { applyTheme, getTheme } from "./lib/theme";
 import "./styles.css";
+
+applyTheme(getTheme());
 
 function shouldRetryQuery(failureCount: number, error: Error): boolean {
   if (failureCount >= 1 || error.name === "AbortError") return false;

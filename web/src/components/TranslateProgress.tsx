@@ -60,7 +60,7 @@ export function TranslateProgressBar({
       )}
       {inflight > 0 && (
         <div
-          className="h-full bg-accent animate-pulse"
+          className="h-full animate-pulse bg-primary"
           style={{ width: pct(inflight) }}
         />
       )}
@@ -96,7 +96,7 @@ export function TranslateProgressLegend({
       <span className="text-foreground">
         {done}/{total} · {pct}%
       </span>
-      <Chip color="bg-accent" label="进行" value={inflight} />
+      <Chip color="bg-primary" label="进行" value={inflight} />
       <Chip color="bg-success" label="成功" value={done} />
       <Chip color="bg-destructive" label="失败" value={error} />
       <Chip color="bg-muted-foreground/40" label="等待" value={pending} />

@@ -1,28 +1,69 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Trash2, UserPlus } from "lucide-react";
+import { KeyRound, ShieldCheck, Trash2, UserPlus, UsersRound } from "lucide-react";
 import type { PublicUser, Role } from "@ao3hub/shared";
 import { PASSWORD_MIN, USERNAME_RE } from "@ao3hub/shared";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
 export function UsersPage() {
   const navigate = useNavigate();
   const { user: me, loading } = useAuth();
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const { data, isLoading, error } = useQuery({
     queryKey: ["users"],
     queryFn: ({ signal }) => api.listUsers(signal),
@@ -35,143 +76,164 @@ export function UsersPage() {
       navigate({ to: "/login", search: { redirect: "/users" }, replace: true });
       return;
     }
-    if (me.role !== "admin") {
-      navigate({ to: "/", replace: true });
-    }
+    if (me.role !== "admin") navigate({ to: "/", replace: true });
   }, [me, loading, navigate]);
 
   const create = useMutation({
     mutationFn: (input: { username: string; password: string; role: Role }) =>
       api.createUser(input),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }),
   });
 
   const update = useMutation({
     mutationFn: (input: { id: string; password?: string; role?: Role }) =>
       api.updateUser(input.id, { password: input.password, role: input.role }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }),
   });
 
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteUser(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }),
   });
 
   const [showCreate, setShowCreate] = useState(false);
   const [resetTarget, setResetTarget] = useState<PublicUser | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<PublicUser | null>(null);
   const mutating = create.isPending || update.isPending || remove.isPending;
 
   if (loading || !me || me.role !== "admin") return null;
 
   const users = data?.users ?? [];
+  const adminCount = users.filter((user) => user.role === "admin").length;
 
   return (
-    <div className="mx-auto max-w-[760px] space-y-10 fade-in">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-[clamp(2rem,5vw,3rem)] font-semibold tracking-tight">
-            Users
-          </h1>
-          <p className="text-muted-foreground mt-2 text-[14px]">
-            管理 admin / user 账号。user 不能访问「Settings」「Users」。
+    <div className="flex flex-col gap-8 fade-in">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-2">
+          <Badge variant="accent">
+            <UsersRound />
+            Access control
+          </Badge>
+          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">用户管理</h1>
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            管理本机账号与权限。普通用户可以导入和阅读，管理员还可管理用户及服务配置。
           </p>
         </div>
-        <Button
-          variant="default"
-          onClick={() => setShowCreate(true)}
-          className="gap-1.5"
-          disabled={mutating}
-        >
-          <UserPlus className="size-3.5" /> 新建
+        <Button onClick={() => setShowCreate(true)} disabled={mutating}>
+          <UserPlus data-icon="inline-start" />
+          新建用户
         </Button>
-      </header>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Metric label="全部用户" value={users.length} />
+        <Metric label="管理员" value={adminCount} />
+      </div>
 
       {isLoading ? (
-        <p className="text-muted-foreground">载入用户…</p>
+        <UsersSkeleton />
       ) : error ? (
-        <p role="alert" className="break-words text-destructive">
-          加载失败：{error.message}
-        </p>
+        <Alert variant="destructive">
+          <UsersRound />
+          <AlertTitle>用户列表加载失败</AlertTitle>
+          <AlertDescription>{error.message}</AlertDescription>
+        </Alert>
       ) : users.length === 0 ? (
-        <p className="text-muted-foreground">还没有用户。</p>
+        <Empty className="min-h-72">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <UsersRound />
+            </EmptyMedia>
+            <EmptyTitle>还没有用户</EmptyTitle>
+            <EmptyDescription>创建第一个用户，让其他人也能使用这个 AO3 Hub 实例。</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button onClick={() => setShowCreate(true)}>
+              <UserPlus data-icon="inline-start" />
+              新建用户
+            </Button>
+          </EmptyContent>
+        </Empty>
       ) : (
-        <ul>
-          {users.map((u, i) => (
-            <li key={u.id}>
-              {i > 0 && <Separator />}
-              <div className="group grid grid-cols-[1fr_auto] items-center gap-4 py-5">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="truncate text-[18px] font-semibold tracking-tight">
-                      {u.username}
-                    </p>
-                    {u.role === "admin" ? (
-                      <Badge variant="accent">admin</Badge>
-                    ) : (
-                      <Badge>user</Badge>
-                    )}
-                    {u.id === me.id && (
-                      <span className="text-muted-foreground text-[11px]">（你）</span>
-                    )}
+        <ul className="grid gap-4 md:grid-cols-2">
+          {users.map((user) => (
+            <li key={user.id}>
+              <Card className="h-full">
+                <CardHeader>
+                  <div className="flex min-w-0 flex-col gap-1.5 pr-20">
+                    <CardTitle className="truncate">{user.username}</CardTitle>
+                    <CardDescription>创建于 {user.createdAt.slice(0, 10)}</CardDescription>
                   </div>
-                  <p className="text-muted-foreground mt-0.5 text-[12px] tabular-nums">
-                    创建于 {u.createdAt.slice(0, 10)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1">
+                  <CardAction className="flex items-center gap-1.5">
+                    {user.id === me.id && <Badge variant="outline">你</Badge>}
+                    <Badge variant={user.role === "admin" ? "accent" : "secondary"}>
+                      {user.role}
+                    </Badge>
+                  </CardAction>
+                </CardHeader>
+                <CardContent>
+                  <div className="rounded-lg bg-muted/60 p-3 text-sm text-muted-foreground">
+                    {user.role === "admin"
+                      ? "可管理用户、翻译服务与更新配置"
+                      : "可导入作品、查看翻译状态并阅读"}
+                  </div>
+                </CardContent>
+                <Separator />
+                <CardFooter className="mt-auto flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() =>
                       update.mutate({
-                        id: u.id,
-                        role: u.role === "admin" ? "user" : "admin",
+                        id: user.id,
+                        role: user.role === "admin" ? "user" : "admin",
                       })
                     }
-                    disabled={mutating || u.id === me.id}
-                    title={u.id === me.id ? "不能修改自己的角色" : ""}
+                    disabled={mutating || user.id === me.id}
+                    title={user.id === me.id ? "不能修改自己的角色" : undefined}
                   >
-                    设为 {u.role === "admin" ? "user" : "admin"}
+                    设为 {user.role === "admin" ? "user" : "admin"}
                   </Button>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    onClick={() => setResetTarget(u)}
+                    size="icon-sm"
+                    onClick={() => setResetTarget(user)}
                     disabled={mutating}
-                    aria-label="重置密码"
+                    aria-label={`重置 ${user.username} 的密码`}
                   >
-                    <KeyRound className="size-3.5" />
+                    <KeyRound data-icon="inline-start" />
                   </Button>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    onClick={() => {
-                      if (u.id === me.id) return;
-                      if (confirm(`删除用户「${u.username}」？`)) remove.mutate(u.id);
-                    }}
-                    disabled={mutating || u.id === me.id}
-                    aria-label="删除"
+                    size="icon-sm"
+                    onClick={() => setDeleteTarget(user)}
+                    disabled={mutating || user.id === me.id}
+                    aria-label={`删除 ${user.username}`}
                   >
-                    <Trash2 className="size-3.5" />
+                    <Trash2 data-icon="inline-start" />
                   </Button>
-                </div>
-              </div>
+                </CardFooter>
+              </Card>
             </li>
           ))}
         </ul>
       )}
 
       {(create.error || update.error || remove.error) && (
-        <p role="alert" className="break-words text-destructive text-[12px]">
-          {(create.error ?? update.error ?? remove.error)?.message}
-        </p>
+        <Alert variant="destructive">
+          <ShieldCheck />
+          <AlertTitle>操作失败</AlertTitle>
+          <AlertDescription>
+            {(create.error ?? update.error ?? remove.error)?.message}
+          </AlertDescription>
+        </Alert>
       )}
 
       <CreateDialog
         open={showCreate}
         onOpenChange={setShowCreate}
-        onSubmit={async (v) => {
-          await create.mutateAsync(v);
+        onSubmit={async (value) => {
+          await create.mutateAsync(value);
           setShowCreate(false);
         }}
         pending={mutating}
@@ -186,6 +248,34 @@ export function UsersPage() {
         }}
         pending={mutating}
       />
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Trash2 />
+            </AlertDialogMedia>
+            <AlertDialogTitle>删除用户？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deleteTarget?.username}」将无法再登录，所有现有会话也会失效。此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={remove.isPending}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={remove.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                if (!deleteTarget) return;
+                remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) });
+              }}
+            >
+              {remove.isPending && <Spinner data-icon="inline-start" />}
+              {remove.isPending ? "删除中" : "确认删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -197,8 +287,8 @@ function CreateDialog({
   pending,
 }: {
   open: boolean;
-  onOpenChange: (v: boolean) => void;
-  onSubmit: (v: { username: string; password: string; role: Role }) => Promise<void>;
+  onOpenChange: (value: boolean) => void;
+  onSubmit: (value: { username: string; password: string; role: Role }) => Promise<void>;
   pending: boolean;
 }) {
   const [username, setUsername] = useState("");
@@ -215,8 +305,8 @@ function CreateDialog({
     }
   }, [open]);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
     setError(null);
     if (!USERNAME_RE.test(username.trim())) {
       setError("用户名只允许字母、数字、下划线、短横线，3–32 字符");
@@ -228,75 +318,78 @@ function CreateDialog({
     }
     try {
       await onSubmit({ username: username.trim(), password, role });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "创建失败");
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "创建失败");
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent aria-describedby={undefined}>
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>新建用户</DialogTitle>
+          <DialogDescription>创建可登录当前 AO3 Hub 实例的本地账号。</DialogDescription>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="cu-username">用户名</Label>
-            <Input
-              id="cu-username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoFocus
-              required
-              disabled={pending}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="cu-password">初始密码</Label>
-            <Input
-              id="cu-password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              disabled={pending}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>角色</Label>
-            <div className="flex gap-2">
-              {(["user", "admin"] as Role[]).map((r) => (
-                <Button
-                  key={r}
-                  type="button"
-                  variant={role === r ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setRole(r)}
-                >
-                  {r}
-                </Button>
-              ))}
-            </div>
-          </div>
-          {error && <p className="text-destructive text-[12px]">{error}</p>}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-              disabled={pending}
-            >
-              取消
-            </Button>
-            <Button
-              type="submit"
-              variant="default"
-              disabled={pending || !username || !password}
-            >
-              {pending ? "创建中…" : "创建"}
-            </Button>
-          </DialogFooter>
+        <form id="create-user-form" onSubmit={submit}>
+          <FieldGroup>
+            <Field data-disabled={pending || undefined}>
+              <FieldLabel htmlFor="create-username">用户名</FieldLabel>
+              <Input
+                id="create-username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                autoFocus
+                required
+                disabled={pending}
+              />
+            </Field>
+            <Field data-disabled={pending || undefined}>
+              <FieldLabel htmlFor="create-password">初始密码</FieldLabel>
+              <Input
+                id="create-password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+                disabled={pending}
+              />
+              <FieldDescription>至少 {PASSWORD_MIN} 个字符。</FieldDescription>
+            </Field>
+            <FieldSet data-disabled={pending || undefined}>
+              <FieldLegend variant="label">角色</FieldLegend>
+              <ToggleGroup
+                type="single"
+                value={role}
+                onValueChange={(value) => value && setRole(value as Role)}
+                variant="outline"
+                className="w-full"
+                disabled={pending}
+              >
+                <ToggleGroupItem value="user" className="flex-1">普通用户</ToggleGroupItem>
+                <ToggleGroupItem value="admin" className="flex-1">管理员</ToggleGroupItem>
+              </ToggleGroup>
+            </FieldSet>
+            {error && (
+              <Alert variant="destructive">
+                <AlertTitle>无法创建用户</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+          </FieldGroup>
         </form>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
+            取消
+          </Button>
+          <Button
+            form="create-user-form"
+            type="submit"
+            disabled={pending || !username || !password}
+          >
+            {pending && <Spinner data-icon="inline-start" />}
+            {pending ? "创建中" : "创建用户"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -309,7 +402,7 @@ function ResetDialog({
   pending,
 }: {
   target: PublicUser | null;
-  onOpenChange: (v: boolean) => void;
+  onOpenChange: (value: boolean) => void;
   onSubmit: (password: string) => Promise<void>;
   pending: boolean;
 }) {
@@ -323,8 +416,8 @@ function ResetDialog({
     }
   }, [target]);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
     setError(null);
     if (password.length < PASSWORD_MIN) {
       setError(`密码至少 ${PASSWORD_MIN} 个字符`);
@@ -332,51 +425,86 @@ function ResetDialog({
     }
     try {
       await onSubmit(password);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "重置失败");
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "重置失败");
     }
   };
 
   return (
     <Dialog open={!!target} onOpenChange={onOpenChange}>
-      <DialogContent aria-describedby={undefined}>
+      <DialogContent>
         <DialogHeader>
-          <DialogTitle className="break-words pr-8 [overflow-wrap:anywhere]">
-            重置「{target?.username}」的密码
-          </DialogTitle>
+          <DialogTitle>重置「{target?.username}」的密码</DialogTitle>
+          <DialogDescription>保存后，该用户的所有现有会话都会立即失效。</DialogDescription>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="rp-password">新密码</Label>
-            <Input
-              id="rp-password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoFocus
-              required
-              disabled={pending}
-            />
-            <p className="text-muted-foreground text-[12px]">
-              重置后该用户的所有 session 都会失效。
-            </p>
-          </div>
-          {error && <p className="text-destructive text-[12px]">{error}</p>}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-              disabled={pending}
+        <form id="reset-password-form" onSubmit={submit}>
+          <FieldGroup>
+            <Field
+              data-invalid={!!error || undefined}
+              data-disabled={pending || undefined}
             >
-              取消
-            </Button>
-            <Button type="submit" variant="default" disabled={pending || !password}>
-              {pending ? "保存中…" : "保存"}
-            </Button>
-          </DialogFooter>
+              <FieldLabel htmlFor="reset-password">新密码</FieldLabel>
+              <Input
+                id="reset-password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                aria-invalid={!!error || undefined}
+                autoFocus
+                required
+                disabled={pending}
+              />
+              <FieldDescription>至少 {PASSWORD_MIN} 个字符。</FieldDescription>
+              {error && <FieldError>{error}</FieldError>}
+            </Field>
+          </FieldGroup>
         </form>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
+            取消
+          </Button>
+          <Button
+            form="reset-password-form"
+            type="submit"
+            disabled={pending || !password}
+          >
+            {pending && <Spinner data-icon="inline-start" />}
+            {pending ? "保存中" : "保存新密码"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{value}</CardTitle>
+        <CardDescription>{label}</CardDescription>
+      </CardHeader>
+    </Card>
+  );
+}
+
+function UsersSkeleton() {
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <Card key={index}>
+          <CardHeader>
+            <Skeleton className="h-6 w-1/2" />
+            <Skeleton className="h-4 w-1/3" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-14 w-full" />
+          </CardContent>
+          <CardFooter>
+            <Skeleton className="h-8 w-full" />
+          </CardFooter>
+        </Card>
+      ))}
+    </div>
   );
 }

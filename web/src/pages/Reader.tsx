@@ -11,11 +11,20 @@ import {
   X,
 } from "lucide-react";
 import type { ChapterView, Progress } from "@ao3hub/shared";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Field, FieldLabel } from "@/components/ui/field";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { api, subscribeStream } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -176,33 +185,45 @@ export function Reader() {
 
   if (chapterIndex === null) {
     return (
-      <div className="flex flex-col items-center gap-3 py-32 text-center">
-        <p role="alert" className="text-destructive">
-          章节编号无效。
-        </p>
-        <Button variant="outline" asChild>
-          <Link to="/">返回书架</Link>
-        </Button>
+      <div className="mx-auto max-w-lg py-32">
+        <Alert variant="destructive">
+          <X />
+          <AlertTitle>章节编号无效</AlertTitle>
+          <AlertDescription>
+            请返回书架重新选择作品。
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/">返回书架</Link>
+            </Button>
+          </AlertDescription>
+        </Alert>
       </div>
     );
   }
 
   if (isLoading) {
     return (
-      <div className="py-32 text-center">
-        <p className="text-muted-foreground">载入章节…</p>
+      <div className="mx-auto flex w-[min(760px,calc(100vw-32px))] flex-col gap-6 py-32">
+        <Skeleton className="h-12 w-3/4" />
+        <Skeleton className="h-5 w-1/3" />
+        {Array.from({ length: 8 }).map((_, index) => (
+          <Skeleton key={index} className="h-5 w-full" />
+        ))}
       </div>
     );
   }
   if (error || !data) {
     return (
-      <div className="flex flex-col items-center gap-3 py-32 text-center">
-        <p className="text-destructive">
-          载入失败：{error?.message ?? "unknown"}
-        </p>
-        <Button variant="outline" asChild>
-          <Link to="/">返回书架</Link>
-        </Button>
+      <div className="mx-auto max-w-lg py-32">
+        <Alert variant="destructive">
+          <X />
+          <AlertTitle>章节加载失败</AlertTitle>
+          <AlertDescription>
+            {error?.message ?? "未知错误"}
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/">返回书架</Link>
+            </Button>
+          </AlertDescription>
+        </Alert>
       </div>
     );
   }
@@ -262,7 +283,7 @@ export function Reader() {
         statusTriggerRef={statusTriggerRef}
       />
 
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+      <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
         <SettingsDrawer
           settings={settings}
           setSettings={setSettings}
@@ -282,9 +303,9 @@ export function Reader() {
             settingsTriggerRef.current?.focus();
           }}
         />
-      </Dialog>
+      </Sheet>
 
-      <Dialog open={tocOpen} onOpenChange={setTocOpen}>
+      <Sheet open={tocOpen} onOpenChange={setTocOpen}>
         <TocDrawer
           data={data}
           chapterIndex={chapterIndex}
@@ -294,7 +315,7 @@ export function Reader() {
             tocTriggerRef.current?.focus();
           }}
         />
-      </Dialog>
+      </Sheet>
 
       <TranslationStatusPanel
         storyID={id}
@@ -342,7 +363,7 @@ export function Reader() {
           )}
         </header>
 
-        <div className="prose-reader space-y-[1.28em]">
+        <div className="prose-reader flex flex-col gap-[1.28em]">
           {data.chapter.pairs.map((p) => (
             <Pair
               key={p.id}
@@ -361,7 +382,7 @@ export function Reader() {
 
       <div className="fixed top-0 left-0 right-0 z-50 h-[3px] pointer-events-none">
         <div
-          className="h-full bg-accent transition-[width] duration-100"
+          className="h-full bg-primary transition-[width] duration-100"
           style={{ width: `${scrollProgress * 100}%` }}
         />
       </div>
@@ -389,9 +410,9 @@ function ReaderTopbar(props: {
 }) {
   return (
     <div className="fixed left-1/2 top-[max(0.5rem,env(safe-area-inset-top))] z-40 grid w-[calc(100vw-16px)] max-w-[820px] -translate-x-1/2 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 rounded-card border border-border px-2 py-1.5 shadow-float surface sm:flex sm:w-[min(820px,calc(100vw-24px))] sm:rounded-full">
-      <Button variant="ghost" size="sm" asChild className="h-8 gap-1 px-2">
+      <Button variant="ghost" size="sm" asChild>
         <Link to="/">
-          <ChevronLeft className="size-3.5" />
+          <ChevronLeft data-icon="inline-start" />
           <span className="hidden sm:inline">目录</span>
         </Link>
       </Button>
@@ -408,13 +429,12 @@ function ReaderTopbar(props: {
       <div className="flex items-center gap-0.5 text-[12px] font-mono text-muted-foreground">
         <Button
           variant="ghost"
-          size="icon"
-          className="h-8 w-7"
+          size="icon-sm"
           onClick={props.onPrev}
           disabled={!props.onPrev}
           aria-label="上一章"
         >
-          <ChevronLeft className="size-3.5" />
+          <ChevronLeft data-icon="inline-start" />
         </Button>
         <span className="tabular-nums">
           {String(props.chapterIndex + 1).padStart(props.totalDigits, "0")}/
@@ -422,29 +442,28 @@ function ReaderTopbar(props: {
         </span>
         <Button
           variant="ghost"
-          size="icon"
-          className="h-8 w-7"
+          size="icon-sm"
           onClick={props.onNext}
           disabled={!props.onNext}
           aria-label="下一章"
         >
-          <ChevronRight className="size-3.5" />
-        </Button>
+          <ChevronRight data-icon="inline-start" />
+          </Button>
       </div>
-      <div className="col-span-3 flex min-w-0 items-center justify-end gap-1 border-t border-border/60 pt-1 sm:contents sm:border-0 sm:pt-0">
+      <Separator className="col-span-3 sm:hidden" />
+      <div className="col-span-3 flex min-w-0 items-center justify-end gap-1 sm:contents">
         <span className="mr-auto px-1 font-mono text-[11px] tabular-nums text-muted-foreground sm:mr-0">
           {Math.round(props.progress * 100)}%
         </span>
         {props.total > 1 && (
           <Button
             ref={props.tocTriggerRef}
-            variant="ghost"
+            variant={props.tocOpen ? "secondary" : "ghost"}
             size="sm"
-            className={cn("h-8 gap-1 px-2", props.tocOpen && "bg-secondary")}
             onClick={props.onToggleToc}
             aria-label="章节目录"
           >
-            <ListOrdered className="size-3.5" />
+            <ListOrdered data-icon="inline-start" />
             <span className="hidden sm:inline">章节</span>
           </Button>
         )}
@@ -452,22 +471,20 @@ function ReaderTopbar(props: {
           ref={props.statusTriggerRef}
           variant="ghost"
           size="sm"
-          className="h-8 gap-1 px-2"
           onClick={props.onOpenStatus}
           aria-label="翻译状态"
         >
-          <Activity className="size-3.5" />
+          <Activity data-icon="inline-start" />
           <span className="hidden sm:inline">状态</span>
         </Button>
         <Button
           ref={props.settingsTriggerRef}
-          variant="ghost"
+          variant={props.settingsOpen ? "secondary" : "ghost"}
           size="sm"
-          className={cn("h-8 gap-1 px-2", props.settingsOpen && "bg-secondary")}
           onClick={props.onToggleSettings}
           aria-label="阅读设置"
         >
-          <SettingsIcon className="size-3.5" />
+          <SettingsIcon data-icon="inline-start" />
           <span className="hidden sm:inline">设置</span>
         </Button>
       </div>
@@ -491,16 +508,16 @@ function SettingsDrawer({
   onCloseAutoFocus: (event: Event) => void;
 }) {
   return (
-    <DialogContent
-      aria-describedby={undefined}
+    <SheetContent
+      side="right"
       onCloseAutoFocus={onCloseAutoFocus}
-      className="top-0 max-h-[calc(100svh-120px)] translate-y-0 overflow-y-auto"
-      style={{
-        top: "calc(max(0.5rem, env(safe-area-inset-top)) + 96px)",
-      }}
+      className="w-full overflow-y-auto sm:max-w-md"
     >
-      <DialogTitle>阅读设置</DialogTitle>
-      <div className="mt-4 grid gap-4">
+      <SheetHeader>
+        <SheetTitle>阅读设置</SheetTitle>
+        <SheetDescription>调整字号、译文比例和正文栏宽。</SheetDescription>
+      </SheetHeader>
+      <div className="flex flex-col gap-5 px-4">
         <ReaderSlider
           label="字号"
           value={settings.font}
@@ -531,25 +548,26 @@ function SettingsDrawer({
           onChange={(v) => setSettings({ ...settings, measure: v })}
         />
         <Separator />
-        <label className="flex items-center justify-between text-[13px]">
-          <span>显示原文</span>
+        <Field orientation="horizontal" className="justify-between">
+          <FieldLabel htmlFor="reader-show-source">显示原文</FieldLabel>
           <Switch
+            id="reader-show-source"
             checked={showAllEn}
             onCheckedChange={setShowAllEn}
             aria-label="显示原文"
           />
-        </label>
+        </Field>
         <Button
           variant="outline"
           size="sm"
-          className="gap-1.5 self-start"
+          className="self-start"
           onClick={() => setSettings(defaultSettings)}
         >
-          <RotateCcw className="size-3.5" />
+          <RotateCcw data-icon="inline-start" />
           恢复默认
         </Button>
       </div>
-    </DialogContent>
+    </SheetContent>
   );
 }
 
@@ -571,10 +589,13 @@ function ReaderSlider({
   onChange: (v: number) => void;
 }) {
   return (
-    <div className="flex items-center gap-4">
-      <span className="text-muted-foreground w-[80px] text-[12px]">
-        {label}
-      </span>
+    <Field>
+      <div className="flex items-center justify-between gap-4">
+        <FieldLabel>{label}</FieldLabel>
+        <span className="font-mono text-xs tabular-nums text-muted-foreground">
+          {format(value)}
+        </span>
+      </div>
       <Slider
         aria-label={label}
         value={[value]}
@@ -582,12 +603,8 @@ function ReaderSlider({
         max={max}
         step={step}
         onValueChange={(arr) => arr[0] !== undefined && onChange(arr[0])}
-        className="flex-1"
       />
-      <span className="text-muted-foreground w-[64px] text-right font-mono text-[12px] tabular-nums">
-        {format(value)}
-      </span>
-    </div>
+    </Field>
   );
 }
 
@@ -604,16 +621,16 @@ function TocDrawer({
 }) {
   const items = Array.from({ length: data.nav.total }, (_, i) => i);
   return (
-    <DialogContent
-      aria-describedby={undefined}
+    <SheetContent
+      side="left"
       onCloseAutoFocus={onCloseAutoFocus}
-      className="top-0 max-h-[60svh] translate-y-0 overflow-y-auto p-3"
-      style={{
-        top: "calc(max(0.5rem, env(safe-area-inset-top)) + 96px)",
-      }}
+      className="w-full overflow-y-auto p-3 sm:max-w-md"
     >
-      <DialogTitle className="px-2 py-1">章节目录</DialogTitle>
-      <ul className="mt-2">
+      <SheetHeader>
+        <SheetTitle>章节目录</SheetTitle>
+        <SheetDescription>共 {data.nav.total} 章，当前为第 {chapterIndex + 1} 章。</SheetDescription>
+      </SheetHeader>
+      <ul className="flex flex-col gap-1 px-1">
         {items.map((i) => (
           <li key={i}>
             <Link
@@ -622,7 +639,7 @@ function TocDrawer({
               onClick={onClose}
               className={cn(
                 "flex items-center justify-between rounded-control px-3 py-2 text-[13px] transition-colors hover:bg-secondary",
-                i === chapterIndex && "bg-accent/10",
+                i === chapterIndex && "bg-accent text-accent-foreground",
               )}
             >
               <span className="font-mono text-muted-foreground">
@@ -633,7 +650,7 @@ function TocDrawer({
           </li>
         ))}
       </ul>
-    </DialogContent>
+    </SheetContent>
   );
 }
 
@@ -647,37 +664,40 @@ function ChapterNav({
   chapterIndex: number;
 }) {
   return (
-    <nav className="mt-20 flex items-center justify-between border-t border-border pt-8 text-[13px] text-muted-foreground">
-      {data.nav.prev !== undefined ? (
-        <Button variant="ghost" asChild className="gap-1.5">
-          <Link
-            to="/r/$id/$chapter"
-            params={{ id, chapter: String(data.nav.prev) }}
-          >
-            <ChevronLeft className="size-3.5" />
-            上一章
-          </Link>
-        </Button>
-      ) : (
-        <span />
-      )}
-      <span className="font-mono tabular-nums">
-        {chapterIndex + 1}/{data.nav.total}
-      </span>
-      {data.nav.next !== undefined ? (
-        <Button variant="ghost" asChild className="gap-1.5">
-          <Link
-            to="/r/$id/$chapter"
-            params={{ id, chapter: String(data.nav.next) }}
-          >
-            下一章
-            <ChevronRight className="size-3.5" />
-          </Link>
-        </Button>
-      ) : (
-        <span />
-      )}
-    </nav>
+    <>
+      <Separator className="mt-20" />
+      <nav className="flex items-center justify-between pt-8 text-sm text-muted-foreground">
+        {data.nav.prev !== undefined ? (
+          <Button variant="ghost" asChild>
+            <Link
+              to="/r/$id/$chapter"
+              params={{ id, chapter: String(data.nav.prev) }}
+            >
+              <ChevronLeft data-icon="inline-start" />
+              上一章
+            </Link>
+          </Button>
+        ) : (
+          <span />
+        )}
+        <span className="font-mono tabular-nums">
+          {chapterIndex + 1}/{data.nav.total}
+        </span>
+        {data.nav.next !== undefined ? (
+          <Button variant="ghost" asChild>
+            <Link
+              to="/r/$id/$chapter"
+              params={{ id, chapter: String(data.nav.next) }}
+            >
+              下一章
+              <ChevronRight data-icon="inline-end" />
+            </Link>
+          </Button>
+        ) : (
+          <span />
+        )}
+      </nav>
+    </>
   );
 }
 
@@ -703,7 +723,7 @@ function ChapterProgress({
   const hasGlobalErrors = error > chapterErrorCount;
   const phaseLabel = PHASE_LABEL[progress.phase];
   return (
-    <div className="mt-6 rounded-control border border-border p-3 space-y-2">
+    <div className="mt-6 flex flex-col gap-2 rounded-lg border bg-card/70 p-3">
       <div className="flex items-center justify-between gap-2">
         <span className="text-muted-foreground text-[12px]">
           {phaseLabel}
@@ -718,11 +738,10 @@ function ChapterProgress({
             <Button
               variant="outline"
               size="sm"
-              className="gap-1"
               disabled={retrying}
               onClick={onRetryChapter}
             >
-              <RotateCcw className="size-3" />
+              <RotateCcw data-icon="inline-start" />
               重试本章失败 ({chapterErrorCount})
             </Button>
           )}
@@ -730,11 +749,10 @@ function ChapterProgress({
             <Button
               variant="ghost"
               size="sm"
-              className="gap-1"
               disabled={retrying}
               onClick={onRetryAll}
             >
-              <RotateCcw className="size-3" />
+              <RotateCcw data-icon="inline-start" />
               重试全部失败 ({error})
             </Button>
           )}
@@ -757,7 +775,7 @@ function Pair({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const heading = pair.type === "h2" || pair.type === "h3";
-  if (pair.type === "hr") return <hr className="my-8 border-t border-border" />;
+  if (pair.type === "hr") return <Separator className="my-8" />;
 
   return (
     <div
@@ -775,20 +793,19 @@ function Pair({
         />
       )}
       {pair.status === "pending" && (
-        <div className="zh-shadow mt-1.5 italic opacity-50">翻译中…</div>
+        <Skeleton className="mt-1.5 h-6 w-3/4" />
       )}
       {pair.status === "error" && (
-        <div className="mt-1.5 flex items-center gap-2 text-[13px] text-destructive">
-          <X className="size-3.5" />
+        <div className="mt-1.5 flex items-center gap-2 text-sm text-destructive [&_svg]:size-4">
+          <X />
           <span title={pair.error ?? ""}>翻译失败</span>
           {canRetry && (
             <Button
               variant="ghost"
-              size="sm"
-              className="h-6 gap-1 px-2 text-[11px]"
+              size="xs"
               onClick={() => onRetry(pair.id)}
             >
-              <RotateCcw className="size-3" />
+              <RotateCcw data-icon="inline-start" />
               重试
             </Button>
           )}

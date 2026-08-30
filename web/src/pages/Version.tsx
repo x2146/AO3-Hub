@@ -1,14 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { CheckCircle2, Download, PackageCheck, RefreshCw, ServerCog } from "lucide-react";
 import type { ApplyUpdateRequest } from "@ao3hub/shared";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { Separator } from "@/components/ui/separator";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
 export function Version() {
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const { user } = useAuth();
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["version"],
@@ -16,155 +28,207 @@ export function Version() {
   });
   const check = useMutation({
     mutationFn: () => api.checkUpdate(),
-    onSuccess: (next) => qc.setQueryData(["version"], next),
+    onSuccess: (next) => queryClient.setQueryData(["version"], next),
   });
   const apply = useMutation({
     mutationFn: (body: ApplyUpdateRequest) => api.applyUpdate(body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["version"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["version"] }),
   });
   const isChecking = isFetching || check.isPending;
   const actionPending = isChecking || apply.isPending;
 
-  if (isLoading) return <p className="text-muted-foreground">读取版本…</p>;
+  if (isLoading) return <VersionSkeleton />;
+
   if (error || !data) {
     return (
-      <div className="space-y-3">
-        <p className="text-destructive">
-          读取版本失败：{error instanceof Error ? error.message : "未知错误"}
-        </p>
-        <Button variant="outline" onClick={() => refetch()}>
-          重试
-        </Button>
-      </div>
+      <Alert variant="destructive">
+        <ServerCog />
+        <AlertTitle>无法读取版本信息</AlertTitle>
+        <AlertDescription>
+          {error instanceof Error ? error.message : "未知错误"}
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
+            重试
+          </Button>
+        </AlertDescription>
+      </Alert>
     );
   }
 
   const latest = data.latest;
   return (
-    <div className="mx-auto max-w-[640px] space-y-8 fade-in">
-      <header>
-        <h1 className="text-[clamp(2rem,5vw,3rem)] font-semibold tracking-tight">
-          Version
-        </h1>
-      </header>
+    <div className="mx-auto flex max-w-3xl flex-col gap-8 fade-in">
+      <div className="flex flex-col gap-2">
+        <Badge variant="accent">
+          <PackageCheck />
+          Release channel
+        </Badge>
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">版本与更新</h1>
+        <p className="text-sm text-muted-foreground">
+          查看当前构建、远程发行状态，并在管理员授权下执行自更新。
+        </p>
+      </div>
 
-      <dl className="grid grid-cols-[minmax(0,96px)_minmax(0,1fr)] gap-y-3 text-[14px] sm:grid-cols-[140px_minmax(0,1fr)]">
-        <dt className="text-muted-foreground">Current</dt>
-        <dd className="min-w-0 break-all font-mono">{data.current}</dd>
-        <dt className="text-muted-foreground">Platform</dt>
-        <dd className="min-w-0 break-all font-mono">
-          {data.platform}/{data.arch}
-        </dd>
-        {data.builtAt && (
-          <>
-            <dt className="text-muted-foreground">Built</dt>
-            <dd className="min-w-0 break-all font-mono">{data.builtAt}</dd>
-          </>
-        )}
-      </dl>
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-1.5">
+            <CardTitle>当前实例</CardTitle>
+            <CardDescription>正在运行的 AO3 Hub 二进制信息。</CardDescription>
+          </div>
+          <CardAction>
+            <Badge variant="success">
+              <CheckCircle2 />
+              Running
+            </Badge>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid gap-3 sm:grid-cols-3">
+            <VersionMetric label="版本" value={data.current} />
+            <VersionMetric label="平台" value={`${data.platform}/${data.arch}`} />
+            <VersionMetric label="构建时间" value={data.builtAt || "未提供"} />
+          </dl>
+        </CardContent>
+      </Card>
 
-      <Separator />
-
-      <section className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-[14px] font-semibold tracking-wider uppercase text-muted-foreground">
-            Remote
-          </h2>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              if (user?.role === "admin") check.mutate();
-              else void refetch();
-            }}
-            disabled={actionPending}
-            className="gap-1.5"
-          >
-            <RefreshCw
-              className={isChecking ? "size-3.5 animate-spin" : "size-3.5"}
-            />
-            {isChecking
-              ? "检查中…"
-              : user?.role === "admin"
-                ? "重新检查"
-                : "刷新"}
-          </Button>
-        </div>
-        {!latest && (
-          <p className="text-muted-foreground text-[13px]">
-            未配置 manifest URL，或暂时无法访问。去 Settings 配置后再来。
-          </p>
-        )}
-        {check.isError && (
-          <p role="alert" className="break-words text-destructive text-[12px]">
-            {check.error instanceof Error
-              ? check.error.message
-              : "检查更新失败"}
-          </p>
-        )}
-        {latest && (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-baseline gap-3">
-              <span className="min-w-0 break-all font-mono text-[16px]">
-                {latest.version}
-              </span>
-              {latest.hasUpdate ? (
-                <Badge variant="accent">有新版</Badge>
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-1.5">
+            <CardTitle>远程发行</CardTitle>
+            <CardDescription>来自已配置 Manifest 的最新可用版本。</CardDescription>
+          </div>
+          <CardAction>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (user?.role === "admin") check.mutate();
+                else void refetch();
+              }}
+              disabled={actionPending}
+            >
+              {isChecking ? (
+                <Spinner data-icon="inline-start" />
               ) : (
-                <Badge>已最新</Badge>
+                <RefreshCw data-icon="inline-start" />
+              )}
+              {isChecking ? "检查中" : user?.role === "admin" ? "检查更新" : "刷新"}
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          {!latest ? (
+            <Alert>
+              <ServerCog />
+              <AlertTitle>暂时没有远程版本信息</AlertTitle>
+              <AlertDescription>
+                Manifest URL 可能尚未配置或当前无法访问。管理员可前往设置页面检查更新源。
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="break-all font-mono text-lg font-semibold">{latest.version}</span>
+                <Badge variant={latest.hasUpdate ? "accent" : "success"}>
+                  {latest.hasUpdate ? "发现新版" : "已是最新"}
+                </Badge>
+              </div>
+              {(latest.strategy || latest.updateReason) && (
+                <p className="text-sm text-muted-foreground">
+                  {[latest.strategy, latest.updateReason].filter(Boolean).join(" · ")}
+                </p>
+              )}
+              {latest.notes && (
+                <pre className="max-w-full whitespace-pre-wrap break-words rounded-lg border bg-muted/60 p-4 font-mono text-xs leading-relaxed [overflow-wrap:anywhere]">
+                  {latest.notes}
+                </pre>
+              )}
+              {latest.publishedAt && (
+                <p className="text-xs text-muted-foreground">发布于 {latest.publishedAt}</p>
               )}
             </div>
-            {(latest.strategy || latest.updateReason) && (
-              <p className="text-muted-foreground text-[12px]">
-                {latest.strategy ? `${latest.strategy} · ` : ""}
-                {latest.updateReason}
-              </p>
-            )}
-            {latest.notes && (
-              <pre className="max-w-full whitespace-pre-wrap break-words rounded-card border border-border bg-surface/60 p-4 font-mono text-[12px] leading-relaxed [overflow-wrap:anywhere]">
-                {latest.notes}
-              </pre>
-            )}
-            {latest.publishedAt && (
-              <p className="text-muted-foreground text-[12px]">
-                发布于 {latest.publishedAt}
-              </p>
-            )}
-            {user?.role === "admin" && (
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="default"
-                  onClick={() => apply.mutate({})}
-                  disabled={!latest.hasUpdate || actionPending}
-                >
-                  {apply.isPending ? "下载安装中…" : "下载并安装"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    apply.mutate({ force: true, forceVersion: latest.version })
-                  }
-                  disabled={actionPending}
-                >
-                  强制拉取此版本
-                </Button>
-              </div>
-            )}
-            {apply.data && (
-              <p className="break-words text-[12px] text-success">
-                {apply.data.message}
-              </p>
-            )}
-            {apply.isError && (
-              <p className="text-destructive text-[12px]">
-                {apply.error instanceof Error
-                  ? apply.error.message
-                  : "更新失败"}
-              </p>
-            )}
-          </div>
+          )}
+
+          {check.isError && (
+            <Alert variant="destructive" className="mt-4">
+              <RefreshCw />
+              <AlertTitle>检查更新失败</AlertTitle>
+              <AlertDescription>
+                {check.error instanceof Error ? check.error.message : "未知错误"}
+              </AlertDescription>
+            </Alert>
+          )}
+        </CardContent>
+        {latest && user?.role === "admin" && (
+          <>
+            <Separator />
+            <CardFooter className="flex flex-wrap gap-2">
+              <Button
+                onClick={() => apply.mutate({})}
+                disabled={!latest.hasUpdate || actionPending}
+              >
+                {apply.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <Download data-icon="inline-start" />
+                )}
+                {apply.isPending ? "下载安装中" : "下载并安装"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => apply.mutate({ force: true, forceVersion: latest.version })}
+                disabled={actionPending}
+              >
+                强制拉取此版本
+              </Button>
+            </CardFooter>
+          </>
         )}
-      </section>
+      </Card>
+
+      {apply.data && (
+        <Alert>
+          <CheckCircle2 />
+          <AlertTitle>更新任务已提交</AlertTitle>
+          <AlertDescription>{apply.data.message}</AlertDescription>
+        </Alert>
+      )}
+      {apply.isError && (
+        <Alert variant="destructive">
+          <Download />
+          <AlertTitle>更新失败</AlertTitle>
+          <AlertDescription>
+            {apply.error instanceof Error ? apply.error.message : "未知错误"}
+          </AlertDescription>
+        </Alert>
+      )}
+    </div>
+  );
+}
+
+function VersionMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1 rounded-lg bg-muted/60 p-3">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="break-all font-mono text-sm font-medium">{value}</dd>
+    </div>
+  );
+}
+
+function VersionSkeleton() {
+  return (
+    <div className="mx-auto flex max-w-3xl flex-col gap-6">
+      <Skeleton className="h-9 w-56" />
+      {Array.from({ length: 2 }).map((_, index) => (
+        <Card key={index}>
+          <CardHeader>
+            <Skeleton className="h-6 w-32" />
+            <Skeleton className="h-4 w-2/3" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-24 w-full" />
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

@@ -1,9 +1,19 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { LogIn } from "lucide-react";
+import { BookOpenText, LogIn, ShieldCheck } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { useAuth } from "../lib/auth";
 
 export function LoginPage() {
@@ -21,13 +31,11 @@ export function LoginPage() {
       navigate({ to: "/setup", replace: true });
       return;
     }
-    if (user) {
-      navigate({ to: search.redirect ?? "/", replace: true });
-    }
+    if (user) navigate({ to: search.redirect ?? "/", replace: true });
   }, [user, needsSetup, loading, navigate, search.redirect]);
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
@@ -41,54 +49,76 @@ export function LoginPage() {
   };
 
   return (
-    <div className="mx-auto max-w-[400px] space-y-8 fade-in">
-      <header className="space-y-2 text-center">
-        <h1 className="text-[clamp(2rem,5vw,2.8rem)] font-semibold tracking-tight">
-          登录
-        </h1>
-        <p className="text-muted-foreground text-[13px]">
-          需要登录才能导入和管理作品。
-        </p>
-      </header>
-      <form onSubmit={onSubmit} className="space-y-5">
-        <div className="space-y-1.5">
-          <Label htmlFor="login-username">用户名</Label>
-          <Input
-            id="login-username"
-            autoComplete="username"
-            autoFocus
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-            disabled={submitting}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="login-password">密码</Label>
-          <Input
-            id="login-password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            disabled={submitting}
-          />
-        </div>
-        {error && (
-          <p className="text-destructive text-[12px]">{error}</p>
-        )}
-        <Button
-          type="submit"
-          variant="default"
-          size="lg"
-          className="w-full gap-1.5"
-          disabled={submitting || !username.trim() || !password}
-        >
-          <LogIn className="size-3.5" />
-          {submitting ? "登录中…" : "登录"}
-        </Button>
-      </form>
+    <div className="mx-auto flex min-h-[calc(100svh-11rem)] w-full max-w-md items-center fade-in">
+      <Card className="w-full">
+        <CardHeader className="gap-4 text-center">
+          <div className="mx-auto flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+            <BookOpenText />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <CardTitle>欢迎回来</CardTitle>
+            <CardDescription>登录后导入作品、管理翻译并继续阅读。</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <form id="login-form" onSubmit={onSubmit}>
+            <FieldGroup>
+              <Field data-disabled={submitting || undefined}>
+                <FieldLabel htmlFor="login-username">用户名</FieldLabel>
+                <Input
+                  id="login-username"
+                  autoComplete="username"
+                  autoFocus
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  placeholder="输入用户名"
+                  required
+                  disabled={submitting}
+                />
+              </Field>
+              <Field data-disabled={submitting || undefined}>
+                <FieldLabel htmlFor="login-password">密码</FieldLabel>
+                <Input
+                  id="login-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="输入密码"
+                  required
+                  disabled={submitting}
+                />
+              </Field>
+              {error && (
+                <Alert variant="destructive">
+                  <ShieldCheck />
+                  <AlertTitle>无法登录</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+            </FieldGroup>
+          </form>
+        </CardContent>
+        <CardFooter className="flex flex-col gap-3">
+          <Button
+            form="login-form"
+            type="submit"
+            size="lg"
+            className="w-full"
+            disabled={submitting || !username.trim() || !password}
+          >
+            {submitting ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <LogIn data-icon="inline-start" />
+            )}
+            {submitting ? "登录中" : "登录"}
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            账号由本机管理员创建，登录信息仅保存在当前 AO3 Hub 实例。
+          </p>
+        </CardFooter>
+      </Card>
     </div>
   );
 }

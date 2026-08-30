@@ -4,20 +4,27 @@ const KEY = "aohub.theme";
 
 export function getTheme(): Theme {
   try {
-  const t = localStorage.getItem(KEY);
-  return t === "light" || t === "dark" ? t : "auto";
+    const t = localStorage.getItem(KEY);
+    return t === "light" || t === "dark" ? t : "auto";
   } catch {
     return "auto";
   }
 }
 
+export function applyTheme(t: Theme): void {
+  const root = document.documentElement;
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = t;
+  root.classList.toggle("dark", t === "dark" || (t === "auto" && prefersDark));
+}
+
 export function setTheme(t: Theme): void {
   try {
-  localStorage.setItem(KEY, t);
+    localStorage.setItem(KEY, t);
   } catch {
     // Storage may be unavailable in restricted browsing contexts.
   }
-  document.documentElement.dataset.theme = t;
+  applyTheme(t);
 }
 
 export function cycleTheme(): Theme {

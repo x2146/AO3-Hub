@@ -1,6 +1,7 @@
 import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export const Dialog = DialogPrimitive.Root;
@@ -15,7 +16,7 @@ export const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/30 backdrop-blur-[2px] data-[state=open]:animate-[overlayShow_180ms_ease] data-[state=closed]:animate-[overlayHide_140ms_ease]",
+      "fixed inset-0 z-50 bg-black/15 backdrop-blur-xs data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
       className,
     )}
     {...props}
@@ -34,16 +35,18 @@ export const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-1/2 top-1/2 z-50 grid w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-card border border-border bg-card p-5 text-card-foreground shadow-overlay data-[state=open]:animate-[contentShow_180ms_ease]",
+        "fixed left-1/2 top-1/2 z-50 grid w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 gap-5 rounded-xl border bg-popover p-5 text-popover-foreground shadow-overlay outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
         className,
       )}
       {...props}
     >
       {children}
       {!hideClose && (
-        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <X className="h-4 w-4" />
-          <span className="sr-only">关闭</span>
+        <DialogPrimitive.Close asChild>
+          <Button variant="ghost" size="icon-sm" className="absolute right-3 top-3">
+            <X data-icon="inline-start" />
+            <span className="sr-only">关闭</span>
+          </Button>
         </DialogPrimitive.Close>
       )}
     </DialogPrimitive.Content>
@@ -83,7 +86,7 @@ export const DialogTitle = React.forwardRef<
   <DialogPrimitive.Title
     ref={ref}
     className={cn(
-      "text-[13px] font-semibold uppercase tracking-wider text-muted-foreground",
+      "text-base font-semibold tracking-tight",
       className,
     )}
     {...props}
@@ -97,7 +100,7 @@ export const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn("text-[13px] text-muted-foreground", className)}
+    className={cn("text-sm leading-relaxed text-muted-foreground", className)}
     {...props}
   />
 ));
