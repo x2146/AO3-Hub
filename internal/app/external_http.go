@@ -12,7 +12,6 @@ import (
 const (
 	externalResponseHeaderTimeout  = 30 * time.Second
 	maxExternalResponseHeaderBytes = 1 << 20
-	maxExternalConnectionsPerHost  = 32
 )
 
 func newExternalHTTPTransport() *http.Transport {
@@ -21,7 +20,6 @@ func newExternalHTTPTransport() *http.Transport {
 	transport.TLSHandshakeTimeout = 10 * time.Second
 	transport.ExpectContinueTimeout = time.Second
 	transport.MaxIdleConnsPerHost = 8
-	transport.MaxConnsPerHost = maxExternalConnectionsPerHost
 	transport.MaxResponseHeaderBytes = maxExternalResponseHeaderBytes
 	return transport
 }
