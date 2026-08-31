@@ -174,8 +174,9 @@ type ReaderConfig struct {
 }
 
 type ServerConfig struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	PublicOrigin string `json:"publicOrigin"`
 }
 
 type AuthConfig struct {

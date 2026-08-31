@@ -41,8 +41,6 @@ var (
 )
 
 func init() {
-	Version = envOr("AO3HUB_VERSION", Version)
-	BuiltAt = envOr("AO3HUB_BUILT_AT", BuiltAt)
 	if BuiltAt == "" {
 		BuiltAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
@@ -62,17 +60,10 @@ func versionLabel(version string) string {
 	return v
 }
 
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
-}
-
+// dataDir resolves the on-disk data directory. Everything the server reads at
+// runtime lives there, config.json included, so its location is a fixed
+// convention relative to the working directory.
 func dataDir() (string, error) {
-	if raw := strings.TrimSpace(os.Getenv("AO3HUB_DATA_DIR")); raw != "" {
-		return filepath.Abs(raw)
-	}
 	rootData := filepath.Join(".", "data")
 	if _, err := os.Stat(rootData); err == nil {
 		return filepath.Abs(rootData)
@@ -82,31 +73,6 @@ func dataDir() (string, error) {
 		return filepath.Abs(legacyServerData)
 	}
 	return filepath.Abs(rootData)
-}
-
-func resolveHost(configHost string) string {
-	if raw := strings.TrimSpace(os.Getenv("HOST")); raw != "" {
-		return raw
-	}
-	if strings.TrimSpace(configHost) == "" {
-		return "127.0.0.1"
-	}
-	return configHost
-}
-
-func resolvePort(configPort int) (int, error) {
-	raw := strings.TrimSpace(os.Getenv("PORT"))
-	if raw == "" {
-		if configPort <= 0 {
-			return 3000, nil
-		}
-		return configPort, nil
-	}
-	port, err := strconv.Atoi(raw)
-	if err != nil || port < 1 || port > 65535 {
-		return 0, fmt.Errorf("invalid PORT: %s", raw)
-	}
-	return port, nil
 }
 
 func nowISO() string {
@@ -251,11 +217,15 @@ func normalizeProgress(p Progress) Progress {
 	return p
 }
 
+// defaultConfig is the single hardcoded config template. It is materialized to
+// data/config.json on first start and used to fill in any key missing from an
+// existing file.
 func defaultConfig() Config {
 	return Config{
 		Server: ServerConfig{
-			Host: "127.0.0.1",
-			Port: 3000,
+			Host:         "127.0.0.1",
+			Port:         3000,
+			PublicOrigin: "",
 		},
 		Auth: AuthConfig{
 			SessionTTLDays: 30,
@@ -319,6 +289,7 @@ func normalizeConfig(c Config) Config {
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		c.Server.Port = d.Server.Port
 	}
+	c.Server.PublicOrigin = strings.TrimSpace(c.Server.PublicOrigin)
 	if c.Auth.SessionTTLDays <= 0 {
 		c.Auth.SessionTTLDays = d.Auth.SessionTTLDays
 	}
@@ -385,6 +356,9 @@ func validateConfig(c Config) error {
 	}
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return errors.New("server.port out of range")
+	}
+	if _, _, err := parsePublicOrigin(c.Server.PublicOrigin); err != nil {
+		return err
 	}
 	if c.Auth.SessionTTLDays < 1 || c.Auth.SessionTTLDays > 365 {
 		return errors.New("auth.sessionTtlDays must be between 1 and 365")

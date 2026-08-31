@@ -75,31 +75,23 @@ func (s *Store) readJSON(path string, dst any) (bool, error) {
 }
 
 func (s *Store) writeJSON(path string, data any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	buf, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
 	}
-	buf = append(buf, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, buf, 0o600); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, path)
+	return s.writeFile(path, append(buf, '\n'))
 }
 
 func (s *Store) writeText(path string, data string) error {
+	return s.writeFile(path, []byte(data))
+}
+
+func (s *Store) writeFile(path string, buf []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(data), 0o600); err != nil {
+	if err := os.WriteFile(tmp, buf, 0o600); err != nil {
 		return err
 	}
 	if err := os.Chmod(tmp, 0o600); err != nil {
@@ -120,27 +112,41 @@ func (s *Store) readText(path string) (string, bool, error) {
 	return string(data), true, nil
 }
 
+// LoadConfig materializes data/config.json from the hardcoded template. A
+// missing file is written in full; an existing file is layered on top of the
+// template, so keys that were never written — or dropped by hand — come back
+// with their default value and are flushed to disk.
 func (s *Store) LoadConfig() (Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var cfg Config
-	ok, err := s.readJSON(s.path("config.json"), &cfg)
-	if err != nil {
+	path := s.path("config.json")
+	raw, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Config{}, err
 	}
-	if !ok {
-		cfg = defaultConfig()
-		return cfg, s.writeJSON(s.path("config.json"), cfg)
+	cfg := defaultConfig()
+	if err == nil {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+			return Config{}, errors.New("decode config.json: empty or null JSON")
+		}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return Config{}, fmt.Errorf("decode config.json: %w", err)
+		}
 	}
-	previous := cfg
 	cfg = normalizeConfig(cfg)
 	if err := validateConfig(cfg); err != nil {
 		return Config{}, fmt.Errorf("invalid config.json: %w", err)
 	}
-	if cfg != previous {
-		if err := s.writeJSON(s.path("config.json"), cfg); err != nil {
-			return Config{}, fmt.Errorf("migrate config.json: %w", err)
+	encoded, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return Config{}, err
+	}
+	encoded = append(encoded, '\n')
+	if !bytes.Equal(raw, encoded) {
+		if err := s.writeFile(path, encoded); err != nil {
+			return Config{}, fmt.Errorf("write config.json: %w", err)
 		}
 	}
 	return cfg, nil

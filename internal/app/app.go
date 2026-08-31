@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -87,12 +86,9 @@ func (a *App) RunContext(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	host := resolveHost(cfg.Server.Host)
-	port, err := resolvePort(cfg.Server.Port)
-	if err != nil {
-		return err
-	}
-	publicOriginScheme, publicOriginHost, err := configuredPublicOrigin()
+	host := cfg.Server.Host
+	port := cfg.Server.Port
+	publicOriginScheme, publicOriginHost, err := parsePublicOrigin(cfg.Server.PublicOrigin)
 	if err != nil {
 		return err
 	}
@@ -327,21 +323,23 @@ func (a *App) trustedRequestHost(request *http.Request) bool {
 	return strings.EqualFold(requestName, boundName)
 }
 
-func configuredPublicOrigin() (string, string, error) {
-	raw := strings.TrimSpace(os.Getenv("AO3HUB_PUBLIC_ORIGIN"))
+// parsePublicOrigin reads server.publicOrigin from config.json. Empty means the
+// service is not fronted by a reverse proxy under a fixed public origin.
+func parsePublicOrigin(raw string) (string, string, error) {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", "", nil
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "", "", errors.New("invalid AO3HUB_PUBLIC_ORIGIN: expected an HTTP(S) origin without path, query, or credentials")
+		return "", "", errors.New("server.publicOrigin is invalid: expected an HTTP(S) origin without path, query, or credentials")
 	}
 	scheme := strings.ToLower(parsed.Scheme)
 	if parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (scheme != "http" && scheme != "https") {
-		return "", "", errors.New("invalid AO3HUB_PUBLIC_ORIGIN: expected an HTTP(S) origin without path, query, or credentials")
+		return "", "", errors.New("server.publicOrigin is invalid: expected an HTTP(S) origin without path, query, or credentials")
 	}
 	if _, ok := authorityHostname(parsed.Host); !ok {
-		return "", "", errors.New("invalid AO3HUB_PUBLIC_ORIGIN: invalid authority")
+		return "", "", errors.New("server.publicOrigin is invalid: invalid authority")
 	}
 	return scheme, parsed.Host, nil
 }

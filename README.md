@@ -51,9 +51,9 @@ npm run dev:server            # 起 Go server
 npm run dev:web               # 起 vite，:5173，/api 代理到配置的 server 端口
 ```
 
-数据默认存 `./data/`，可用 `AO3HUB_DATA_DIR=/some/path` 覆盖。
-监听地址默认从 `data/config.json` 的 `server.host` / `server.port` 读取，新安装默认仅监听 `127.0.0.1`；
-启动时也可用 `HOST` / `PORT` 临时覆盖。
+数据固定存工作目录下的 `./data/`（旧安装的 `./server/data/` 仍兼容）。
+全部运行时配置只有一个来源：`data/config.json`，不读任何环境变量。
+监听地址来自 `server.host` / `server.port`，新安装默认仅监听 `127.0.0.1`。
 
 ## Build（单文件）
 
@@ -122,27 +122,33 @@ https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json
 直接跑：
 
 ```bash
-AO3HUB_DATA_DIR=/var/lib/ao3hub ./ao3-hub
-# 临时覆盖监听端口：
-PORT=3001 AO3HUB_DATA_DIR=/var/lib/ao3hub ./ao3-hub
+cd /opt/ao3-hub && ./ao3-hub
 ```
+
+数据目录固定是工作目录下的 `data/`，所以用 `WorkingDirectory` / `cd` 决定数据落在哪里。
 
 systemd unit：
 
 ```ini
 [Service]
-WorkingDirectory=/opt/ao3-hub
+WorkingDirectory=/var/lib/ao3hub
 ExecStart=/opt/ao3-hub/ao3-hub
-Environment=AO3HUB_DATA_DIR=/var/lib/ao3hub
 Restart=on-failure
 ```
 
 反代由 caddy/nginx 处理 TLS。
 
-使用公网域名反代时必须显式设置完整 Origin；服务仅在请求 Host 精确匹配时采信代理传入的协议：
+使用公网域名反代时必须在 `data/config.json` 里显式设置完整 Origin（也可以在 `/settings` 页面填 Public origin）；
+服务仅在请求 Host 精确匹配时采信代理传入的协议：
 
-```bash
-AO3HUB_PUBLIC_ORIGIN=https://ao3hub.example.com AO3HUB_DATA_DIR=/var/lib/ao3hub ./ao3-hub
+```json
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 3000,
+    "publicOrigin": "https://ao3hub.example.com"
+  }
+}
 ```
 
 ## 用户与权限
@@ -219,13 +225,20 @@ CI 会从该 seed 推导公钥，通过 ldflags 注入发布二进制。首次�
 
 ## 配置（`data/config.json`）
 
-第一次启动会用默认值生成；通过 Settings 页改更顺手。
+服务端只有这一个配置来源，不读环境变量。模板硬编码在二进制里，启动时自动释放/补全：
+
+- 文件不存在 → 按模板整份写出
+- 文件存在 → 以模板为底，用文件里的键覆盖，缺失的键补回默认值并回写（值合法时不动文件）
+- 值非法 → 启动直接报错，不会静默改写
+
+改配置用 Settings 页更顺手（改完监听相关项需要重启进程生效）。
 
 ```jsonc
 {
   "server": {
     "host": "127.0.0.1",
-    "port": 3000
+    "port": 3000,
+    "publicOrigin": ""            // 反代公网域名，如 https://ao3hub.example.com；留空表示未反代
   },
   "auth": {
     "sessionTtlDays": 30
@@ -248,8 +261,10 @@ CI 会从该 seed 推导公钥，通过 ldflags 注入发布二进制。首次�
     "concurrency": 3,
     "blocksPerRequest": 8,
     "maxTokensPerRequest": 3500,
+    "maxAutoRetries": 2,
     "mode": "normal",
-    "analysisMaxInputTokens": 60000
+    "analysisMaxInputTokens": 60000,
+    "stream": false
   },
   "ao3": {
     "cookie": "_otwarchive_session=…",

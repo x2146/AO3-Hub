@@ -84,6 +84,7 @@ export function Settings() {
       server: {
         host: data.server.host,
         port: data.server.port,
+        publicOrigin: data.server.publicOrigin,
       },
       auth: {
         sessionTtlDays: data.auth.sessionTtlDays,
@@ -291,7 +292,7 @@ export function Settings() {
         data-disabled={save.isPending || undefined}
         className="contents"
       >
-      <SettingsCard title="服务与会话" description="监听地址、会话时长和后台刷新频率。">
+      <SettingsCard title="服务与会话" description="监听地址、反代公开域名、会话时长和后台刷新频率。">
         <div className="grid gap-4 sm:grid-cols-2">
           <Field id="server-host" label="Host">
             <Input
@@ -321,6 +322,22 @@ export function Settings() {
             />
           </Field>
         </div>
+        <Field
+          id="server-public-origin"
+          label="Public origin（反代域名，重启后生效）"
+        >
+          <Input
+            id="server-public-origin"
+            placeholder="https://ao3hub.example.com"
+            value={form.server.publicOrigin}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                server: { ...form.server, publicOrigin: e.target.value },
+              })
+            }
+          />
+        </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field id="auth-session-ttl" label="Session TTL days">
             <Input

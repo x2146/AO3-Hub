@@ -5,13 +5,10 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 function readApiTarget(): string {
-  const rawPort = process.env.PORT?.trim();
-  if (rawPort) return `http://127.0.0.1:${rawPort}`;
-
-  const dataDirs = process.env.AO3HUB_DATA_DIR?.trim()
-    ? [path.resolve(process.env.AO3HUB_DATA_DIR)]
-    : [path.resolve(__dirname, "../data"), path.resolve(__dirname, "../server/data")];
-  const configPath = dataDirs
+  const configPath = [
+    path.resolve(__dirname, "../data"),
+    path.resolve(__dirname, "../server/data"),
+  ]
     .map((dir) => path.join(dir, "config.json"))
     .find((file) => existsSync(file));
 

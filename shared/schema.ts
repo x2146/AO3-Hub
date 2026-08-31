@@ -237,6 +237,7 @@ export const ServerConfig = z.object({
     .min(CONFIG_LIMITS.server.port.min)
     .max(CONFIG_LIMITS.server.port.max)
     .default(3000),
+  publicOrigin: z.string().trim().default(""),
 });
 export type ServerConfig = z.infer<typeof ServerConfig>;
 

@@ -626,9 +626,8 @@ func TestSecureRequestOnlyTrustsConfiguredPublicOrigin(t *testing.T) {
 	}
 }
 
-func TestConfiguredPublicOriginValidation(t *testing.T) {
-	t.Setenv("AO3HUB_PUBLIC_ORIGIN", "https://ao3hub.example:8443")
-	scheme, host, err := configuredPublicOrigin()
+func TestPublicOriginValidation(t *testing.T) {
+	scheme, host, err := parsePublicOrigin("https://ao3hub.example:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,9 +645,13 @@ func TestConfiguredPublicOriginValidation(t *testing.T) {
 		"https://[::1",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			t.Setenv("AO3HUB_PUBLIC_ORIGIN", raw)
-			if _, _, err := configuredPublicOrigin(); err == nil {
+			if _, _, err := parsePublicOrigin(raw); err == nil {
 				t.Fatalf("accepted invalid public origin %q", raw)
+			}
+			cfg := defaultConfig()
+			cfg.Server.PublicOrigin = raw
+			if err := validateConfig(cfg); err == nil {
+				t.Fatalf("validateConfig accepted invalid public origin %q", raw)
 			}
 		})
 	}
@@ -679,7 +682,7 @@ func TestLoadConfigDoesNotRewriteStableConfig(t *testing.T) {
 	}
 }
 
-func TestLoadConfigPropagatesMigrationWriteFailure(t *testing.T) {
+func TestLoadConfigPropagatesWriteFailure(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -693,8 +696,8 @@ func TestLoadConfigPropagatesMigrationWriteFailure(t *testing.T) {
 	if err := os.Mkdir(configPath+".tmp", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.LoadConfig(); err == nil || !strings.Contains(err.Error(), "migrate config.json") {
-		t.Fatalf("migration error = %v", err)
+	if _, err := store.LoadConfig(); err == nil || !strings.Contains(err.Error(), "write config.json") {
+		t.Fatalf("write error = %v", err)
 	}
 }
 
