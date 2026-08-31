@@ -2,10 +2,7 @@ package app
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -94,10 +91,9 @@ func TestSameVersionIgnoresStableVPrefix(t *testing.T) {
 	}
 }
 
-type signedUpdateFixture struct {
+type updateFixture struct {
 	asset        []byte
 	manifestBody []byte
-	signature    []byte
 	server       *httptest.Server
 	requests     atomic.Int32
 }
@@ -116,16 +112,14 @@ func newUpdateTestServer(t *testing.T, handler http.Handler) *httptest.Server {
 	return server
 }
 
-func newSignedUpdateFixture(t *testing.T, privateKey ed25519.PrivateKey, mutate func(*Manifest)) *signedUpdateFixture {
+func newUpdateFixture(t *testing.T, mutate func(*Manifest)) *updateFixture {
 	t.Helper()
-	fixture := &signedUpdateFixture{asset: []byte("verified update binary")}
+	fixture := &updateFixture{asset: []byte("verified update binary")}
 	fixture.server = newUpdateTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fixture.requests.Add(1)
 		switch r.URL.Path {
 		case "/manifest.json":
 			_, _ = w.Write(fixture.manifestBody)
-		case "/manifest.json.sig":
-			_, _ = w.Write(fixture.signature)
 		case "/asset":
 			_, _ = w.Write(fixture.asset)
 		default:
@@ -152,59 +146,11 @@ func newSignedUpdateFixture(t *testing.T, privateKey ed25519.PrivateKey, mutate 
 		t.Fatal(err)
 	}
 	fixture.manifestBody = append(body, '\n')
-	fixture.signature = []byte(base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, fixture.manifestBody)) + "\n")
 	return fixture
 }
 
-func setUpdateTestSigningKey(t *testing.T) ed25519.PrivateKey {
-	t.Helper()
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := UpdateSigningPublicKey
-	UpdateSigningPublicKey = hex.EncodeToString(publicKey)
-	t.Cleanup(func() { UpdateSigningPublicKey = original })
-	return privateKey
-}
-
-func TestFetchManifestVerifiesExactRawBytes(t *testing.T) {
-	privateKey := setUpdateTestSigningKey(t)
-	fixture := newSignedUpdateFixture(t, privateKey, nil)
-	cfg := Config{Update: UpdateConfig{ManifestURL: fixture.server.URL + "/manifest.json"}}
-
-	manifest, message := fetchManifest(cfg)
-	if manifest == nil || message != "" {
-		t.Fatalf("fetchManifest() manifest=%v message=%q", manifest, message)
-	}
-	fixture.manifestBody = append(fixture.manifestBody, ' ')
-	if manifest, message := fetchManifest(cfg); manifest != nil || !strings.Contains(message, "signature") {
-		t.Fatalf("tampered manifest was accepted: manifest=%v message=%q", manifest, message)
-	}
-}
-
-func TestFetchManifestRejectsMissingKeyBeforeNetwork(t *testing.T) {
-	requests := 0
-	server := newUpdateTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		http.NotFound(w, r)
-	}))
-	originalKey := UpdateSigningPublicKey
-	UpdateSigningPublicKey = ""
-	t.Cleanup(func() { UpdateSigningPublicKey = originalKey })
-
-	manifest, message := fetchManifest(Config{Update: UpdateConfig{ManifestURL: server.URL + "/manifest.json"}})
-	if manifest != nil || !strings.Contains(message, "embedded update signing public key") {
-		t.Fatalf("manifest=%v message=%q", manifest, message)
-	}
-	if requests != 0 {
-		t.Fatalf("made %d network requests without a trusted key", requests)
-	}
-}
-
 func TestVersionInfoOnlyReadsCachedManifest(t *testing.T) {
-	privateKey := setUpdateTestSigningKey(t)
-	fixture := newSignedUpdateFixture(t, privateKey, nil)
+	fixture := newUpdateFixture(t, nil)
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -240,8 +186,7 @@ func TestVersionInfoOnlyReadsCachedManifest(t *testing.T) {
 }
 
 func TestAutoCheckIsSingleflightAndRateLimited(t *testing.T) {
-	privateKey := setUpdateTestSigningKey(t)
-	fixture := newSignedUpdateFixture(t, privateKey, nil)
+	fixture := newUpdateFixture(t, nil)
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -266,21 +211,20 @@ func TestAutoCheckIsSingleflightAndRateLimited(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := fixture.requests.Load(); got != 2 {
-		t.Fatalf("automatic check made %d requests, want manifest and signature only", got)
+	if got := fixture.requests.Load(); got != 1 {
+		t.Fatalf("automatic check made %d requests, want the manifest only", got)
 	}
 	for range 20 {
 		_ = app.VersionInfo()
 	}
-	if got := fixture.requests.Load(); got != 2 {
+	if got := fixture.requests.Load(); got != 1 {
 		t.Fatalf("rate-limited cache made %d requests", got)
 	}
 }
 
-func TestApplyUpdateForceCannotBypassSignature(t *testing.T) {
-	privateKey := setUpdateTestSigningKey(t)
-	fixture := newSignedUpdateFixture(t, privateKey, nil)
-	fixture.signature = []byte(base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)))
+func TestApplyUpdateForceCannotBypassSHA256(t *testing.T) {
+	fixture := newUpdateFixture(t, nil)
+	fixture.asset = []byte("tampered update binary")
 
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -292,7 +236,7 @@ func TestApplyUpdateForceCannotBypassSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := (&App{store: store}).ApplyUpdate(ApplyUpdateOptions{Force: true})
-	if result.OK || !strings.Contains(result.Message, "signature") {
+	if result.OK || !strings.Contains(result.Message, "sha256") {
 		t.Fatalf("forced update result = %+v", result)
 	}
 }
@@ -309,8 +253,7 @@ func TestFetchManifestRequiresAssetIntegrityFields(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			privateKey := setUpdateTestSigningKey(t)
-			fixture := newSignedUpdateFixture(t, privateKey, test.mutate)
+			fixture := newUpdateFixture(t, test.mutate)
 			cfg := Config{Update: UpdateConfig{ManifestURL: fixture.server.URL + "/manifest.json"}}
 			manifest, message := fetchManifest(cfg)
 			if manifest != nil || !strings.Contains(message, test.want) {

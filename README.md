@@ -177,16 +177,9 @@ Restart=on-failure
 https://github.com/x2146/AO3-Hub/releases/latest/download/manifest.json
 ```
 
-Release workflow 会自动用 Go 生成 `manifest.json`，并用 Ed25519 对文件原始字节签名为同目录的 `manifest.json.sig`。发布前必须配置 GitHub Actions secret `UPDATE_SIGNING_KEY`；缺失或格式错误时发布会硬失败，不会产生可降级的未签名版本。
+Release workflow 会自动用 Go 生成 `manifest.json`，里面记录每个平台产物的 `url` / `size` / `sha256`；同时生成一份 `SHA256SUMS`（覆盖全部二进制与 manifest），方便手动 `sha256sum -c` 复验。发布链路不再做 Ed25519 签名，完整性只靠 sha256 这一层。
 
-签名密钥使用 32 字节 Ed25519 seed 的 hex 编码。私钥只保存在仓库外和 GitHub secret 中，绝不能提交：
-
-```bash
-go run ./scripts/sign -genkey
-UPDATE_SIGNING_KEY='<hex seed>' go run ./scripts/sign -pubkey
-```
-
-CI 会从该 seed 推导公钥，通过 ldflags 注入发布二进制。首次启用强制验签后，只有带 `manifest.json.sig` 的新 Release 能被新版客户端安装。也可以手动在 HTTPS 地址发布一个兼容 manifest（参考 `manifest.example.json`）及其签名：
+也可以手动在 HTTPS 地址发布一个兼容 manifest（参考 `manifest.example.json`）：
 
 ```json
 {
@@ -201,12 +194,14 @@ CI 会从该 seed 推导公钥，通过 ldflags 注入发布二进制。首次�
 
 在 Settings 里选择 `stable` 或 `dev` channel，确认 `Manifest URL`，然后到 `/version` 页面看是否有新版，点「下载并安装」：
 
-1. server 拉取 manifest 与 `.sig`，用二进制内嵌公钥强制验签
-2. 只接受 HTTPS URL，并强制核对资源 size 与 sha256
+1. server 拉取 manifest，manifest 与产物都只接受 HTTPS URL
+2. 强制核对资源 size 与 sha256，任一不符即整次更新失败，不存在「没校验就照装」的降级路径
 3. 在目标目录写唯一临时文件，`fsync`、设置执行权限后原子切换
 4. 保留上一版为 `.bak`，当前进程直接 `exec` 到新二进制
 
-`force` 只跳过版本比较，不能跳过签名、HTTPS、size 或 sha256 校验。
+`force` 只跳过版本比较，不能跳过 HTTPS、size 或 sha256 校验。
+
+因为没有发布签名，信任锚是发布渠道本身：manifest 与产物都必须来自你信任的 HTTPS 源（默认是 GitHub Release）。渠道被攻破时 sha256 挡不住投毒，这是明确接受的取舍。
 
 公开的版本接口只读取内存缓存，不会同步访问发布站点。开启 `autoCheck` 后，服务会在启动时及缓存过期后后台单飞检查；管理员手动检查会立即刷新并明确返回错误。
 

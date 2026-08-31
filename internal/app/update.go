@@ -2,9 +2,7 @@ package app
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,7 +25,6 @@ const (
 	updateDownloadTimeout         = 30 * time.Minute
 	updateAutoCheckInterval       = 15 * time.Minute
 	maxUpdateManifestBytes        = 1 << 20
-	maxUpdateSignatureBytes       = 4 << 10
 	maxUpdateAssetBytes     int64 = 512 << 20
 )
 
@@ -43,10 +40,6 @@ var (
 		},
 	}
 )
-
-// UpdateSigningPublicKey is injected into release binaries with -ldflags -X.
-// An empty value deliberately disables OTA rather than falling back to unsigned updates.
-var UpdateSigningPublicKey string
 
 type updateCheck struct {
 	HasUpdate bool
@@ -232,9 +225,6 @@ func fetchManifest(cfg Config) (*Manifest, string) {
 }
 
 func fetchManifestContext(ctx context.Context, cfg Config) (*Manifest, error) {
-	if _, err := embeddedUpdateSigningPublicKey(); err != nil {
-		return nil, err
-	}
 	manifestURL := resolveManifestURL(cfg)
 	if manifestURL == "" {
 		return nil, errors.New("未配置 manifest URL")
@@ -242,17 +232,6 @@ func fetchManifestContext(ctx context.Context, cfg Config) (*Manifest, error) {
 	body, err := fetchUpdateBytes(ctx, manifestURL, maxUpdateManifestBytes)
 	if err != nil {
 		return nil, fmt.Errorf("fetch manifest: %w", err)
-	}
-	signatureURL, err := manifestSignatureURL(manifestURL)
-	if err != nil {
-		return nil, err
-	}
-	signature, err := fetchUpdateBytes(ctx, signatureURL, maxUpdateSignatureBytes)
-	if err != nil {
-		return nil, fmt.Errorf("fetch manifest signature: %w", err)
-	}
-	if err := verifyManifestSignature(body, signature); err != nil {
-		return nil, err
 	}
 
 	var manifest Manifest
@@ -294,39 +273,6 @@ func fetchUpdateBytes(ctx context.Context, rawURL string, limit int64) ([]byte, 
 		return nil, fmt.Errorf("response exceeds %d bytes", limit)
 	}
 	return body, nil
-}
-
-func manifestSignatureURL(rawURL string) (string, error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", fmt.Errorf("invalid manifest URL: %w", err)
-	}
-	parsed.Path += ".sig"
-	parsed.RawPath = ""
-	return parsed.String(), nil
-}
-
-func verifyManifestSignature(message, signature []byte) error {
-	publicKey, err := embeddedUpdateSigningPublicKey()
-	if err != nil {
-		return err
-	}
-	rawSignature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(signature)))
-	if err != nil {
-		return fmt.Errorf("decode manifest signature: %w", err)
-	}
-	if !ed25519.Verify(publicKey, message, rawSignature) {
-		return errors.New("manifest signature verification failed")
-	}
-	return nil
-}
-
-func embeddedUpdateSigningPublicKey() (ed25519.PublicKey, error) {
-	publicKey, err := hex.DecodeString(strings.TrimSpace(UpdateSigningPublicKey))
-	if err != nil || len(publicKey) != ed25519.PublicKeySize {
-		return nil, errors.New("invalid embedded update signing public key")
-	}
-	return ed25519.PublicKey(publicKey), nil
 }
 
 func validateManifest(manifest Manifest) error {

@@ -138,15 +138,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Resolve update signing public key
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          [ -n "${UPDATE_SIGNING_KEY}" ] || { echo "UPDATE_SIGNING_KEY secret is not set" >&2; exit 1; }
-          PUBLIC_KEY="$(go run ./scripts/sign -pubkey)"
-          echo "AO3HUB_UPDATE_PUBLIC_KEY=${PUBLIC_KEY}" >> "${GITHUB_ENV}"
-
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
@@ -210,10 +201,8 @@ jobs:
           AO3HUB_RELEASE_REPO: ${{ github.repository }}
           AO3HUB_RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
           AO3HUB_RELEASE_VERSION: ${{ needs.meta.outputs.version }}
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          [ -n "${UPDATE_SIGNING_KEY}" ] || { echo "UPDATE_SIGNING_KEY secret is not set" >&2; exit 1; }
           chmod +x server/build/release/ao3-hub-*
           go run ./cmd/ao3hub-manifest \
             --repo "${AO3HUB_RELEASE_REPO}" \
@@ -224,8 +213,7 @@ jobs:
             --published-at "${AO3HUB_RELEASE_PUBLISHED_AT}" \
             --out server/build/release/manifest.json \
             server/build/release/ao3-hub-*
-          go run ./scripts/sign server/build/release/manifest.json
-          (cd server/build/release && sha256sum ao3-hub-* manifest.json manifest.json.sig > SHA256SUMS)
+          (cd server/build/release && sha256sum ao3-hub-* manifest.json > SHA256SUMS)
 
       - name: Move dev tag
         if: needs.meta.outputs.channel == 'dev'
