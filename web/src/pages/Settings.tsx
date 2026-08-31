@@ -490,7 +490,6 @@ export function Settings() {
               id="llm-conc"
               type="number"
               min={CONFIG_LIMITS.llm.concurrency.min}
-              max={CONFIG_LIMITS.llm.concurrency.max}
               value={form.llm.concurrency}
               onChange={(e) =>
                 setForm({

@@ -413,8 +413,8 @@ func validateConfig(c Config) error {
 	if c.LLM.Temperature < 0 || c.LLM.Temperature > 2 {
 		return errors.New("llm.temperature must be between 0 and 2")
 	}
-	if c.LLM.Concurrency < 1 || c.LLM.Concurrency > 16 {
-		return errors.New("llm.concurrency must be between 1 and 16")
+	if c.LLM.Concurrency < 1 {
+		return errors.New("llm.concurrency must be positive")
 	}
 	if c.LLM.BlocksPerRequest < 1 || c.LLM.BlocksPerRequest > 100 {
 		return errors.New("llm.blocksPerRequest must be between 1 and 100")

@@ -8,7 +8,7 @@ export const CONFIG_LIMITS = {
   ui: { libraryRefetchIntervalMs: { min: 1000, max: 3600000 } },
   llm: {
     temperature: { min: 0, max: 2, step: 0.1 },
-    concurrency: { min: 1, max: 16 },
+    concurrency: { min: 1 },
     blocksPerRequest: { min: 1, max: 100 },
     maxTokensPerRequest: { min: 1, max: 200000 },
     maxAutoRetries: { min: 0, max: 10 },
@@ -168,7 +168,6 @@ export const LlmConfig = z.object({
     .number()
     .int()
     .min(CONFIG_LIMITS.llm.concurrency.min)
-    .max(CONFIG_LIMITS.llm.concurrency.max)
     .default(3),
   blocksPerRequest: z
     .number()

@@ -297,7 +297,6 @@ func TestValidateConfigRejectsResourceExhaustionValues(t *testing.T) {
 	tests := []func(*Config){
 		func(cfg *Config) { cfg.Auth.SessionTTLDays = 1000000 },
 		func(cfg *Config) { cfg.Stream.HeartbeatMS = 1 },
-		func(cfg *Config) { cfg.LLM.Concurrency = 10000 },
 		func(cfg *Config) { cfg.LLM.MaxAutoRetries = 10000 },
 		func(cfg *Config) { cfg.LLM.MaxTokensPerRequest = 1000000000 },
 		func(cfg *Config) { cfg.Update.RestartDelayMS = 1000000000 },
@@ -311,7 +310,7 @@ func TestValidateConfigRejectsResourceExhaustionValues(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsUnsafeValuesWithoutOverwriting(t *testing.T) {
+func TestLoadConfigAcceptsHighConcurrency(t *testing.T) {
 	dataDir := t.TempDir()
 	store, err := NewStore(dataDir)
 	if err != nil {
@@ -328,15 +327,12 @@ func TestLoadConfigRejectsUnsafeValuesWithoutOverwriting(t *testing.T) {
 	if err := os.WriteFile(configPath, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.LoadConfig(); err == nil {
-		t.Fatal("expected unsafe config to be rejected")
-	}
-	after, err := os.ReadFile(configPath)
+	loaded, err := store.LoadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(after, original) {
-		t.Fatal("unsafe config was overwritten while being rejected")
+	if loaded.LLM.Concurrency != cfg.LLM.Concurrency {
+		t.Fatalf("concurrency = %d, want %d", loaded.LLM.Concurrency, cfg.LLM.Concurrency)
 	}
 }
 
