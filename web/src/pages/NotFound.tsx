@@ -12,13 +12,15 @@ import {
 
 export function NotFound() {
   return (
-    <Empty className="min-h-[calc(100svh-12rem)]">
+    <Empty className="min-h-[calc(100svh-14rem)] border border-dashed">
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <BookOpenText />
         </EmptyMedia>
         <EmptyTitle>页面没有找到</EmptyTitle>
-        <EmptyDescription>这里没有你要找的故事，链接可能已经失效。</EmptyDescription>
+        <EmptyDescription>
+          这里没有你要找的故事，链接可能已经失效。
+        </EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
         <Button variant="outline" asChild>

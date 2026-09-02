@@ -1,7 +1,16 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Download, FileCode2, Sparkles, UploadCloud } from "lucide-react";
+import { toast } from "sonner";
+import {
+  AlertCircle,
+  Download,
+  FileCode2,
+  Gauge,
+  Link2,
+  Sparkles,
+  UploadCloud,
+} from "lucide-react";
 import type { TranslationMode } from "@ao3hub/shared";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -10,13 +19,13 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import {
   Field,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
   FieldLegend,
@@ -32,6 +41,31 @@ import { api } from "../lib/api";
 type Mode = "upload" | "url";
 type ModeChoice = "default" | TranslationMode;
 
+const MODE_COPY: Record<TranslationMode, { label: string; blurb: string }> = {
+  normal: {
+    label: "普通翻译",
+    blurb: "直接分块翻译，速度更快、成本更低，适合快速阅读。",
+  },
+  refined: {
+    label: "精翻模式",
+    blurb:
+      "先通读全文，生成摘要、角色术语与叙事基调，再分块翻译。质量更高，首次处理时间和 token 成本也更高。",
+  },
+};
+
+const AO3_WORK_RE =
+  /^https?:\/\/(?:www\.)?archiveofourown\.org\/works\/\d+(?:[/?#].*)?$/i;
+
+function urlHint(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (AO3_WORK_RE.test(trimmed)) return null;
+  if (/^https?:\/\//i.test(trimmed)) {
+    return "看起来不是 AO3 作品页地址，正确格式为 archiveofourown.org/works/<id>。";
+  }
+  return "请填写完整链接，包含 https://。";
+}
+
 export function ImportPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -41,6 +75,7 @@ export function ImportPage() {
   const [error, setError] = useState<string | null>(null);
   const [modeChoice, setModeChoice] = useState<ModeChoice>("default");
   const requestPendingRef = useRef(false);
+  const dragDepthRef = useRef(0);
 
   const { data: config } = useQuery({
     queryKey: ["config", "public"],
@@ -53,6 +88,9 @@ export function ImportPage() {
 
   const onDone = (id: string) => {
     qc.invalidateQueries({ queryKey: ["stories"] });
+    toast.success("已加入翻译队列", {
+      description: "可以直接开始阅读，译文会随进度陆续填充。",
+    });
     navigate({ to: "/r/$id/$chapter", params: { id, chapter: "0" } });
   };
 
@@ -85,77 +123,91 @@ export function ImportPage() {
         return;
       }
       requestPendingRef.current = true;
+      setMode("upload");
       upload.mutate(file);
     },
     [upload],
   );
 
+  // Dropping anywhere on the page works — hunting for the dashed rectangle is
+  // busywork when the whole screen is "the import page".
+  useEffect(() => {
+    const onDragEnter = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      dragDepthRef.current += 1;
+      setDragOver(true);
+    };
+    const onDragOver = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+    };
+    const onDragLeave = () => {
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) setDragOver(false);
+    };
+    const onDrop = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      dragDepthRef.current = 0;
+      setDragOver(false);
+      handleFiles(event.dataTransfer.files);
+    };
+
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [handleFiles]);
+
+  // Pasting an AO3 link anywhere on the page jumps straight to the URL form.
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.isContentEditable ||
+          ["INPUT", "TEXTAREA"].includes(target.tagName))
+      ) {
+        return;
+      }
+      const text = event.clipboardData?.getData("text")?.trim();
+      if (!text || !AO3_WORK_RE.test(text)) return;
+      event.preventDefault();
+      setMode("url");
+      setUrl(text);
+      setError(null);
+      toast.info("已粘贴 AO3 链接");
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
+  const hint = urlHint(url);
+
   return (
-    <div className="flex flex-col gap-8 fade-in">
-      <div className="flex flex-col gap-2">
-        <Badge variant="accent">
-          <FileCode2 />
-          Import workflow
-        </Badge>
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">添加新作品</h1>
-        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          上传 AO3「Download → HTML」导出的文件，或粘贴作品链接由服务端自动抓取。
+    <div className="fade-in flex flex-col gap-6">
+      <header className="flex flex-col gap-2">
+        <h1 className="cn-font-heading text-2xl font-semibold tracking-tight sm:text-3xl">
+          添加新作品
+        </h1>
+        <p className="max-w-2xl text-sm text-muted-foreground">
+          上传 AO3「Download → HTML」导出的文件，或粘贴作品链接由服务端自动抓取。两种方式都会在后台创建翻译任务。
         </p>
-      </div>
+      </header>
 
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-        <Card>
-          <CardHeader>
-            <CardTitle>翻译策略</CardTitle>
-            <CardDescription>为这次导入选择速度与质量的平衡。</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <FieldSet data-disabled={isPending || undefined}>
-              <FieldLegend className="sr-only">翻译模式</FieldLegend>
-              <ToggleGroup
-                type="single"
-                value={modeChoice}
-                onValueChange={(value) => value && setModeChoice(value as ModeChoice)}
-                variant="outline"
-                spacing={2}
-                className="flex w-full flex-col items-stretch sm:flex-row lg:flex-col"
-                disabled={isPending}
-              >
-                <ToggleGroupItem value="default" className="justify-start">
-                  跟随默认
-                  {defaultMode && (
-                    <Badge variant="secondary">
-                      {defaultMode === "refined" ? "精翻" : "普通"}
-                    </Badge>
-                  )}
-                </ToggleGroupItem>
-                <ToggleGroupItem value="normal" className="justify-start">普通翻译</ToggleGroupItem>
-                <ToggleGroupItem value="refined" className="justify-start">精翻模式</ToggleGroupItem>
-              </ToggleGroup>
-              <FieldDescription>
-                {effectiveMode === undefined
-                  ? "默认模式暂未读取，将使用服务端配置。"
-                  : effectiveMode === "refined"
-                    ? "先通读全文，生成摘要、角色术语与叙事基调，再分块翻译。质量更高，首次处理时间和 token 成本也更高。"
-                    : "直接分块翻译，速度更快、成本更低，适合快速阅读。"}
-              </FieldDescription>
-            </FieldSet>
-          </CardContent>
-          <CardFooter>
-            <Alert>
-              <Sparkles />
-              <AlertTitle>建议</AlertTitle>
-              <AlertDescription>
-                长篇、设定密集作品优先选择精翻；短篇或快速预览可使用普通模式。
-              </AlertDescription>
-            </Alert>
-          </CardFooter>
-        </Card>
-
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
         <Card>
           <CardHeader>
             <CardTitle>作品来源</CardTitle>
-            <CardDescription>两种方式都会在后台创建翻译任务。</CardDescription>
+            <CardDescription>
+              导入成功后会直接跳转到阅读器，翻译在后台继续。
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <Tabs
@@ -167,51 +219,47 @@ export function ImportPage() {
             >
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="upload" disabled={isPending}>
-                  <UploadCloud />
+                  <UploadCloud data-icon="inline-start" />
                   上传 HTML
                 </TabsTrigger>
                 <TabsTrigger value="url" disabled={isPending}>
-                  <Download />
+                  <Link2 data-icon="inline-start" />
                   AO3 链接
                 </TabsTrigger>
               </TabsList>
 
               <TabsContent value="upload">
                 <label
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    setDragOver(true);
-                  }}
-                  onDragLeave={() => setDragOver(false)}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    setDragOver(false);
-                    handleFiles(event.dataTransfer.files);
-                  }}
                   className={cn(
-                    "flex min-h-72 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-8 text-center transition-[border-color,background-color,transform]",
-                    dragOver && "scale-[1.01] border-primary bg-primary/5",
+                    "flex min-h-64 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-8 text-center transition-colors",
+                    dragOver
+                      ? "border-primary bg-primary/5"
+                      : "border-border",
                     isPending
                       ? "pointer-events-none opacity-60"
-                      : "cursor-pointer hover:border-primary/45 hover:bg-muted/50",
+                      : "cursor-pointer hover:border-primary/50 hover:bg-muted/50",
                   )}
                 >
                   <Input
                     type="file"
                     accept=".html,text/html"
-                    className="hidden"
+                    className="sr-only"
                     onChange={(event) => {
                       handleFiles(event.currentTarget.files);
                       event.currentTarget.value = "";
                     }}
                     disabled={isPending}
                   />
-                  <div className="flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <div className="flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
                     {upload.isPending ? <Spinner /> : <UploadCloud />}
                   </div>
                   <div className="flex flex-col gap-1">
-                    <p className="font-semibold">
-                      {upload.isPending ? "正在解析作品" : "拖放 HTML 到这里"}
+                    <p className="text-sm font-medium">
+                      {upload.isPending
+                        ? "正在解析作品…"
+                        : dragOver
+                          ? "松手即可导入"
+                          : "把 HTML 拖到页面任意位置"}
                     </p>
                     <p className="text-sm text-muted-foreground">
                       或点击选择 AO3 原始 HTML 导出文件
@@ -232,24 +280,36 @@ export function ImportPage() {
                   }}
                 >
                   <FieldGroup>
-                    <Field data-disabled={isPending || undefined}>
+                    <Field
+                      data-disabled={isPending || undefined}
+                      data-invalid={hint ? true : undefined}
+                    >
                       <FieldLabel htmlFor="ao3-url">AO3 work URL</FieldLabel>
                       <Input
                         id="ao3-url"
                         type="url"
+                        inputMode="url"
                         placeholder="https://archiveofourown.org/works/12345678"
                         value={url}
                         onChange={(event) => setUrl(event.target.value)}
+                        aria-invalid={hint ? true : undefined}
                         required
                         autoFocus
                         disabled={isPending}
                       />
-                      <FieldDescription>
-                        Explicit 作品可能需要先在设置中填写 AO3 Cookie。
-                      </FieldDescription>
+                      {hint ? (
+                        <FieldError>{hint}</FieldError>
+                      ) : (
+                        <FieldDescription>
+                          受限或 Explicit 作品可能需要先在设置中填写 AO3 Cookie。
+                        </FieldDescription>
+                      )}
                     </Field>
                     <Field orientation="horizontal">
-                      <Button type="submit" disabled={isPending || !url.trim()}>
+                      <Button
+                        type="submit"
+                        disabled={isPending || !url.trim() || !!hint}
+                      >
                         {create.isPending ? (
                           <Spinner data-icon="inline-start" />
                         ) : (
@@ -257,11 +317,73 @@ export function ImportPage() {
                         )}
                         {create.isPending ? "抓取中" : "下载并翻译"}
                       </Button>
+                      {url && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          disabled={isPending}
+                          onClick={() => setUrl("")}
+                        >
+                          清空
+                        </Button>
+                      )}
                     </Field>
                   </FieldGroup>
                 </form>
               </TabsContent>
             </Tabs>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>翻译策略</CardTitle>
+            <CardDescription>为这次导入选择速度与质量的平衡。</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <FieldSet data-disabled={isPending || undefined}>
+              <FieldLegend className="sr-only">翻译模式</FieldLegend>
+              <ToggleGroup
+                type="single"
+                value={modeChoice}
+                onValueChange={(value) => value && setModeChoice(value as ModeChoice)}
+                variant="outline"
+                spacing={2}
+                className="flex w-full flex-col items-stretch"
+                disabled={isPending}
+              >
+                <ToggleGroupItem value="default" className="justify-start">
+                  <Gauge data-icon="inline-start" />
+                  跟随默认
+                  {defaultMode && (
+                    <Badge variant="secondary" className="ml-auto">
+                      {MODE_COPY[defaultMode].label}
+                    </Badge>
+                  )}
+                </ToggleGroupItem>
+                <ToggleGroupItem value="normal" className="justify-start">
+                  <FileCode2 data-icon="inline-start" />
+                  {MODE_COPY.normal.label}
+                </ToggleGroupItem>
+                <ToggleGroupItem value="refined" className="justify-start">
+                  <Sparkles data-icon="inline-start" />
+                  {MODE_COPY.refined.label}
+                </ToggleGroupItem>
+              </ToggleGroup>
+              <FieldDescription>
+                {effectiveMode === undefined
+                  ? "默认模式暂未读取，将使用服务端配置。"
+                  : MODE_COPY[effectiveMode].blurb}
+              </FieldDescription>
+            </FieldSet>
+
+            <Alert>
+              <Sparkles />
+              <AlertTitle>怎么选</AlertTitle>
+              <AlertDescription>
+                长篇、设定密集的作品优先选精翻；短篇或只想快速预览时用普通模式。导入后仍可在翻译状态面板里重新预读。
+              </AlertDescription>
+            </Alert>
           </CardContent>
         </Card>
       </div>
@@ -272,6 +394,18 @@ export function ImportPage() {
           <AlertTitle>导入失败</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
+      )}
+
+      {dragOver && (
+        <div
+          className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm"
+          aria-hidden
+        >
+          <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-primary bg-card px-10 py-8 text-center">
+            <UploadCloud className="size-8 text-primary" />
+            <p className="text-sm font-medium">松手即可导入 HTML</p>
+          </div>
+        </div>
       )}
     </div>
   );

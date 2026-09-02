@@ -81,7 +81,8 @@ function RootShell() {
     return (
       <AppLayout>
         <div className="flex flex-col gap-4">
-          <Skeleton className="h-10 w-56" />
+          <Skeleton className="h-8 w-56" />
+          <Skeleton className="h-5 w-80" />
           <Skeleton className="h-40 w-full" />
         </div>
       </AppLayout>
@@ -92,7 +93,7 @@ function RootShell() {
       <AppLayout>
         <Alert variant="destructive">
           <AlertTitle>无法确认登录状态</AlertTitle>
-          <AlertDescription>
+          <AlertDescription className="flex flex-col items-start gap-3">
             {authError}
             <Button variant="outline" size="sm" onClick={() => void refresh()}>
               重试
@@ -113,7 +114,10 @@ function RootShell() {
   if (unauthorized || (needsSetup && pathname !== "/setup")) {
     return (
       <AppLayout>
-        <Skeleton className="h-10 w-48" />
+        <div className="flex flex-col gap-4">
+          <Skeleton className="h-8 w-48" />
+          <Skeleton className="h-32 w-full" />
+        </div>
       </AppLayout>
     );
   }

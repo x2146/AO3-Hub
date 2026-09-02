@@ -14,12 +14,17 @@ const VARIANT: Record<StoryStatus, "secondary" | "accent" | "success" | "destruc
 };
 
 export function StatusPill({ status }: { status: StoryStatus }) {
+  const inFlight = isInFlight(status);
   return (
-    <Badge variant={VARIANT[status]}>
+    <Badge
+      variant={VARIANT[status]}
+      role="status"
+      aria-live={inFlight ? "polite" : "off"}
+    >
       <span
         className={cn(
           "inline-block size-1.5 rounded-full bg-current",
-          isInFlight(status) && "animate-pulse",
+          inFlight && "animate-pulse",
         )}
         aria-hidden
       />

@@ -4,11 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f9fafc" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131519" />
+    <meta name="description" content="AO3 Hub — 本地 AO3 翻译与双语阅读工作台" />
     <title>AO3 Hub</title>
     <script>
+      // Resolve the theme before first paint so the app never flashes light
+      // chrome on a dark device. Mirrors applyTheme() in src/lib/theme.ts.
       (() => {
-        const t = localStorage.getItem("aohub.theme") || "auto";
-        document.documentElement.dataset.theme = t;
+        let stored = "auto";
+        try {
+          stored = localStorage.getItem("aohub.theme") || "auto";
+        } catch {}
+        const theme =
+          stored === "light" || stored === "dark" ? stored : "auto";
+        const prefersDark = window.matchMedia(
+          "(prefers-color-scheme: dark)",
+        ).matches;
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.classList.toggle(
+          "dark",
+          theme === "dark" || (theme === "auto" && prefersDark),
+        );
       })();
     </script>
   </head>

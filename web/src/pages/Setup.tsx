@@ -72,18 +72,16 @@ export function SetupPage() {
   };
 
   return (
-    <div className="mx-auto flex min-h-[calc(100svh-11rem)] w-full max-w-lg items-center fade-in">
+    <div className="fade-in mx-auto flex min-h-[calc(100svh-11rem)] w-full max-w-md items-center">
       <Card className="w-full">
-        <CardHeader className="gap-4 text-center">
-          <div className="mx-auto flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-            <ShieldCheck />
+        <CardHeader className="items-center gap-3 text-center">
+          <div className="mx-auto flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+            <ShieldCheck className="size-5" />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <CardTitle>初始化 AO3 Hub</CardTitle>
-            <CardDescription>
-              创建第一个管理员账号。完成后可在用户页面继续添加普通用户或管理员。
-            </CardDescription>
-          </div>
+          <CardTitle className="text-lg">初始化 AO3 Hub</CardTitle>
+          <CardDescription>
+            创建第一个管理员账号。完成后可在用户页面继续添加普通用户或管理员。
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form id="setup-form" onSubmit={onSubmit}>
@@ -103,8 +101,13 @@ export function SetupPage() {
                   required
                   disabled={submitting}
                 />
-                <FieldDescription>3–32 个字符，可使用字母、数字、下划线和短横线。</FieldDescription>
-                {invalidField === "username" && <FieldError>{error}</FieldError>}
+                {invalidField === "username" ? (
+                  <FieldError>{error}</FieldError>
+                ) : (
+                  <FieldDescription>
+                    3–32 个字符，可使用字母、数字、下划线和短横线。
+                  </FieldDescription>
+                )}
               </Field>
               <Field
                 data-invalid={invalidField === "password" || undefined}
@@ -121,8 +124,11 @@ export function SetupPage() {
                   required
                   disabled={submitting}
                 />
-                <FieldDescription>至少 {PASSWORD_MIN} 个字符。</FieldDescription>
-                {invalidField === "password" && <FieldError>{error}</FieldError>}
+                {invalidField === "password" ? (
+                  <FieldError>{error}</FieldError>
+                ) : (
+                  <FieldDescription>至少 {PASSWORD_MIN} 个字符。</FieldDescription>
+                )}
               </Field>
               <Field
                 data-invalid={invalidField === "confirm" || undefined}

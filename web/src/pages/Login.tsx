@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { BookOpenText, LogIn, ShieldCheck } from "lucide-react";
+import { BookOpenText, Eye, EyeOff, LogIn } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,12 @@ import {
 } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Spinner } from "@/components/ui/spinner";
 import { useAuth } from "../lib/auth";
 
@@ -22,6 +28,7 @@ export function LoginPage() {
   const search = useSearch({ strict: false }) as { redirect?: string };
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -49,21 +56,22 @@ export function LoginPage() {
   };
 
   return (
-    <div className="mx-auto flex min-h-[calc(100svh-11rem)] w-full max-w-md items-center fade-in">
+    <div className="fade-in mx-auto flex min-h-[calc(100svh-11rem)] w-full max-w-sm items-center">
       <Card className="w-full">
-        <CardHeader className="gap-4 text-center">
-          <div className="mx-auto flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-            <BookOpenText />
+        <CardHeader className="items-center gap-3 text-center">
+          <div className="mx-auto flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+            <BookOpenText className="size-5" />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <CardTitle>欢迎回来</CardTitle>
-            <CardDescription>登录后导入作品、管理翻译并继续阅读。</CardDescription>
-          </div>
+          <CardTitle className="text-lg">欢迎回来</CardTitle>
+          <CardDescription>登录后导入作品、管理翻译并继续阅读。</CardDescription>
         </CardHeader>
         <CardContent>
           <form id="login-form" onSubmit={onSubmit}>
             <FieldGroup>
-              <Field data-disabled={submitting || undefined}>
+              <Field
+                data-disabled={submitting || undefined}
+                data-invalid={!!error || undefined}
+              >
                 <FieldLabel htmlFor="login-username">用户名</FieldLabel>
                 <Input
                   id="login-username"
@@ -71,27 +79,43 @@ export function LoginPage() {
                   autoFocus
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
+                  aria-invalid={!!error || undefined}
                   placeholder="输入用户名"
                   required
                   disabled={submitting}
                 />
               </Field>
-              <Field data-disabled={submitting || undefined}>
+              <Field
+                data-disabled={submitting || undefined}
+                data-invalid={!!error || undefined}
+              >
                 <FieldLabel htmlFor="login-password">密码</FieldLabel>
-                <Input
-                  id="login-password"
-                  type="password"
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="输入密码"
-                  required
-                  disabled={submitting}
-                />
+                <InputGroup>
+                  <InputGroupInput
+                    id="login-password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    aria-invalid={!!error || undefined}
+                    placeholder="输入密码"
+                    required
+                    disabled={submitting}
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton
+                      size="icon-xs"
+                      aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                      onClick={() => setShowPassword((v) => !v)}
+                      disabled={submitting}
+                    >
+                      {showPassword ? <EyeOff /> : <Eye />}
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
               </Field>
               {error && (
                 <Alert variant="destructive">
-                  <ShieldCheck />
                   <AlertTitle>无法登录</AlertTitle>
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
@@ -99,7 +123,7 @@ export function LoginPage() {
             </FieldGroup>
           </form>
         </CardContent>
-        <CardFooter className="flex flex-col gap-3">
+        <CardFooter className="flex-col gap-3">
           <Button
             form="login-form"
             type="submit"

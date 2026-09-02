@@ -31,33 +31,26 @@ export function TranslateProgressBar({
   thin?: boolean;
 }) {
   const { total, done, error, inflight, pending } = breakdownOf(progress);
-  if (total === 0) {
-    return (
-      <div
-        className={cn(
-          "overflow-hidden rounded-full bg-secondary",
-          thin ? "h-1" : "h-1.5",
-          className,
-        )}
-      />
-    );
-  }
+  const trackClass = cn(
+    "flex w-full overflow-hidden rounded-full bg-muted",
+    thin ? "h-1" : "h-1.5",
+    className,
+  );
+
+  if (total === 0) return <div className={trackClass} />;
+
   const pct = (n: number) => `${(n / total) * 100}%`;
   return (
     <div
-      className={cn(
-        "flex w-full overflow-hidden rounded-full bg-secondary",
-        thin ? "h-1" : "h-1.5",
-        className,
-      )}
+      className={trackClass}
       role="progressbar"
+      aria-label="翻译进度"
       aria-valuemin={0}
       aria-valuemax={total}
       aria-valuenow={done}
+      aria-valuetext={`${done} / ${total} 段已完成`}
     >
-      {done > 0 && (
-        <div className="h-full bg-success" style={{ width: pct(done) }} />
-      )}
+      {done > 0 && <div className="h-full bg-success" style={{ width: pct(done) }} />}
       {inflight > 0 && (
         <div
           className="h-full animate-pulse bg-primary"
@@ -89,11 +82,11 @@ export function TranslateProgressLegend({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono tabular-nums text-muted-foreground",
+        "flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground",
         className,
       )}
     >
-      <span className="text-foreground">
+      <span className="font-medium text-foreground">
         {done}/{total} · {pct}%
       </span>
       <Chip color="bg-primary" label="进行" value={inflight} />
@@ -104,6 +97,7 @@ export function TranslateProgressLegend({
   );
 }
 
+/** Zero-valued buckets are dropped so the legend stays scannable mid-run. */
 function Chip({
   color,
   label,
@@ -113,9 +107,10 @@ function Chip({
   label: string;
   value: number;
 }) {
+  if (value === 0) return null;
   return (
     <span className="inline-flex items-center gap-1">
-      <span className={cn("inline-block size-1.5 rounded-full", color)} />
+      <span className={cn("inline-block size-1.5 rounded-full", color)} aria-hidden />
       <span>
         {label} {value}
       </span>

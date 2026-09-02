@@ -4,7 +4,7 @@
 
 ## 形态
 
-- **Go** 服务端，**Vite + React + TanStack Router/Query + Tailwind v4** 前端
+- **Go** 服务端，**Vite + React + TanStack Router/Query + Tailwind v4 + shadcn/ui** 前端
 - 数据是分文件 JSON：`data/index.json` + `data/stories/{id}/{meta,original,translated,progress}.json` + `source.html`（精翻模式额外有 `context.json`）；用户与 session 走 `data/users.json` + `data/sessions.json`
 - 翻译支持 **OpenAI 兼容 `/chat/completions`** 与 **Claude Messages**（用户自配 apiType/baseURL/apiKey/model）
 - **段落级**翻译单元，可断点续传，可重试单段
@@ -26,14 +26,29 @@ AO3-Hub/
 ├── scripts/build-go.mjs    # vite build → go:embed → go build
 ├── cmd/ao3hub-manifest/    # OTA manifest 生成器
 └── web/
+    ├── components.json      # shadcn/ui 配置（radix-nova style）
+    ├── public/favicon.svg
     ├── src/
     │   ├── main.tsx + router.tsx
     │   ├── pages/{Library,Import,Settings,Reader,Version,Login,Setup,Users,NotFound}.tsx
-    │   ├── components/{AppLayout,StatusPill}.tsx
-    │   ├── lib/{api,auth,theme,reader-settings}.ts
-    │   └── styles.css
+    │   ├── components/{AppLayout,StatusPill,TranslateProgress,TranslationStatusPanel}.tsx
+    │   ├── components/ui/   # shadcn/ui 组件（radix-nova，registry 同步）
+    │   ├── lib/{api,auth,theme,reader-settings,status,utils}.ts
+    │   └── styles.css       # 设计 token：#018eee 主题色 + OKLCH 中性色
     └── vite.config.ts
 ```
+
+## UI
+
+前端是标准 shadcn/ui（`components.json` → `radix-nova` style，lucide 图标）。
+`web/src/components/ui/` 里的组件与官方 registry 保持一致，改动只有两类，且都有行内注释说明：
+
+- 项目自有 variant（如 Badge 的 `accent` / `success` / `warning`）
+- 少数组件包了 `React.forwardRef` —— 本项目跑 React 18，而 registry 组件按 React 19 编写
+
+更新组件：`npx shadcn@latest add <name> --diff -c web`。
+
+配色只有一个来源：`web/src/styles.css` 里的 `--brand: #018eee`，其余中性色/图表色都围绕它的 OKLCH 色相（≈249）推导，浅色与深色各一套。
 
 ## Dev
 

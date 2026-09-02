@@ -1,6 +1,73 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* ---------------------------------------------------------------------------
+ * Custom variants
+ *
+ * shadcn/ui components address Radix state through short data-* variants
+ * (`data-open:`, `data-checked:`, `data-active:`, `data-horizontal:` …). Radix
+ * itself only emits `data-state` / `data-orientation`, so the variants below
+ * bridge the two. They mirror the definitions shipped in `shadcn/tailwind.css`
+ * — inlined here so the app keeps a single small dependency tree.
+ *
+ * `dark` is redefined as a class variant because the theme is switched by
+ * toggling `.dark` on <html> (see lib/theme.ts), not by the OS media query.
+ * ------------------------------------------------------------------------- */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@custom-variant data-open {
+  &:where([data-state="open"]),
+  &:where([data-open]:not([data-open="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-closed {
+  &:where([data-state="closed"]),
+  &:where([data-closed]:not([data-closed="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-checked {
+  &:where([data-state="checked"]),
+  &:where([data-checked]:not([data-checked="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-unchecked {
+  &:where([data-state="unchecked"]),
+  &:where([data-unchecked]:not([data-unchecked="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-selected {
+  &:where([data-selected="true"]) {
+    @slot;
+  }
+}
+@custom-variant data-disabled {
+  &:where([data-disabled="true"]),
+  &:where([data-disabled]:not([data-disabled="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-active {
+  &:where([data-state="active"]),
+  &:where([data-active]:not([data-active="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-horizontal {
+  &:where([data-orientation="horizontal"]) {
+    @slot;
+  }
+}
+@custom-variant data-vertical {
+  &:where([data-orientation="vertical"]) {
+    @slot;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -20,6 +87,8 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -41,190 +110,230 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  --radius-card: calc(var(--radius) + 6px);
-  --radius-control: var(--radius);
-  --radius-pill: 9999px;
-
-  --shadow-overlay: 0 24px 80px rgb(15 23 42 / 0.22);
-  --shadow-float: 0 14px 40px rgb(15 23 42 / 0.12);
+  --radius-2xl: calc(var(--radius) + 8px);
 
   --font-sans:
-    "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans SC", sans-serif;
+  --font-heading: var(--font-sans);
   --font-serif:
-    "Source Serif 4", "Source Serif Pro", "Iowan Old Style", "Charter", Georgia, "Noto Serif SC",
-    "Songti SC", serif;
+    "Source Serif 4", "Source Serif Pro", "Iowan Old Style", Charter, Georgia,
+    "Songti SC", "Noto Serif SC", "Source Han Serif SC", serif;
   --font-mono:
-    "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+/* Headings inside shadcn primitives opt into the heading face through this
+ * utility, so a future `--font-heading` swap lands everywhere at once. */
+@utility cn-font-heading {
+  font-family: var(--font-heading);
 }
 
 @layer base {
   :root {
     color-scheme: light;
+
+    --radius: 0.625rem;
+
+    /* Brand. #018eee is the product's identity colour — every accent, focus
+     * ring, chart series and sidebar highlight below is tuned around its
+     * OKLCH hue (≈249) so the palette reads as one family. */
+    --brand: #018eee;
+
+    --background: oklch(0.985 0.003 249);
+    --foreground: oklch(0.21 0.02 256);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.21 0.02 256);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.21 0.02 256);
+    --primary: var(--brand);
+    --primary-foreground: oklch(1 0 0);
+    --secondary: oklch(0.958 0.012 249);
+    --secondary-foreground: oklch(0.38 0.06 249);
+    --muted: oklch(0.966 0.005 249);
+    --muted-foreground: oklch(0.5 0.024 253);
+    --accent: oklch(0.945 0.032 245);
+    --accent-foreground: oklch(0.44 0.13 249);
+    --destructive: oklch(0.577 0.215 27.3);
+    --destructive-foreground: oklch(0.985 0 0);
+    --success: oklch(0.6 0.13 158);
+    --success-foreground: oklch(0.985 0 0);
+    --warning: oklch(0.72 0.16 70);
+    --warning-foreground: oklch(0.27 0.07 62);
+    --border: oklch(0.918 0.008 249);
+    --input: oklch(0.9 0.012 249);
+    --ring: var(--brand);
+
+    --chart-1: var(--brand);
+    --chart-2: oklch(0.7 0.13 205);
+    --chart-3: oklch(0.62 0.15 285);
+    --chart-4: oklch(0.68 0.14 158);
+    --chart-5: oklch(0.76 0.15 75);
+
+    --sidebar: oklch(0.975 0.006 249);
+    --sidebar-foreground: oklch(0.3 0.022 256);
+    --sidebar-primary: var(--brand);
+    --sidebar-primary-foreground: oklch(1 0 0);
+    --sidebar-accent: oklch(0.94 0.028 247);
+    --sidebar-accent-foreground: oklch(0.38 0.11 249);
+    --sidebar-border: oklch(0.915 0.009 249);
+    --sidebar-ring: var(--brand);
+
+    /* Reader typography — overridden per device from lib/reader-settings.ts. */
     --reader-measure: 760px;
     --reader-font-size: 17px;
     --reader-zh-scale: 0.96;
     --reader-line: 1.78;
-
-    --radius: 0.75rem;
-    --background: #f6f8fb;
-    --foreground: #172033;
-    --card: #ffffff;
-    --card-foreground: #172033;
-    --popover: #ffffff;
-    --popover-foreground: #172033;
-    --primary: #018eee;
-    --primary-foreground: #ffffff;
-    --secondary: #eaf4fc;
-    --secondary-foreground: #0b4f7c;
-    --muted: #eef2f7;
-    --muted-foreground: #687386;
-    --accent: #e1f2ff;
-    --accent-foreground: #0069ae;
-    --destructive: #dc2626;
-    --destructive-foreground: #ffffff;
-    --success: #0f9f6e;
-    --success-foreground: #ffffff;
-    --border: #dce4ee;
-    --input: #cad5e2;
-    --ring: #018eee;
-    --chart-1: #018eee;
-    --chart-2: #00a7c4;
-    --chart-3: #6d73e8;
-    --chart-4: #19a974;
-    --chart-5: #f59e0b;
-    --sidebar: #f0f6fb;
-    --sidebar-foreground: #23324a;
-    --sidebar-primary: #018eee;
-    --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #dcedfa;
-    --sidebar-accent-foreground: #075d96;
-    --sidebar-border: #d7e3ee;
-    --sidebar-ring: #018eee;
   }
 
-  :root[data-theme="dark"],
-  :root.dark {
+  .dark {
     color-scheme: dark;
-    --background: #050608;
-    --foreground: #eef2f7;
-    --card: #0c0f13;
-    --card-foreground: #eef2f7;
-    --popover: #11151b;
-    --popover-foreground: #eef2f7;
-    --primary: #018eee;
-    --primary-foreground: #ffffff;
-    --secondary: #111a23;
-    --secondary-foreground: #dceaf5;
-    --muted: #14191f;
-    --muted-foreground: #929dac;
-    --accent: #0e2638;
-    --accent-foreground: #8bcdf8;
-    --destructive: #f05252;
-    --destructive-foreground: #ffffff;
-    --success: #34c58a;
-    --success-foreground: #062d20;
-    --border: #222a33;
-    --input: #303a46;
-    --ring: #018eee;
-    --chart-1: #018eee;
-    --chart-2: #23bad3;
-    --chart-3: #8d92ff;
-    --chart-4: #3fd59a;
-    --chart-5: #f8b84e;
-    --sidebar: #080a0d;
-    --sidebar-foreground: #e2e8f0;
-    --sidebar-primary: #018eee;
-    --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #101c26;
-    --sidebar-accent-foreground: #acdafa;
-    --sidebar-border: #1f2730;
-    --sidebar-ring: #018eee;
+
+    --background: oklch(0.15 0.008 258);
+    --foreground: oklch(0.96 0.004 249);
+    --card: oklch(0.192 0.01 258);
+    --card-foreground: oklch(0.96 0.004 249);
+    --popover: oklch(0.215 0.011 258);
+    --popover-foreground: oklch(0.96 0.004 249);
+    --primary: var(--brand);
+    --primary-foreground: oklch(1 0 0);
+    --secondary: oklch(0.255 0.014 256);
+    --secondary-foreground: oklch(0.93 0.008 249);
+    --muted: oklch(0.238 0.012 258);
+    --muted-foreground: oklch(0.7 0.017 253);
+    --accent: oklch(0.305 0.048 246);
+    --accent-foreground: oklch(0.85 0.09 240);
+    --destructive: oklch(0.68 0.19 24);
+    --destructive-foreground: oklch(0.98 0 0);
+    --success: oklch(0.72 0.15 160);
+    --success-foreground: oklch(0.18 0.04 160);
+    --warning: oklch(0.79 0.15 75);
+    --warning-foreground: oklch(0.24 0.06 62);
+    --border: oklch(1 0 0 / 11%);
+    --input: oklch(1 0 0 / 17%);
+    --ring: var(--brand);
+
+    --chart-1: var(--brand);
+    --chart-2: oklch(0.75 0.12 205);
+    --chart-3: oklch(0.7 0.14 285);
+    --chart-4: oklch(0.76 0.13 158);
+    --chart-5: oklch(0.82 0.14 78);
+
+    --sidebar: oklch(0.175 0.009 258);
+    --sidebar-foreground: oklch(0.92 0.006 249);
+    --sidebar-primary: var(--brand);
+    --sidebar-primary-foreground: oklch(1 0 0);
+    --sidebar-accent: oklch(0.285 0.042 246);
+    --sidebar-accent-foreground: oklch(0.87 0.08 240);
+    --sidebar-border: oklch(1 0 0 / 9%);
+    --sidebar-ring: var(--brand);
   }
 
-  @media (prefers-color-scheme: dark) {
-    :root[data-theme="auto"] {
-      color-scheme: dark;
-      --background: #050608;
-      --foreground: #eef2f7;
-      --card: #0c0f13;
-      --card-foreground: #eef2f7;
-      --popover: #11151b;
-      --popover-foreground: #eef2f7;
-      --primary: #018eee;
-      --primary-foreground: #ffffff;
-      --secondary: #111a23;
-      --secondary-foreground: #dceaf5;
-      --muted: #14191f;
-      --muted-foreground: #929dac;
-      --accent: #0e2638;
-      --accent-foreground: #8bcdf8;
-      --destructive: #f05252;
-      --destructive-foreground: #ffffff;
-      --success: #34c58a;
-      --success-foreground: #062d20;
-      --border: #222a33;
-      --input: #303a46;
-      --ring: #018eee;
-      --sidebar: #080a0d;
-      --sidebar-foreground: #e2e8f0;
-      --sidebar-primary: #018eee;
-      --sidebar-primary-foreground: #ffffff;
-      --sidebar-accent: #101c26;
-      --sidebar-accent-foreground: #acdafa;
-      --sidebar-border: #1f2730;
-      --sidebar-ring: #018eee;
-    }
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    scroll-behavior: smooth;
   }
 
   html,
   body {
     min-width: 320px;
     min-height: 100%;
-    background: var(--background);
-    color: var(--foreground);
   }
+
   body {
+    background-color: var(--background);
+    color: var(--foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-    background-image:
-      radial-gradient(circle at 4% 0%, color-mix(in srgb, var(--primary) 8%, transparent), transparent 30rem),
-      radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--primary) 5%, transparent), transparent 36rem);
-    background-attachment: fixed;
   }
-  * {
-    border-color: var(--border);
-  }
+
   button:not(:disabled),
   [role="button"]:not(:disabled) {
     cursor: pointer;
   }
+
   ::selection {
-    background: color-mix(in srgb, var(--primary) 24%, transparent);
+    background: color-mix(in oklch, var(--primary) 24%, transparent);
+  }
+
+  /* Keep the scrollbar in the same colour family as the surfaces it sits on. */
+  * {
+    scrollbar-color: color-mix(in oklch, var(--foreground) 22%, transparent)
+      transparent;
+    scrollbar-width: thin;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
-.surface {
-  background: color-mix(in srgb, var(--card) 88%, transparent);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+/* ---------------------------------------------------------------------------
+ * App-level utilities
+ * ------------------------------------------------------------------------- */
+
+/* The signature soft brand wash behind the app shell. Painted on an element
+ * rather than <body> so it scrolls with the page and never bleeds through
+ * sticky, translucent chrome. */
+@utility brand-wash {
+  background-image:
+    radial-gradient(
+      70rem 40rem at 0% -10%,
+      color-mix(in oklch, var(--primary) 7%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      60rem 40rem at 110% 0%,
+      color-mix(in oklch, var(--primary) 4%, transparent),
+      transparent 70%
+    );
+  background-repeat: no-repeat;
 }
 
-.rule {
-  border-color: var(--border);
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
-.text-muted {
-  color: var(--muted-foreground);
+.fade-in {
+  animation: fade-in 200ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
-.bg-paper {
-  background: var(--background);
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
-.bg-surface {
-  background: color-mix(in srgb, var(--card) 88%, transparent);
-}
+/* ---------------------------------------------------------------------------
+ * Reader typography
+ *
+ * AO3 exports arbitrary author HTML, so the reader restores the element
+ * semantics Tailwind Preflight strips instead of relying on a prose plugin.
+ * ------------------------------------------------------------------------- */
 
 .prose-reader {
   font-family: var(--font-serif);
@@ -252,6 +361,7 @@
 .prose-reader i {
   font-style: italic;
 }
+
 .prose-reader strong,
 .prose-reader b {
   font-weight: 600;
@@ -288,9 +398,10 @@
 .prose-reader h4,
 .prose-reader h5,
 .prose-reader h6 {
-  font-family: var(--font-sans);
+  font-family: var(--font-heading);
   font-weight: 650;
-  line-height: 1.12;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
 }
 
 .prose-reader h1 {
@@ -336,15 +447,15 @@
 
 .prose-reader pre {
   overflow-x: auto;
-  border-radius: 0.5rem;
-  background: var(--card);
+  border-radius: var(--radius-md);
+  background: var(--muted);
   padding: 0.9em 1em;
   white-space: pre-wrap;
 }
 
 .prose-reader code,
 .prose-reader pre {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 0.92em;
 }
 
@@ -352,6 +463,7 @@
   display: block;
   max-width: 100%;
   height: auto;
+  border-radius: var(--radius-md);
 }
 
 .prose-reader table {
@@ -398,6 +510,7 @@
   text-align: justify;
 }
 
+/* The Chinese line under each source paragraph. */
 .zh-shadow {
   font-size: calc(var(--reader-font-size) * var(--reader-zh-scale));
   color: var(--muted-foreground);
@@ -405,29 +518,11 @@
   font-family: var(--font-serif);
 }
 
-.fade-in {
-  animation: fadeIn 220ms ease both;
-}
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* Reading focus: dim everything but the paragraph under the pointer. */
+.reader-focus .reader-block {
+  transition: opacity 200ms ease;
 }
 
-@keyframes overlayShow {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@keyframes overlayHide {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
-@keyframes contentShow {
-  from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
-  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.reader-focus .reader-block:not(:hover):not(:focus-within) {
+  opacity: 0.42;
 }
