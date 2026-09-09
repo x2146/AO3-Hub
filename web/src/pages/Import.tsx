@@ -24,17 +24,20 @@ import {
 } from "@/components/ui/card";
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
   FieldLegend,
   FieldSet,
+  FieldTitle,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { PageHeader } from "@/components/PageHeader";
 import { cn } from "@/lib/utils";
 import { api } from "../lib/api";
 
@@ -49,7 +52,7 @@ const MODE_COPY: Record<TranslationMode, { label: string; blurb: string }> = {
   refined: {
     label: "精翻模式",
     blurb:
-      "先通读全文，生成摘要、角色术语与叙事基调，再分块翻译。质量更高，首次处理时间和 token 成本也更高。",
+      "先通读全文，生成摘要、角色术语与叙事基调，再分块翻译。质量更高，首次处理更慢、token 成本也更高。",
   },
 };
 
@@ -82,8 +85,6 @@ export function ImportPage() {
     queryFn: ({ signal }) => api.getPublicConfig(signal),
   });
   const defaultMode = config?.llm.mode;
-  const effectiveMode: TranslationMode | undefined =
-    modeChoice === "default" ? defaultMode : modeChoice;
   const requestMode = modeChoice === "default" ? undefined : modeChoice;
 
   const onDone = (id: string) => {
@@ -192,21 +193,25 @@ export function ImportPage() {
 
   return (
     <div className="fade-in flex flex-col gap-6">
-      <header className="flex flex-col gap-2">
-        <h1 className="cn-font-heading text-2xl font-semibold tracking-tight sm:text-3xl">
-          添加新作品
-        </h1>
-        <p className="max-w-2xl text-sm text-muted-foreground">
-          上传 AO3「Download → HTML」导出的文件，或粘贴作品链接由服务端自动抓取。两种方式都会在后台创建翻译任务。
-        </p>
-      </header>
+      <PageHeader
+        title="添加作品"
+        description="上传 AO3「Download → HTML」导出的文件，或粘贴作品链接由服务端抓取。导入后会直接进入阅读器，翻译在后台继续。"
+      />
 
-      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle />
+          <AlertTitle>导入失败</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card>
           <CardHeader>
             <CardTitle>作品来源</CardTitle>
             <CardDescription>
-              导入成功后会直接跳转到阅读器，翻译在后台继续。
+              也可以把文件拖到页面任意位置，或直接粘贴 AO3 链接。
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -217,7 +222,7 @@ export function ImportPage() {
                 setError(null);
               }}
             >
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="w-full">
                 <TabsTrigger value="upload" disabled={isPending}>
                   <UploadCloud data-icon="inline-start" />
                   上传 HTML
@@ -231,10 +236,8 @@ export function ImportPage() {
               <TabsContent value="upload">
                 <label
                   className={cn(
-                    "flex min-h-64 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-8 text-center transition-colors",
-                    dragOver
-                      ? "border-primary bg-primary/5"
-                      : "border-border",
+                    "flex min-h-60 flex-col items-center justify-center gap-4 rounded-xl border border-dashed p-8 text-center transition-colors",
+                    dragOver ? "border-primary bg-primary/5" : "border-input",
                     isPending
                       ? "pointer-events-none opacity-60"
                       : "cursor-pointer hover:border-primary/50 hover:bg-muted/50",
@@ -250,8 +253,12 @@ export function ImportPage() {
                     }}
                     disabled={isPending}
                   />
-                  <div className="flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                    {upload.isPending ? <Spinner /> : <UploadCloud />}
+                  <div className="flex size-10 items-center justify-center rounded-lg bg-muted text-foreground">
+                    {upload.isPending ? (
+                      <Spinner />
+                    ) : (
+                      <UploadCloud className="size-5" />
+                    )}
                   </div>
                   <div className="flex flex-col gap-1">
                     <p className="text-sm font-medium">
@@ -259,13 +266,12 @@ export function ImportPage() {
                         ? "正在解析作品…"
                         : dragOver
                           ? "松手即可导入"
-                          : "把 HTML 拖到页面任意位置"}
+                          : "拖入 HTML 文件，或点击选择"}
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      或点击选择 AO3 原始 HTML 导出文件
+                      接受 AO3 原始导出的 .html 文件
                     </p>
                   </div>
-                  <Badge variant="secondary">.html</Badge>
                 </label>
               </TabsContent>
 
@@ -284,7 +290,7 @@ export function ImportPage() {
                       data-disabled={isPending || undefined}
                       data-invalid={hint ? true : undefined}
                     >
-                      <FieldLabel htmlFor="ao3-url">AO3 work URL</FieldLabel>
+                      <FieldLabel htmlFor="ao3-url">AO3 作品链接</FieldLabel>
                       <Input
                         id="ao3-url"
                         type="url"
@@ -301,7 +307,8 @@ export function ImportPage() {
                         <FieldError>{hint}</FieldError>
                       ) : (
                         <FieldDescription>
-                          受限或 Explicit 作品可能需要先在设置中填写 AO3 Cookie。
+                          受限或 Explicit 作品可能需要先在设置中填写 AO3
+                          Cookie。
                         </FieldDescription>
                       )}
                     </Field>
@@ -340,73 +347,85 @@ export function ImportPage() {
             <CardTitle>翻译策略</CardTitle>
             <CardDescription>为这次导入选择速度与质量的平衡。</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4">
+          <CardContent>
             <FieldSet data-disabled={isPending || undefined}>
               <FieldLegend className="sr-only">翻译模式</FieldLegend>
-              <ToggleGroup
-                type="single"
+              <RadioGroup
                 value={modeChoice}
-                onValueChange={(value) => value && setModeChoice(value as ModeChoice)}
-                variant="outline"
-                spacing={2}
-                className="flex w-full flex-col items-stretch"
+                onValueChange={(value) => setModeChoice(value as ModeChoice)}
                 disabled={isPending}
               >
-                <ToggleGroupItem value="default" className="justify-start">
-                  <Gauge data-icon="inline-start" />
-                  跟随默认
-                  {defaultMode && (
-                    <Badge variant="secondary" className="ml-auto">
-                      {MODE_COPY[defaultMode].label}
-                    </Badge>
-                  )}
-                </ToggleGroupItem>
-                <ToggleGroupItem value="normal" className="justify-start">
-                  <FileCode2 data-icon="inline-start" />
-                  {MODE_COPY.normal.label}
-                </ToggleGroupItem>
-                <ToggleGroupItem value="refined" className="justify-start">
-                  <Sparkles data-icon="inline-start" />
-                  {MODE_COPY.refined.label}
-                </ToggleGroupItem>
-              </ToggleGroup>
+                <ModeOption
+                  value="default"
+                  icon={Gauge}
+                  title="跟随默认"
+                  badge={defaultMode ? MODE_COPY[defaultMode].label : undefined}
+                  description="使用设置页里配置的默认模式。"
+                />
+                <ModeOption
+                  value="normal"
+                  icon={FileCode2}
+                  title={MODE_COPY.normal.label}
+                  description={MODE_COPY.normal.blurb}
+                />
+                <ModeOption
+                  value="refined"
+                  icon={Sparkles}
+                  title={MODE_COPY.refined.label}
+                  description={MODE_COPY.refined.blurb}
+                />
+              </RadioGroup>
               <FieldDescription>
-                {effectiveMode === undefined
-                  ? "默认模式暂未读取，将使用服务端配置。"
-                  : MODE_COPY[effectiveMode].blurb}
+                长篇、设定密集的作品优先选精翻；短篇或只想快速预览时用普通模式。导入后仍可在翻译状态面板里重新预读。
               </FieldDescription>
             </FieldSet>
-
-            <Alert>
-              <Sparkles />
-              <AlertTitle>怎么选</AlertTitle>
-              <AlertDescription>
-                长篇、设定密集的作品优先选精翻；短篇或只想快速预览时用普通模式。导入后仍可在翻译状态面板里重新预读。
-              </AlertDescription>
-            </Alert>
           </CardContent>
         </Card>
       </div>
-
-      {error && (
-        <Alert variant="destructive">
-          <AlertCircle />
-          <AlertTitle>导入失败</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
 
       {dragOver && (
         <div
           className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm"
           aria-hidden
         >
-          <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-primary bg-card px-10 py-8 text-center">
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-primary bg-card px-10 py-8 text-center shadow-lg">
             <UploadCloud className="size-8 text-primary" />
             <p className="text-sm font-medium">松手即可导入 HTML</p>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+/** A selectable card: the shadcn "choice card" recipe built from Field + Radio. */
+function ModeOption({
+  value,
+  icon: Icon,
+  title,
+  badge,
+  description,
+}: {
+  value: ModeChoice;
+  icon: typeof Gauge;
+  title: string;
+  badge?: string;
+  description: string;
+}) {
+  const id = `mode-${value}`;
+  return (
+    <FieldLabel htmlFor={id}>
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldTitle>
+            <Icon className="size-4 text-muted-foreground" />
+            {title}
+            {badge && <Badge variant="secondary">{badge}</Badge>}
+          </FieldTitle>
+          <FieldDescription>{description}</FieldDescription>
+        </FieldContent>
+        <RadioGroupItem value={value} id={id} />
+      </Field>
+    </FieldLabel>
   );
 }

@@ -31,11 +31,13 @@ import {
 } from "@/components/ui/card";
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldGroup,
   FieldLabel,
   FieldLegend,
   FieldSet,
+  FieldTitle,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -44,6 +46,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { PageHeader } from "@/components/PageHeader";
 import { api, type ConfigUpdate } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
@@ -137,9 +140,10 @@ export function Settings() {
   const [baseline, setBaseline] = useState<string | null>(null);
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
   const [cookieDirty, setCookieDirty] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(
-    null,
-  );
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    msg: string;
+  } | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -320,19 +324,26 @@ export function Settings() {
 
   return (
     <div className="fade-in mx-auto flex w-full max-w-4xl flex-col gap-6">
-      <header className="flex flex-col gap-2">
-        <h1 className="cn-font-heading text-2xl font-semibold tracking-tight sm:text-3xl">
-          服务设置
-        </h1>
-        <p className="max-w-3xl text-sm text-muted-foreground">
-          配置服务监听、LLM Provider、AO3 凭据、阅读器默认值与 OTA 更新。所有配置保存在服务端的{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">data/config.json</code>。
-        </p>
-      </header>
+      <PageHeader
+        title="设置"
+        description={
+          <>
+            服务监听、LLM Provider、AO3 凭据、阅读器默认值与 OTA
+            更新。所有配置保存在服务端的{" "}
+            <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs">
+              data/config.json
+            </code>
+            。
+          </>
+        }
+      />
 
       <fieldset disabled={save.isPending} className="contents">
-        <Tabs defaultValue="server">
-          <TabsList className="w-full overflow-x-auto">
+        <Tabs defaultValue="server" className="gap-5">
+          <TabsList
+            variant="line"
+            className="no-scrollbar w-full justify-start gap-3 overflow-x-auto *:flex-none"
+          >
             <TabsTrigger value="server">
               <ServerCog data-icon="inline-start" />
               服务
@@ -438,7 +449,10 @@ export function Settings() {
                       onChange={(e) =>
                         patch((c) => ({
                           ...c,
-                          auth: { ...c.auth, sessionTtlDays: Number(e.target.value) },
+                          auth: {
+                            ...c.auth,
+                            sessionTtlDays: Number(e.target.value),
+                          },
                         }))
                       }
                     />
@@ -457,7 +471,10 @@ export function Settings() {
                       onChange={(e) =>
                         patch((c) => ({
                           ...c,
-                          stream: { ...c.stream, heartbeatMs: Number(e.target.value) },
+                          stream: {
+                            ...c.stream,
+                            heartbeatMs: Number(e.target.value),
+                          },
                         }))
                       }
                     />
@@ -520,9 +537,11 @@ export function Settings() {
                     type="single"
                     value={form.llm.apiType}
                     onValueChange={(value) =>
-                      value && setLlmAPIType(value as LocalConfig["llm"]["apiType"])
+                      value &&
+                      setLlmAPIType(value as LocalConfig["llm"]["apiType"])
                     }
                     variant="outline"
+                    spacing={0}
                     className="flex-wrap"
                   >
                     <ToggleGroupItem value="openai-compatible">
@@ -532,11 +551,18 @@ export function Settings() {
                       Claude Messages
                     </ToggleGroupItem>
                   </ToggleGroup>
+                  <FieldDescription>
+                    {form.llm.apiType === "claude-messages"
+                      ? "使用 Anthropic Messages API（/v1/messages）。"
+                      : "使用 OpenAI 风格的 /chat/completions，兼容 DeepSeek、OpenRouter 等。"}
+                  </FieldDescription>
                 </FieldSet>
                 <SettingField id="llm-baseurl" label="Base URL">
                   <Input
                     id="llm-baseurl"
-                    placeholder={LLM_PROVIDER_DEFAULTS[form.llm.apiType].baseURL}
+                    placeholder={
+                      LLM_PROVIDER_DEFAULTS[form.llm.apiType].baseURL
+                    }
                     value={form.llm.baseURL}
                     onChange={(e) =>
                       patch((c) => ({
@@ -622,7 +648,10 @@ export function Settings() {
                       onChange={(e) =>
                         patch((c) => ({
                           ...c,
-                          llm: { ...c.llm, temperature: Number(e.target.value) },
+                          llm: {
+                            ...c.llm,
+                            temperature: Number(e.target.value),
+                          },
                         }))
                       }
                     />
@@ -636,7 +665,10 @@ export function Settings() {
                       onChange={(e) =>
                         patch((c) => ({
                           ...c,
-                          llm: { ...c.llm, concurrency: Number(e.target.value) },
+                          llm: {
+                            ...c.llm,
+                            concurrency: Number(e.target.value),
+                          },
                         }))
                       }
                     />
@@ -693,29 +725,23 @@ export function Settings() {
                       onChange={(e) =>
                         patch((c) => ({
                           ...c,
-                          llm: { ...c.llm, maxAutoRetries: Number(e.target.value) },
+                          llm: {
+                            ...c.llm,
+                            maxAutoRetries: Number(e.target.value),
+                          },
                         }))
                       }
                     />
                   </SettingField>
-                  <Field
-                    orientation="horizontal"
-                    className="self-start rounded-lg border p-3"
-                  >
-                    <FieldLabel htmlFor="llm-stream" className="font-normal">
-                      流式 LLM 请求
-                      <FieldDescription>
-                        以 SSE 接收响应，降低长请求超时的概率。
-                      </FieldDescription>
-                    </FieldLabel>
-                    <Switch
-                      id="llm-stream"
-                      checked={form.llm.stream}
-                      onCheckedChange={(v) =>
-                        patch((c) => ({ ...c, llm: { ...c.llm, stream: v } }))
-                      }
-                    />
-                  </Field>
+                  <SwitchField
+                    id="llm-stream"
+                    title="流式请求"
+                    description="以 SSE 接收响应，降低长请求超时的概率。"
+                    checked={form.llm.stream}
+                    onCheckedChange={(v) =>
+                      patch((c) => ({ ...c, llm: { ...c.llm, stream: v } }))
+                    }
+                  />
                 </div>
               </FieldGroup>
             </SettingsCard>
@@ -734,10 +760,14 @@ export function Settings() {
                       value &&
                       patch((c) => ({
                         ...c,
-                        llm: { ...c.llm, mode: value as LocalConfig["llm"]["mode"] },
+                        llm: {
+                          ...c.llm,
+                          mode: value as LocalConfig["llm"]["mode"],
+                        },
                       }))
                     }
                     variant="outline"
+                    spacing={0}
                     className="flex-wrap"
                   >
                     <ToggleGroupItem value="normal">普通</ToggleGroupItem>
@@ -851,7 +881,10 @@ export function Settings() {
                       onChange={(e) =>
                         patch((c) => ({
                           ...c,
-                          reader: { ...c.reader, defaultFont: Number(e.target.value) },
+                          reader: {
+                            ...c.reader,
+                            defaultFont: Number(e.target.value),
+                          },
                         }))
                       }
                     />
@@ -920,6 +953,7 @@ export function Settings() {
                     value={form.update.channel}
                     onValueChange={(value) => value && setUpdateChannel(value)}
                     variant="outline"
+                    spacing={0}
                   >
                     <ToggleGroupItem value="stable">stable</ToggleGroupItem>
                     <ToggleGroupItem value="dev">dev</ToggleGroupItem>
@@ -931,7 +965,9 @@ export function Settings() {
                 <SettingField id="ota-manifest" label="Manifest URL">
                   <Input
                     id="ota-manifest"
-                    placeholder={defaultManifestURLForChannel(form.update.channel)}
+                    placeholder={defaultManifestURLForChannel(
+                      form.update.channel,
+                    )}
                     value={form.update.manifestURL}
                     onChange={(e) =>
                       patch((c) => ({
@@ -964,27 +1000,18 @@ export function Settings() {
                       }
                     />
                   </SettingField>
-                  <Field
-                    orientation="horizontal"
-                    className="self-start rounded-lg border p-3"
-                  >
-                    <FieldLabel htmlFor="ota-auto" className="font-normal">
-                      启动时自动检查更新
-                      <FieldDescription>
-                        只检查，不会自动安装。
-                      </FieldDescription>
-                    </FieldLabel>
-                    <Switch
-                      id="ota-auto"
-                      checked={form.update.autoCheck}
-                      onCheckedChange={(v) =>
-                        patch((c) => ({
-                          ...c,
-                          update: { ...c.update, autoCheck: v },
-                        }))
-                      }
-                    />
-                  </Field>
+                  <SwitchField
+                    id="ota-auto"
+                    title="启动时自动检查更新"
+                    description="只检查，不会自动安装。"
+                    checked={form.update.autoCheck}
+                    onCheckedChange={(v) =>
+                      patch((c) => ({
+                        ...c,
+                        update: { ...c.update, autoCheck: v },
+                      }))
+                    }
+                  />
                 </div>
               </FieldGroup>
             </SettingsCard>
@@ -1000,25 +1027,27 @@ export function Settings() {
         </Alert>
       )}
 
-      <div className="sticky bottom-4 z-20 flex flex-wrap items-center gap-3 rounded-xl border bg-popover/95 p-3 shadow-lg backdrop-blur-md">
-        <Button onClick={onSave} disabled={save.isPending || !dirty}>
-          {save.isPending && <Spinner data-icon="inline-start" />}
-          {save.isPending ? "保存中" : "保存设置"}
-        </Button>
-        <Button
-          variant="ghost"
-          onClick={onDiscard}
-          disabled={save.isPending || !dirty}
-        >
-          <Undo2 data-icon="inline-start" />
-          放弃修改
-        </Button>
+      <div className="sticky bottom-4 z-20 flex items-center gap-2 rounded-xl bg-popover/95 p-2 pl-3 text-sm ring-1 ring-foreground/10 shadow-lg backdrop-blur-md">
         <span
           aria-live="polite"
-          className="ml-auto text-xs text-muted-foreground"
+          className="min-w-0 truncate text-muted-foreground"
         >
           {dirty ? "有未保存的修改" : "所有修改已保存"}
         </span>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          <Button
+            variant="ghost"
+            onClick={onDiscard}
+            disabled={save.isPending || !dirty}
+          >
+            <Undo2 data-icon="inline-start" />
+            放弃
+          </Button>
+          <Button onClick={onSave} disabled={save.isPending || !dirty}>
+            {save.isPending && <Spinner data-icon="inline-start" />}
+            {save.isPending ? "保存中" : "保存"}
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -1041,6 +1070,34 @@ function SettingField({
       {children}
       {description && <FieldDescription>{description}</FieldDescription>}
     </Field>
+  );
+}
+
+/** The shadcn "choice card" recipe: a labelled, bordered row that toggles a
+ * Switch when clicked anywhere. */
+function SwitchField({
+  id,
+  title,
+  description,
+  checked,
+  onCheckedChange,
+}: {
+  id: string;
+  title: string;
+  description: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <FieldLabel htmlFor={id} className="self-start">
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldTitle>{title}</FieldTitle>
+          <FieldDescription>{description}</FieldDescription>
+        </FieldContent>
+        <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
+      </Field>
+    </FieldLabel>
   );
 }
 
@@ -1068,7 +1125,7 @@ function SettingsSkeleton() {
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
       <div className="flex flex-col gap-2">
-        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-8 w-24" />
         <Skeleton className="h-5 w-3/4" />
       </div>
       <Skeleton className="h-8 w-full max-w-md" />

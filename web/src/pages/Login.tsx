@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { BookOpenText, Eye, EyeOff, LogIn } from "lucide-react";
+import { Eye, EyeOff, LogIn } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +20,7 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { Spinner } from "@/components/ui/spinner";
+import { BrandMark } from "@/components/BrandMark";
 import { useAuth } from "../lib/auth";
 
 export function LoginPage() {
@@ -58,12 +59,15 @@ export function LoginPage() {
   return (
     <div className="fade-in mx-auto flex min-h-[calc(100svh-11rem)] w-full max-w-sm items-center">
       <Card className="w-full">
-        <CardHeader className="items-center gap-3 text-center">
-          <div className="mx-auto flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <BookOpenText className="size-5" />
-          </div>
+        <CardHeader className="items-center text-center">
+          <BrandMark
+            className="mx-auto mb-2 size-10 rounded-xl"
+            glyphClassName="size-5"
+          />
           <CardTitle className="text-lg">欢迎回来</CardTitle>
-          <CardDescription>登录后导入作品、管理翻译并继续阅读。</CardDescription>
+          <CardDescription>
+            登录后导入作品、管理翻译并继续阅读。
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form id="login-form" onSubmit={onSubmit}>
@@ -127,7 +131,6 @@ export function LoginPage() {
           <Button
             form="login-form"
             type="submit"
-            size="lg"
             className="w-full"
             disabled={submitting || !username.trim() || !password}
           >

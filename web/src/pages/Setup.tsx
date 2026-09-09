@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { BrandMark } from "@/components/BrandMark";
 import { useAuth } from "../lib/auth";
 
 type InvalidField = "username" | "password" | "confirm" | "form" | null;
@@ -74,10 +75,11 @@ export function SetupPage() {
   return (
     <div className="fade-in mx-auto flex min-h-[calc(100svh-11rem)] w-full max-w-md items-center">
       <Card className="w-full">
-        <CardHeader className="items-center gap-3 text-center">
-          <div className="mx-auto flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <ShieldCheck className="size-5" />
-          </div>
+        <CardHeader className="items-center text-center">
+          <BrandMark
+            className="mx-auto mb-2 size-10 rounded-xl"
+            glyphClassName="size-5"
+          />
           <CardTitle className="text-lg">初始化 AO3 Hub</CardTitle>
           <CardDescription>
             创建第一个管理员账号。完成后可在用户页面继续添加普通用户或管理员。
@@ -127,7 +129,9 @@ export function SetupPage() {
                 {invalidField === "password" ? (
                   <FieldError>{error}</FieldError>
                 ) : (
-                  <FieldDescription>至少 {PASSWORD_MIN} 个字符。</FieldDescription>
+                  <FieldDescription>
+                    至少 {PASSWORD_MIN} 个字符。
+                  </FieldDescription>
                 )}
               </Field>
               <Field
@@ -161,7 +165,6 @@ export function SetupPage() {
           <Button
             form="setup-form"
             type="submit"
-            size="lg"
             className="w-full"
             disabled={submitting || !username || !password || !confirm}
           >

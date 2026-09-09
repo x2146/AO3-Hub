@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { Fragment, FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -60,12 +60,14 @@ import {
 } from "@/components/ui/empty";
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
   FieldLegend,
   FieldSet,
+  FieldTitle,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -75,13 +77,17 @@ import {
   ItemDescription,
   ItemGroup,
   ItemMedia,
+  ItemSeparator,
   ItemTitle,
 } from "@/components/ui/item";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { PageHeader } from "@/components/PageHeader";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
+
+const ROLE_LABEL: Record<Role, string> = { admin: "管理员", user: "普通用户" };
 
 export function UsersPage() {
   const navigate = useNavigate();
@@ -124,7 +130,7 @@ export function UsersPage() {
       toast.success(
         input.password
           ? `已重置「${result.user.username}」的密码`
-          : `「${result.user.username}」现在是 ${result.user.role}`,
+          : `「${result.user.username}」现在是${ROLE_LABEL[result.user.role]}`,
       );
       return invalidate();
     },
@@ -152,24 +158,16 @@ export function UsersPage() {
 
   return (
     <div className="fade-in mx-auto flex w-full max-w-3xl flex-col gap-6">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex min-w-0 flex-col gap-2">
-          <h1 className="cn-font-heading text-2xl font-semibold tracking-tight sm:text-3xl">
-            用户管理
-          </h1>
-          <p className="max-w-2xl text-sm text-muted-foreground">
-            普通用户可以导入和阅读，管理员还可以管理用户与服务配置。
-          </p>
-        </div>
-        <Button
-          size="lg"
-          onClick={() => setShowCreate(true)}
-          disabled={mutating}
-        >
-          <UserPlus data-icon="inline-start" />
-          新建用户
-        </Button>
-      </header>
+      <PageHeader
+        title="用户"
+        description="普通用户可以导入和阅读，管理员还可以管理用户与服务配置。"
+        actions={
+          <Button onClick={() => setShowCreate(true)} disabled={mutating}>
+            <UserPlus data-icon="inline-start" />
+            新建用户
+          </Button>
+        }
+      />
 
       <Card>
         <CardHeader>
@@ -206,82 +204,94 @@ export function UsersPage() {
               </EmptyContent>
             </Empty>
           ) : (
-            <ItemGroup>
-              {users.map((user) => {
+            <ItemGroup className="gap-0">
+              {users.map((user, index) => {
                 const isSelf = user.id === me.id;
                 return (
-                  <Item key={user.id} variant="outline" role="listitem">
-                    <ItemMedia variant="icon">
-                      {user.role === "admin" ? <ShieldCheck /> : <UserRound />}
-                    </ItemMedia>
-                    <ItemContent>
-                      <ItemTitle>
-                        {user.username}
-                        <Badge
-                          variant={
-                            user.role === "admin" ? "accent" : "secondary"
-                          }
-                        >
-                          {user.role}
-                        </Badge>
-                        {isSelf && <Badge variant="outline">你</Badge>}
-                      </ItemTitle>
-                      <ItemDescription>
-                        创建于 {user.createdAt.slice(0, 10)} ·{" "}
-                        {user.role === "admin"
-                          ? "可管理用户、翻译服务与更新"
-                          : "可导入作品并阅读"}
-                      </ItemDescription>
-                    </ItemContent>
-                    <ItemActions>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            disabled={mutating}
-                            aria-label={`「${user.username}」的操作`}
+                  <Fragment key={user.id}>
+                    {index > 0 && <ItemSeparator className="my-0" />}
+                    <Item role="listitem" className="px-1">
+                      <ItemMedia
+                        variant="icon"
+                        className="size-8 rounded-lg bg-muted text-muted-foreground"
+                      >
+                        {user.role === "admin" ? (
+                          <ShieldCheck />
+                        ) : (
+                          <UserRound />
+                        )}
+                      </ItemMedia>
+                      <ItemContent>
+                        <ItemTitle>
+                          {user.username}
+                          <Badge
+                            variant={
+                              user.role === "admin" ? "accent" : "secondary"
+                            }
                           >
-                            <MoreHorizontal />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="min-w-48">
-                          <DropdownMenuGroup>
-                            <DropdownMenuItem
-                              disabled={isSelf}
-                              onSelect={() =>
-                                update.mutate({
-                                  id: user.id,
-                                  role:
-                                    user.role === "admin" ? "user" : "admin",
-                                })
-                              }
+                            {ROLE_LABEL[user.role]}
+                          </Badge>
+                          {isSelf && <Badge variant="outline">你</Badge>}
+                        </ItemTitle>
+                        <ItemDescription>
+                          创建于 {user.createdAt.slice(0, 10)} ·{" "}
+                          {user.role === "admin"
+                            ? "可管理用户、翻译服务与更新"
+                            : "可导入作品并阅读"}
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              disabled={mutating}
+                              aria-label={`「${user.username}」的操作`}
                             >
-                              <ShieldCheck />
-                              设为 {user.role === "admin" ? "user" : "admin"}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onSelect={() => setResetTarget(user)}
-                            >
-                              <KeyRound />
-                              重置密码
-                            </DropdownMenuItem>
-                          </DropdownMenuGroup>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuGroup>
-                            <DropdownMenuItem
-                              variant="destructive"
-                              disabled={isSelf}
-                              onSelect={() => setDeleteTarget(user)}
-                            >
-                              <Trash2 />
-                              删除用户
-                            </DropdownMenuItem>
-                          </DropdownMenuGroup>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </ItemActions>
-                  </Item>
+                              <MoreHorizontal />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="min-w-48">
+                            <DropdownMenuGroup>
+                              <DropdownMenuItem
+                                disabled={isSelf}
+                                onSelect={() =>
+                                  update.mutate({
+                                    id: user.id,
+                                    role:
+                                      user.role === "admin" ? "user" : "admin",
+                                  })
+                                }
+                              >
+                                <ShieldCheck />
+                                {user.role === "admin"
+                                  ? "降为普通用户"
+                                  : "设为管理员"}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onSelect={() => setResetTarget(user)}
+                              >
+                                <KeyRound />
+                                重置密码
+                              </DropdownMenuItem>
+                            </DropdownMenuGroup>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuGroup>
+                              <DropdownMenuItem
+                                variant="destructive"
+                                disabled={isSelf}
+                                onSelect={() => setDeleteTarget(user)}
+                              >
+                                <Trash2 />
+                                删除用户
+                              </DropdownMenuItem>
+                            </DropdownMenuGroup>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </ItemActions>
+                    </Item>
+                  </Fragment>
                 );
               })}
             </ItemGroup>
@@ -461,26 +471,22 @@ function CreateDialog({
             </Field>
             <FieldSet data-disabled={pending || undefined}>
               <FieldLegend variant="label">角色</FieldLegend>
-              <ToggleGroup
-                type="single"
+              <RadioGroup
                 value={role}
-                onValueChange={(value) => value && setRole(value as Role)}
-                variant="outline"
-                className="w-full"
+                onValueChange={(value) => setRole(value as Role)}
                 disabled={pending}
               >
-                <ToggleGroupItem value="user" className="flex-1">
-                  普通用户
-                </ToggleGroupItem>
-                <ToggleGroupItem value="admin" className="flex-1">
-                  管理员
-                </ToggleGroupItem>
-              </ToggleGroup>
-              <FieldDescription>
-                {role === "admin"
-                  ? "可以管理其他用户、服务配置与 OTA 更新。"
-                  : "可以导入作品、查看翻译状态并阅读。"}
-              </FieldDescription>
+                <RoleOption
+                  value="user"
+                  title={ROLE_LABEL.user}
+                  description="可以导入作品、查看翻译状态并阅读。"
+                />
+                <RoleOption
+                  value="admin"
+                  title={ROLE_LABEL.admin}
+                  description="还可以管理其他用户、服务配置与 OTA 更新。"
+                />
+              </RadioGroup>
             </FieldSet>
           </FieldGroup>
         </form>
@@ -504,6 +510,29 @@ function CreateDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function RoleOption({
+  value,
+  title,
+  description,
+}: {
+  value: Role;
+  title: string;
+  description: string;
+}) {
+  const id = `create-role-${value}`;
+  return (
+    <FieldLabel htmlFor={id}>
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldTitle>{title}</FieldTitle>
+          <FieldDescription>{description}</FieldDescription>
+        </FieldContent>
+        <RadioGroupItem value={value} id={id} />
+      </Field>
+    </FieldLabel>
   );
 }
 
@@ -604,13 +633,10 @@ function ResetDialog({
 
 function UsersSkeleton() {
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col divide-y">
       {Array.from({ length: 3 }).map((_, index) => (
-        <div
-          key={index}
-          className="flex items-center gap-3 rounded-lg border p-3"
-        >
-          <Skeleton className="size-8 rounded-full" />
+        <div key={index} className="flex items-center gap-3 px-1 py-2.5">
+          <Skeleton className="size-8 rounded-lg" />
           <div className="flex flex-1 flex-col gap-1.5">
             <Skeleton className="h-4 w-32" />
             <Skeleton className="h-3 w-52" />

@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { PageHeader } from "@/components/PageHeader";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
@@ -105,14 +106,10 @@ export function Version() {
 
   return (
     <div className="fade-in mx-auto flex w-full max-w-3xl flex-col gap-6">
-      <header className="flex flex-col gap-2">
-        <h1 className="cn-font-heading text-2xl font-semibold tracking-tight sm:text-3xl">
-          版本与更新
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          查看当前构建与远程发行状态。更新包通过 sha256 校验后替换二进制并自动重启。
-        </p>
-      </header>
+      <PageHeader
+        title="版本"
+        description="查看当前构建与远程发行状态。更新包通过 sha256 校验后替换二进制并自动重启。"
+      />
 
       <Card>
         <CardHeader>
@@ -121,15 +118,21 @@ export function Version() {
           <CardAction>
             <Badge variant="success">
               <CheckCircle2 />
-              Running
+              运行中
             </Badge>
           </CardAction>
         </CardHeader>
         <CardContent>
-          <dl className="grid gap-2 sm:grid-cols-3">
+          <dl className="grid gap-4 sm:grid-cols-3 sm:gap-6">
             <VersionMetric label="版本" value={data.current} />
-            <VersionMetric label="平台" value={`${data.platform}/${data.arch}`} />
-            <VersionMetric label="构建时间" value={formatBuiltAt(data.builtAt)} />
+            <VersionMetric
+              label="平台"
+              value={`${data.platform}/${data.arch}`}
+            />
+            <VersionMetric
+              label="构建时间"
+              value={formatBuiltAt(data.builtAt)}
+            />
           </dl>
         </CardContent>
       </Card>
@@ -137,7 +140,9 @@ export function Version() {
       <Card>
         <CardHeader>
           <CardTitle>远程发行</CardTitle>
-          <CardDescription>来自已配置 Manifest 的最新可用版本。</CardDescription>
+          <CardDescription>
+            来自已配置 Manifest 的最新可用版本。
+          </CardDescription>
           <CardAction>
             <Button
               variant="outline"
@@ -163,7 +168,8 @@ export function Version() {
               <ServerCog />
               <AlertTitle>暂时没有远程版本信息</AlertTitle>
               <AlertDescription>
-                Manifest URL 可能尚未配置或当前无法访问。管理员可前往设置页面检查更新源。
+                Manifest URL
+                可能尚未配置或当前无法访问。管理员可前往设置页面检查更新源。
               </AlertDescription>
             </Alert>
           ) : (
@@ -182,7 +188,9 @@ export function Version() {
               </div>
               {(latest.strategy || latest.updateReason) && (
                 <p className="text-sm text-muted-foreground">
-                  {[latest.strategy, latest.updateReason].filter(Boolean).join(" · ")}
+                  {[latest.strategy, latest.updateReason]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </p>
               )}
               {latest.notes && (
@@ -214,13 +222,15 @@ export function Version() {
               {apply.isPending ? "下载安装中" : "下载并安装"}
             </Button>
             <Button
-              variant="outline"
-              onClick={() => setConfirm({ force: true, version: latest.version })}
+              variant="ghost"
+              onClick={() =>
+                setConfirm({ force: true, version: latest.version })
+              }
               disabled={actionPending}
             >
-              强制拉取此版本
+              强制重新安装
             </Button>
-            <span className="text-xs text-muted-foreground">
+            <span className="ml-auto text-xs text-muted-foreground">
               安装完成后服务会自动重启
             </span>
           </CardFooter>
@@ -240,12 +250,15 @@ export function Version() {
               {confirm?.force ? "强制拉取并安装？" : "现在安装更新？"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              将下载 {confirm?.version}，校验 sha256 后替换当前二进制并重启服务。
+              将下载 {confirm?.version}，校验 sha256
+              后替换当前二进制并重启服务。
               重启期间页面会短暂断开，正在进行的翻译任务会中断。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={apply.isPending}>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={apply.isPending}>
+              取消
+            </AlertDialogCancel>
             <AlertDialogAction
               disabled={apply.isPending}
               onClick={(event) => {
@@ -285,7 +298,7 @@ function formatBuiltAt(value: string | undefined): string {
 
 function VersionMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1 rounded-lg border bg-muted/40 p-3">
+    <div className="flex min-w-0 flex-col gap-1">
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="font-mono text-sm font-medium break-all">{value}</dd>
     </div>
@@ -296,7 +309,7 @@ function VersionSkeleton() {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
       <div className="flex flex-col gap-2">
-        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-8 w-24" />
         <Skeleton className="h-5 w-3/4" />
       </div>
       {Array.from({ length: 2 }).map((_, index) => (

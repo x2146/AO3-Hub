@@ -3,11 +3,9 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  ArrowUpRight,
   BookOpenText,
   FilePlus2,
   LibraryBig,
-  ListFilter,
   LogIn,
   MoreHorizontal,
   RotateCcw,
@@ -15,7 +13,7 @@ import {
   Trash2,
   XIcon,
 } from "lucide-react";
-import type { StoryListItem, StoryStatus } from "@ao3hub/shared";
+import type { StoryListItem } from "@ao3hub/shared";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -72,8 +70,8 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/PageHeader";
 import { api, type StoriesListResponse } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { StatusPill } from "../components/StatusPill";
@@ -91,7 +89,7 @@ type StatusFilter = "all" | "ready" | "working" | "error";
 type SortKey = "updated" | "added" | "title" | "progress";
 
 const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
-  { value: "all", label: "全部状态" },
+  { value: "all", label: "全部" },
   { value: "ready", label: "可阅读" },
   { value: "working", label: "处理中" },
   { value: "error", label: "有错误" },
@@ -104,6 +102,9 @@ const SORTS: { value: SortKey; label: string }[] = [
   { value: "progress", label: "翻译进度" },
 ];
 
+const hasErrors = (story: StoryListItem) =>
+  story.status === "error" || breakdownOf(story.progress).error > 0;
+
 const matchesStatus = (story: StoryListItem, filter: StatusFilter) => {
   switch (filter) {
     case "ready":
@@ -111,7 +112,7 @@ const matchesStatus = (story: StoryListItem, filter: StatusFilter) => {
     case "working":
       return isInFlight(story.status);
     case "error":
-      return story.status === "error" || breakdownOf(story.progress).error > 0;
+      return hasErrors(story);
     default:
       return true;
   }
@@ -142,7 +143,8 @@ export function Library() {
     queryKey: ["stories"],
     queryFn: ({ signal }) => api.listStories(signal),
     refetchInterval: (q) => {
-      const stories = (q.state.data as StoriesListResponse | undefined)?.stories;
+      const stories = (q.state.data as StoriesListResponse | undefined)
+        ?.stories;
       const inFlight = stories?.some((story) => isInFlight(story.status));
       return inFlight ? (config?.ui.libraryRefetchIntervalMs ?? 3000) : false;
     },
@@ -212,6 +214,17 @@ export function Library() {
 
   const stories = useMemo(() => data?.stories ?? [], [data]);
 
+  const counts = useMemo(
+    () =>
+      Object.fromEntries(
+        STATUS_FILTERS.map((filter) => [
+          filter.value,
+          stories.filter((story) => matchesStatus(story, filter.value)).length,
+        ]),
+      ) as Record<StatusFilter, number>,
+    [stories],
+  );
+
   const visible = useMemo(() => {
     const needle = deferredQuery.trim().toLowerCase();
     const filtered = stories.filter((story) => {
@@ -248,51 +261,35 @@ export function Library() {
     );
   }
 
-  const readyCount = stories.filter((story) => story.status === "ready").length;
-  const inFlightCount = stories.filter((story) => isInFlight(story.status)).length;
-  const errorCount = stories.filter(
-    (story) => story.status === "error" || breakdownOf(story.progress).error > 0,
-  ).length;
   const isFiltered = statusFilter !== "all" || deferredQuery.trim() !== "";
+  const resetFilters = () => {
+    setQuery("");
+    setStatusFilter("all");
+  };
 
   return (
     <div className="fade-in flex flex-col gap-6">
-      <header className="flex flex-col gap-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex min-w-0 flex-col gap-2">
-            <h1 className="cn-font-heading text-2xl font-semibold tracking-tight sm:text-3xl">
-              你的 AO3 阅读书架
-            </h1>
-            <p className="max-w-2xl text-sm text-muted-foreground">
-              集中管理作品、翻译进度与阅读状态。上传 AO3 HTML，或直接粘贴作品链接开始翻译。
-            </p>
-          </div>
-          {user ? (
-            <Button size="lg" asChild>
+      <PageHeader
+        title="书架"
+        description="集中管理作品、翻译进度与阅读状态。上传 AO3 导出的 HTML，或直接粘贴作品链接开始翻译。"
+        actions={
+          user ? (
+            <Button asChild>
               <Link to="/import">
                 <FilePlus2 data-icon="inline-start" />
                 添加作品
               </Link>
             </Button>
           ) : (
-            <Button size="lg" variant="outline" asChild>
+            <Button variant="outline" asChild>
               <Link to="/login" search={{ redirect: undefined }}>
+                <LogIn data-icon="inline-start" />
                 登录以管理书架
-                <ArrowUpRight data-icon="inline-end" />
               </Link>
             </Button>
-          )}
-        </div>
-
-        {stories.length > 0 && (
-          <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Metric label="全部作品" value={stories.length} />
-            <Metric label="可阅读" value={readyCount} tone="success" />
-            <Metric label="处理中" value={inFlightCount} tone="primary" />
-            <Metric label="有错误" value={errorCount} tone="destructive" />
-          </dl>
-        )}
-      </header>
+          )
+        }
+      />
 
       {stories.length === 0 ? (
         <Empty className="min-h-[380px] border">
@@ -324,70 +321,70 @@ export function Library() {
           </EmptyContent>
         </Empty>
       ) : (
-        <section aria-labelledby="works-heading" className="flex flex-col gap-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <h2 id="works-heading" className="sr-only">
-              全部作品
-            </h2>
-            <InputGroup className="sm:max-w-xs">
-              <InputGroupAddon>
-                <SearchIcon />
-              </InputGroupAddon>
-              <InputGroupInput
-                ref={searchRef}
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") setQuery("");
-                }}
-                placeholder="搜索标题或作者"
-                aria-label="搜索作品"
-              />
-              <InputGroupAddon align="inline-end">
-                {query ? (
-                  <InputGroupButton
-                    size="icon-xs"
-                    aria-label="清除搜索"
-                    onClick={() => {
-                      setQuery("");
-                      searchRef.current?.focus();
-                    }}
-                  >
-                    <XIcon />
-                  </InputGroupButton>
-                ) : (
-                  <Kbd>/</Kbd>
-                )}
-              </InputGroupAddon>
-            </InputGroup>
+        <section
+          aria-labelledby="works-heading"
+          className="flex flex-col gap-4"
+        >
+          <h2 id="works-heading" className="sr-only">
+            全部作品
+          </h2>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center">
+            <Tabs
+              value={statusFilter}
+              onValueChange={(value) => setStatusFilter(value as StatusFilter)}
+            >
+              <TabsList aria-label="按状态筛选">
+                {STATUS_FILTERS.map((option) => (
+                  <TabsTrigger key={option.value} value={option.value}>
+                    {option.label}
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {counts[option.value]}
+                    </span>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
 
-            <div className="flex items-center gap-2">
-              <Select
-                value={statusFilter}
-                onValueChange={(value) => setStatusFilter(value as StatusFilter)}
-              >
-                <SelectTrigger aria-label="按状态筛选" className="w-[8.5rem]">
-                  <ListFilter />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent position="popper" align="start">
-                  <SelectGroup>
-                    {STATUS_FILTERS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+            <div className="flex items-center gap-2 md:ml-auto">
+              <InputGroup className="md:w-64">
+                <InputGroupAddon>
+                  <SearchIcon />
+                </InputGroupAddon>
+                <InputGroupInput
+                  ref={searchRef}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") setQuery("");
+                  }}
+                  placeholder="搜索标题或作者"
+                  aria-label="搜索作品"
+                />
+                <InputGroupAddon align="inline-end">
+                  {query ? (
+                    <InputGroupButton
+                      size="icon-xs"
+                      aria-label="清除搜索"
+                      onClick={() => {
+                        setQuery("");
+                        searchRef.current?.focus();
+                      }}
+                    >
+                      <XIcon />
+                    </InputGroupButton>
+                  ) : (
+                    <Kbd>/</Kbd>
+                  )}
+                </InputGroupAddon>
+              </InputGroup>
               <Select
                 value={sort}
                 onValueChange={(value) => setSort(value as SortKey)}
               >
-                <SelectTrigger aria-label="排序方式" className="w-[8.5rem]">
+                <SelectTrigger aria-label="排序方式" className="w-32 shrink-0">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent position="popper" align="start">
+                <SelectContent position="popper" align="end">
                   <SelectGroup>
                     {SORTS.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
@@ -398,13 +395,6 @@ export function Library() {
                 </SelectContent>
               </Select>
             </div>
-
-            <p
-              aria-live="polite"
-              className="text-xs tabular-nums text-muted-foreground sm:ml-auto"
-            >
-              {visible.length} / {stories.length} 篇
-            </p>
           </div>
 
           {visible.length === 0 ? (
@@ -419,21 +409,14 @@ export function Library() {
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setQuery("");
-                    setStatusFilter("all");
-                  }}
-                >
+                <Button variant="outline" size="sm" onClick={resetFilters}>
                   <RotateCcw data-icon="inline-start" />
                   重置筛选
                 </Button>
               </EmptyContent>
             </Empty>
           ) : (
-            <ul className="grid gap-4 xl:grid-cols-2">
+            <ul className="grid gap-4 md:grid-cols-2">
               {visible.map((story) => (
                 <li key={story.id} className="min-w-0">
                   <StoryCard
@@ -452,15 +435,15 @@ export function Library() {
           )}
 
           {isFiltered && visible.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              已按条件筛选 ·{" "}
+            <p
+              aria-live="polite"
+              className="text-xs tabular-nums text-muted-foreground"
+            >
+              找到 {visible.length} 篇 ·{" "}
               <button
                 type="button"
                 className="underline underline-offset-4 hover:text-foreground"
-                onClick={() => {
-                  setQuery("");
-                  setStatusFilter("all");
-                }}
+                onClick={resetFilters}
               >
                 显示全部
               </button>
@@ -480,7 +463,8 @@ export function Library() {
             </AlertDialogMedia>
             <AlertDialogTitle>删除这篇作品？</AlertDialogTitle>
             <AlertDialogDescription>
-              「{deleteTarget?.title}」及其翻译结果会从本地书架中永久移除，此操作无法撤销。
+              「{deleteTarget?.title}
+              」及其翻译结果会从本地书架中永久移除，此操作无法撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -523,19 +507,20 @@ function StoryCard({
     story.progress &&
     (story.status !== "ready" ||
       (story.progress.totalBlocks ?? 0) > (story.progress.doneBlocks ?? 0));
-  const canRetry = canManage && (story.status === "error" || errorBlocks > 0);
+  const canRetry = canManage && hasErrors(story);
   const subtitle =
     [story.chineseTitle, story.author].filter(Boolean).join(" · ") ||
     "作者信息未提供";
+  const readerParams = { id: story.id, chapter: "0" };
 
   return (
     <Card className="h-full transition-shadow hover:shadow-md">
       <CardHeader>
-        <CardTitle>
+        <CardTitle className="line-clamp-2">
           <Link
             to="/r/$id/$chapter"
-            params={{ id: story.id, chapter: "0" }}
-            className="line-clamp-2 rounded-sm outline-none hover:text-primary focus-visible:ring-3 focus-visible:ring-ring/50"
+            params={readerParams}
+            className="rounded-sm outline-none hover:text-primary focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             {story.title}
           </Link>
@@ -560,9 +545,9 @@ function StoryCard({
             翻译已完成，随时可以开始阅读。
           </p>
         )}
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Badge variant="outline">{story.chapterCount} 章</Badge>
-          <Badge variant="outline">{story.wordCount.toLocaleString()} 字</Badge>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
+          <span>{story.chapterCount} 章</span>
+          <span>{story.wordCount.toLocaleString()} 字</span>
           {errorBlocks > 0 && (
             <Badge variant="destructive">{errorBlocks} 段失败</Badge>
           )}
@@ -570,32 +555,31 @@ function StoryCard({
       </CardContent>
 
       <CardFooter className="gap-2">
-        <Button size="sm" variant="outline" asChild>
-          <Link to="/r/$id/$chapter" params={{ id: story.id, chapter: "0" }}>
+        <Button
+          size="sm"
+          variant={story.status === "ready" ? "default" : "outline"}
+          asChild
+        >
+          <Link to="/r/$id/$chapter" params={readerParams}>
             <BookOpenText data-icon="inline-start" />
             阅读
           </Link>
         </Button>
         <TranslationStatusButton storyID={story.id} />
         {canRetry && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={actionPending}
-                onClick={onRetry}
-              >
-                {retrying ? (
-                  <Spinner data-icon="inline-start" />
-                ) : (
-                  <RotateCcw data-icon="inline-start" />
-                )}
-                {retrying ? "重试中" : "重试"}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>重新翻译所有失败段落</TooltipContent>
-          </Tooltip>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={actionPending}
+            onClick={onRetry}
+          >
+            {retrying ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <RotateCcw data-icon="inline-start" />
+            )}
+            {retrying ? "重试中" : "重试"}
+          </Button>
         )}
         {canManage && (
           <DropdownMenu>
@@ -613,10 +597,7 @@ function StoryCard({
             <DropdownMenuContent align="end" className="min-w-44">
               <DropdownMenuGroup>
                 <DropdownMenuItem asChild>
-                  <Link
-                    to="/r/$id/$chapter"
-                    params={{ id: story.id, chapter: "0" }}
-                  >
+                  <Link to="/r/$id/$chapter" params={readerParams}>
                     <BookOpenText />
                     打开阅读器
                   </Link>
@@ -643,51 +624,21 @@ function StoryCard({
   );
 }
 
-const METRIC_TONE = {
-  default: "text-foreground",
-  primary: "text-primary",
-  success: "text-success",
-  destructive: "text-destructive",
-} as const;
-
-function Metric({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: number;
-  tone?: keyof typeof METRIC_TONE;
-}) {
-  return (
-    <div className="flex flex-col gap-0.5 rounded-lg border bg-card px-3 py-2.5">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd
-        className={cn(
-          "text-xl font-semibold tabular-nums",
-          value === 0 ? METRIC_TONE.default : METRIC_TONE[tone],
-        )}
-      >
-        {value}
-      </dd>
-    </div>
-  );
-}
-
 function LibrarySkeleton() {
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-5 w-full max-w-xl" />
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-8 w-24" />
+          <Skeleton className="h-5 w-72 max-w-full" />
+        </div>
+        <Skeleton className="h-8 w-24" />
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, index) => (
-          <Skeleton key={index} className="h-[4.25rem] w-full" />
-        ))}
+      <div className="flex flex-col gap-3 md:flex-row md:items-center">
+        <Skeleton className="h-8 w-72 max-w-full" />
+        <Skeleton className="h-8 w-64 max-w-full md:ml-auto" />
       </div>
-      <Skeleton className="h-8 w-full max-w-md" />
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2">
         {Array.from({ length: 4 }).map((_, index) => (
           <Card key={index}>
             <CardHeader>

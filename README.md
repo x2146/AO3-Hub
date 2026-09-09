@@ -31,7 +31,7 @@ AO3-Hub/
     ├── src/
     │   ├── main.tsx + router.tsx
     │   ├── pages/{Library,Import,Settings,Reader,Version,Login,Setup,Users,NotFound}.tsx
-    │   ├── components/{AppLayout,StatusPill,TranslateProgress,TranslationStatusPanel}.tsx
+    │   ├── components/{AppLayout,PageHeader,BrandMark,StatusPill,TranslateProgress,TranslationStatusPanel}.tsx
     │   ├── components/ui/   # shadcn/ui 组件（radix-nova，registry 同步）
     │   ├── lib/{api,auth,theme,reader-settings,status,utils}.ts
     │   └── styles.css       # 设计 token：#018eee 主题色 + OKLCH 中性色

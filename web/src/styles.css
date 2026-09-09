@@ -287,24 +287,6 @@
  * App-level utilities
  * ------------------------------------------------------------------------- */
 
-/* The signature soft brand wash behind the app shell. Painted on an element
- * rather than <body> so it scrolls with the page and never bleeds through
- * sticky, translucent chrome. */
-@utility brand-wash {
-  background-image:
-    radial-gradient(
-      70rem 40rem at 0% -10%,
-      color-mix(in oklch, var(--primary) 7%, transparent),
-      transparent 70%
-    ),
-    radial-gradient(
-      60rem 40rem at 110% 0%,
-      color-mix(in oklch, var(--primary) 4%, transparent),
-      transparent 70%
-    );
-  background-repeat: no-repeat;
-}
-
 @utility no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;

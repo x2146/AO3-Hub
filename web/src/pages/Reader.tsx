@@ -27,10 +27,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldLabel,
   FieldLegend,
   FieldSet,
+  FieldTitle,
 } from "@/components/ui/field";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import {
@@ -181,7 +183,8 @@ export function Reader() {
       const scrollable =
         document.documentElement.scrollHeight - window.innerHeight;
       const y = window.scrollY;
-      const ratio = scrollable > 0 ? Math.min(1, Math.max(0, y / scrollable)) : 0;
+      const ratio =
+        scrollable > 0 ? Math.min(1, Math.max(0, y / scrollable)) : 0;
       setScrollProgress(ratio);
       setChromeVisible(y < 96 || y < lastY);
       lastY = y;
@@ -290,7 +293,10 @@ export function Reader() {
   const goToChapter = useCallback(
     (next: number | undefined) => {
       if (next === undefined) return;
-      navigate({ to: "/r/$id/$chapter", params: { id, chapter: String(next) } });
+      navigate({
+        to: "/r/$id/$chapter",
+        params: { id, chapter: String(next) },
+      });
     },
     [id, navigate],
   );
@@ -394,9 +400,13 @@ export function Reader() {
   // Some imports carry an untranslated `titleZh` that just repeats the English
   // title; echoing it under the heading reads like a rendering bug.
   const chineseTitle =
-    rawChineseTitle && rawChineseTitle !== titleEn ? rawChineseTitle : undefined;
+    rawChineseTitle && rawChineseTitle !== titleEn
+      ? rawChineseTitle
+      : undefined;
   const progressForBar = liveProgress ?? data.progress;
-  const chapterErrorPairs = data.chapter.pairs.filter((p) => p.status === "error");
+  const chapterErrorPairs = data.chapter.pairs.filter(
+    (p) => p.status === "error",
+  );
   const showChapterRetry =
     !!user &&
     chapterErrorPairs.length > 0 &&
@@ -423,10 +433,14 @@ export function Reader() {
         total={total ?? 1}
         totalDigits={totalDigits}
         onPrev={
-          data.nav.prev !== undefined ? () => goToChapter(data.nav.prev) : undefined
+          data.nav.prev !== undefined
+            ? () => goToChapter(data.nav.prev)
+            : undefined
         }
         onNext={
-          data.nav.next !== undefined ? () => goToChapter(data.nav.next) : undefined
+          data.nav.next !== undefined
+            ? () => goToChapter(data.nav.next)
+            : undefined
         }
         view={settings.view}
         onViewChange={(view) => setSettings((cur) => ({ ...cur, view }))}
@@ -480,10 +494,14 @@ export function Reader() {
             {titleEn}
           </h1>
           {chineseTitle && (
-            <p className="mt-4 text-base text-muted-foreground">{chineseTitle}</p>
+            <p className="mt-4 text-base text-muted-foreground">
+              {chineseTitle}
+            </p>
           )}
           <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            {data.meta.author && <Badge variant="outline">{data.meta.author}</Badge>}
+            {data.meta.author && (
+              <Badge variant="outline">{data.meta.author}</Badge>
+            )}
             {data.nav.total > 1 && (
               <Badge variant="outline">
                 第 {chapterIndex + 1} / {data.nav.total} 章
@@ -589,7 +607,12 @@ function ReaderTopbar(props: {
       <div className="mx-auto flex h-14 w-full max-w-5xl items-center gap-2 px-3 sm:px-4">
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon-sm" asChild aria-label="返回书架">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              asChild
+              aria-label="返回书架"
+            >
               <Link to="/">
                 <ChevronLeft />
               </Link>
@@ -660,9 +683,12 @@ function ReaderTopbar(props: {
         <ToggleGroup
           type="single"
           value={props.view}
-          onValueChange={(value) => value && props.onViewChange(value as ReaderView)}
+          onValueChange={(value) =>
+            value && props.onViewChange(value as ReaderView)
+          }
           variant="outline"
           size="sm"
+          spacing={0}
           className="hidden md:flex"
           aria-label="显示语言"
         >
@@ -762,8 +788,11 @@ function SettingsDrawer({
           <ToggleGroup
             type="single"
             value={settings.view}
-            onValueChange={(value) => value && patch({ view: value as ReaderView })}
+            onValueChange={(value) =>
+              value && patch({ view: value as ReaderView })
+            }
             variant="outline"
+            spacing={0}
             className="w-full"
             aria-label="显示语言"
           >
@@ -822,17 +851,21 @@ function SettingsDrawer({
 
         <Separator />
 
-        <Field orientation="horizontal">
-          <FieldLabel htmlFor="reader-focus">专注模式</FieldLabel>
-          <Switch
-            id="reader-focus"
-            checked={settings.focus}
-            onCheckedChange={(checked) => patch({ focus: checked })}
-          />
-        </Field>
-        <FieldDescription className="-mt-4">
-          淡出其他段落，只保留鼠标所在的一段。
-        </FieldDescription>
+        <FieldLabel htmlFor="reader-focus">
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldTitle>专注模式</FieldTitle>
+              <FieldDescription>
+                淡出其他段落，只保留鼠标所在的一段。
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              id="reader-focus"
+              checked={settings.focus}
+              onCheckedChange={(checked) => patch({ focus: checked })}
+            />
+          </Field>
+        </FieldLabel>
 
         <Button
           variant="outline"
@@ -1051,7 +1084,7 @@ function ChapterProgress({
     (failed || (total > 0 && (showChapterRetry || hasGlobalErrors)));
 
   return (
-    <div className="mt-6 flex flex-col gap-2.5 rounded-xl border bg-card p-3">
+    <div className="mt-6 flex flex-col gap-2.5 rounded-xl bg-card p-3 ring-1 ring-foreground/10">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span
           className={cn(
