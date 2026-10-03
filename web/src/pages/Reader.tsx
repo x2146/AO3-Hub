@@ -480,6 +480,7 @@ export function Reader() {
 
       <TranslationStatusPanel
         storyID={id}
+        title={data.meta.title}
         open={statusOpen}
         onClose={() => setStatusOpen(false)}
         returnFocusRef={statusTriggerRef}
@@ -996,9 +997,7 @@ function TocDrawer({
                   {String(i + 1).padStart(2, "0")}
                 </span>
                 <span className="flex-1 truncate">
-                  {active && data.chapter.titleEn
-                    ? data.chapter.titleEn
-                    : `Chapter ${i + 1}`}
+                  {data.nav.titles[i] || `Chapter ${i + 1}`}
                 </span>
               </Link>
             </li>
@@ -1111,9 +1110,10 @@ function ChapterProgress({
               重试本章失败 ({chapterErrorCount})
             </Button>
           )}
-          {(hasGlobalErrors || failed) && (
+          {/* Single-chapter works would otherwise show the same count twice. */}
+          {(hasGlobalErrors || (failed && !showChapterRetry)) && (
             <Button
-              variant={failed && !showChapterRetry ? "outline" : "ghost"}
+              variant={showChapterRetry ? "ghost" : "outline"}
               size="sm"
               disabled={retrying}
               onClick={onRetryAll}

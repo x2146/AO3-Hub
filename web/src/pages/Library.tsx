@@ -26,7 +26,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -42,7 +41,6 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -102,6 +100,26 @@ const SORTS: { value: SortKey; label: string }[] = [
   { value: "progress", label: "翻译进度" },
 ];
 
+const SORT_KEY = "aohub.library.sort";
+
+function loadSort(): SortKey {
+  try {
+    const raw = localStorage.getItem(SORT_KEY);
+    if (SORTS.some((option) => option.value === raw)) return raw as SortKey;
+  } catch {
+    // Storage may be unavailable in restricted browsing contexts.
+  }
+  return "updated";
+}
+
+function saveSort(sort: SortKey) {
+  try {
+    localStorage.setItem(SORT_KEY, sort);
+  } catch {
+    // Storage may be unavailable in restricted browsing contexts.
+  }
+}
+
 const hasErrors = (story: StoryListItem) =>
   story.status === "error" || breakdownOf(story.progress).error > 0;
 
@@ -131,7 +149,7 @@ export function Library() {
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [sort, setSort] = useState<SortKey>("updated");
+  const [sort, setSort] = useState<SortKey>(loadSort);
   const deferredQuery = useDeferredValue(query);
   const { user } = useAuth();
 
@@ -379,7 +397,10 @@ export function Library() {
               </InputGroup>
               <Select
                 value={sort}
-                onValueChange={(value) => setSort(value as SortKey)}
+                onValueChange={(value) => {
+                  setSort(value as SortKey);
+                  saveSort(value as SortKey);
+                }}
               >
                 <SelectTrigger aria-label="排序方式" className="w-32 shrink-0">
                   <SelectValue />
@@ -502,7 +523,6 @@ function StoryCard({
   onRetry: () => void;
   onDelete: () => void;
 }) {
-  const { error: errorBlocks } = breakdownOf(story.progress);
   const showProgress =
     story.progress &&
     (story.status !== "ready" ||
@@ -548,9 +568,6 @@ function StoryCard({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
           <span>{story.chapterCount} 章</span>
           <span>{story.wordCount.toLocaleString()} 字</span>
-          {errorBlocks > 0 && (
-            <Badge variant="destructive">{errorBlocks} 段失败</Badge>
-          )}
         </div>
       </CardContent>
 
@@ -565,7 +582,7 @@ function StoryCard({
             阅读
           </Link>
         </Button>
-        <TranslationStatusButton storyID={story.id} />
+        <TranslationStatusButton storyID={story.id} title={story.title} />
         {canRetry && (
           <Button
             variant="ghost"
@@ -594,22 +611,7 @@ function StoryCard({
                 <MoreHorizontal />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-44">
-              <DropdownMenuGroup>
-                <DropdownMenuItem asChild>
-                  <Link to="/r/$id/$chapter" params={readerParams}>
-                    <BookOpenText />
-                    打开阅读器
-                  </Link>
-                </DropdownMenuItem>
-                {canRetry && (
-                  <DropdownMenuItem onSelect={onRetry}>
-                    <RotateCcw />
-                    重新翻译失败段落
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuGroup>
-              <DropdownMenuSeparator />
+            <DropdownMenuContent align="end" className="min-w-36">
               <DropdownMenuGroup>
                 <DropdownMenuItem variant="destructive" onSelect={onDelete}>
                   <Trash2 />

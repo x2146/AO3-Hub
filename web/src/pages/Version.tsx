@@ -105,7 +105,7 @@ export function Version() {
   const latest = data.latest;
 
   return (
-    <div className="fade-in mx-auto flex w-full max-w-3xl flex-col gap-6">
+    <div className="fade-in flex w-full max-w-4xl flex-col gap-6">
       <PageHeader
         title="版本"
         description="查看当前构建与远程发行状态。更新包通过 sha256 校验后替换二进制并自动重启。"
@@ -307,7 +307,7 @@ function VersionMetric({ label, value }: { label: string; value: string }) {
 
 function VersionSkeleton() {
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+    <div className="flex w-full max-w-4xl flex-col gap-6">
       <div className="flex flex-col gap-2">
         <Skeleton className="h-8 w-24" />
         <Skeleton className="h-5 w-3/4" />

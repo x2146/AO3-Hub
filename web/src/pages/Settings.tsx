@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -40,6 +41,7 @@ import {
   FieldTitle,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -49,6 +51,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { PageHeader } from "@/components/PageHeader";
 import { api, type ConfigUpdate } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import type { SettingsTab } from "../router";
 
 type LocalConfig = Config;
 
@@ -77,13 +80,30 @@ const LLM_PROVIDER_DEFAULTS = {
 >;
 
 /** Strip the write-only secrets so the dirty check compares like with like. */
-function comparable(config: LocalConfig): string {
-  return JSON.stringify({
+function withoutSecrets(config: LocalConfig): LocalConfig {
+  return {
     ...config,
     llm: { ...config.llm, apiKey: "" },
     ao3: { ...config.ao3, cookie: "" },
-  });
+  };
 }
+
+/** Which config sections each tab edits, for the per-tab unsaved marker. */
+const TAB_SECTIONS: Record<SettingsTab, (keyof LocalConfig)[]> = {
+  server: ["server", "auth", "stream", "import", "ui"],
+  llm: ["llm"],
+  ao3: ["ao3"],
+  reader: ["reader"],
+  update: ["update"],
+};
+
+const TABS: { value: SettingsTab; label: string; icon: typeof ServerCog }[] = [
+  { value: "server", label: "服务", icon: ServerCog },
+  { value: "llm", label: "LLM", icon: Cpu },
+  { value: "ao3", label: "AO3", icon: KeyRound },
+  { value: "reader", label: "阅读器", icon: BookOpen },
+  { value: "update", label: "更新", icon: PackageCheck },
+];
 
 function formFromServer(data: Config): LocalConfig {
   return {
@@ -136,8 +156,10 @@ export function Settings() {
     enabled: isAdmin,
   });
 
+  const navigate = useNavigate();
+  const { tab = "server" } = useSearch({ from: "/settings" });
   const [form, setForm] = useState<LocalConfig | null>(null);
-  const [baseline, setBaseline] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState<LocalConfig | null>(null);
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
   const [cookieDirty, setCookieDirty] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -150,15 +172,53 @@ export function Settings() {
     if (!data) return;
     const next = formFromServer(data);
     setForm(next);
-    setBaseline(comparable(next));
+    setBaseline(next);
     setApiKeyDirty(false);
     setCookieDirty(false);
   }, [data]);
 
-  const dirty = useMemo(() => {
-    if (!form || baseline === null) return false;
-    return apiKeyDirty || cookieDirty || comparable(form) !== baseline;
+  const dirtyTabs = useMemo(() => {
+    const result = new Set<SettingsTab>();
+    if (!form || !baseline) return result;
+    const a = withoutSecrets(form);
+    const b = withoutSecrets(baseline);
+    for (const [name, sections] of Object.entries(TAB_SECTIONS)) {
+      if (
+        sections.some(
+          (key) => JSON.stringify(a[key]) !== JSON.stringify(b[key]),
+        )
+      ) {
+        result.add(name as SettingsTab);
+      }
+    }
+    if (apiKeyDirty) result.add("llm");
+    if (cookieDirty) result.add("ao3");
+    return result;
   }, [form, baseline, apiKeyDirty, cookieDirty]);
+  const dirty = dirtyTabs.size > 0;
+
+  // On narrow screens the tab strip scrolls; keep the open tab visible.
+  const tabsRef = useRef<HTMLFieldSetElement>(null);
+  useEffect(() => {
+    tabsRef.current
+      ?.querySelector<HTMLElement>('[role="tab"][data-state="active"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // Re-run once the form mounts: the tab strip doesn't exist while loading.
+  }, [tab, form === null]);
+
+  // ⌘S / Ctrl+S saves instead of opening the browser's "save page" dialog.
+  const saveShortcutRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "s" || !(event.metaKey || event.ctrlKey)) {
+        return;
+      }
+      event.preventDefault();
+      saveShortcutRef.current?.();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Browsers warn on close/reload while a config edit is pending.
   useEffect(() => {
@@ -277,11 +337,13 @@ export function Settings() {
     });
   };
 
+  saveShortcutRef.current = dirty && !save.isPending ? onSave : null;
+
   const onDiscard = () => {
     if (!data) return;
     const next = formFromServer(data);
     setForm(next);
-    setBaseline(comparable(next));
+    setBaseline(next);
     setApiKeyDirty(false);
     setCookieDirty(false);
     setValidationError(null);
@@ -323,7 +385,7 @@ export function Settings() {
     });
 
   return (
-    <div className="fade-in mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <div className="fade-in flex w-full max-w-4xl flex-col gap-6">
       <PageHeader
         title="设置"
         description={
@@ -338,32 +400,38 @@ export function Settings() {
         }
       />
 
-      <fieldset disabled={save.isPending} className="contents">
-        <Tabs defaultValue="server" className="gap-5">
+      <fieldset
+        ref={tabsRef}
+        disabled={save.isPending}
+        className="contents"
+      >
+        <Tabs
+          value={tab}
+          onValueChange={(value) =>
+            navigate({
+              to: "/settings",
+              search: { tab: value as SettingsTab },
+              replace: true,
+            })
+          }
+          className="gap-5"
+        >
           <TabsList
             variant="line"
             className="no-scrollbar w-full justify-start gap-3 overflow-x-auto *:flex-none"
           >
-            <TabsTrigger value="server">
-              <ServerCog data-icon="inline-start" />
-              服务
-            </TabsTrigger>
-            <TabsTrigger value="llm">
-              <Cpu data-icon="inline-start" />
-              LLM
-            </TabsTrigger>
-            <TabsTrigger value="ao3">
-              <KeyRound data-icon="inline-start" />
-              AO3
-            </TabsTrigger>
-            <TabsTrigger value="reader">
-              <BookOpen data-icon="inline-start" />
-              阅读器
-            </TabsTrigger>
-            <TabsTrigger value="update">
-              <PackageCheck data-icon="inline-start" />
-              更新
-            </TabsTrigger>
+            {TABS.map((item) => (
+              <TabsTrigger key={item.value} value={item.value}>
+                <item.icon data-icon="inline-start" />
+                {item.label}
+                {dirtyTabs.has(item.value) && (
+                  <span
+                    className="size-1.5 rounded-full bg-primary"
+                    aria-label="有未保存的修改"
+                  />
+                )}
+              </TabsTrigger>
+            ))}
           </TabsList>
 
           <TabsContent value="server" className="flex flex-col gap-5">
@@ -619,6 +687,9 @@ export function Settings() {
                     {test.isPending && <Spinner data-icon="inline-start" />}
                     {test.isPending ? "测试中" : "测试连通"}
                   </Button>
+                  {dirtyTabs.has("llm") && !testResult && (
+                    <FieldDescription>测试使用已保存的配置，请先保存修改。</FieldDescription>
+                  )}
                   {testResult && (
                     <Badge variant={testResult.ok ? "success" : "destructive"}>
                       {testResult.ok ? <Check /> : <X />}
@@ -1034,6 +1105,14 @@ export function Settings() {
         >
           {dirty ? "有未保存的修改" : "所有修改已保存"}
         </span>
+        {dirty && (
+          <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:inline-flex">
+            <KbdGroup>
+              <Kbd>⌘</Kbd>
+              <Kbd>S</Kbd>
+            </KbdGroup>
+          </span>
+        )}
         <div className="ml-auto flex shrink-0 items-center gap-2">
           <Button
             variant="ghost"
@@ -1123,7 +1202,7 @@ function SettingsCard({
 
 function SettingsSkeleton() {
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <div className="flex w-full max-w-4xl flex-col gap-6">
       <div className="flex flex-col gap-2">
         <Skeleton className="h-8 w-24" />
         <Skeleton className="h-5 w-3/4" />

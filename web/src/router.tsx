@@ -171,9 +171,18 @@ const importRoute = createRoute({
   component: ImportPage,
 });
 
+const SETTINGS_TABS = ["server", "llm", "ao3", "reader", "update"] as const;
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
+  // The open tab lives in the URL so a reload or a shared link lands on it.
+  validateSearch: (search: Record<string, unknown>): { tab?: SettingsTab } => ({
+    tab: SETTINGS_TABS.includes(search.tab as SettingsTab)
+      ? (search.tab as SettingsTab)
+      : undefined,
+  }),
   component: Settings,
 });
 

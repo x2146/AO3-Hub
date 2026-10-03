@@ -157,7 +157,7 @@ export function UsersPage() {
   const adminCount = users.filter((user) => user.role === "admin").length;
 
   return (
-    <div className="fade-in mx-auto flex w-full max-w-3xl flex-col gap-6">
+    <div className="fade-in flex w-full max-w-4xl flex-col gap-6">
       <PageHeader
         title="用户"
         description="普通用户可以导入和阅读，管理员还可以管理用户与服务配置。"
@@ -493,7 +493,7 @@ function CreateDialog({
         <DialogFooter>
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={pending}
           >
@@ -611,7 +611,7 @@ function ResetDialog({
         <DialogFooter>
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={pending}
           >

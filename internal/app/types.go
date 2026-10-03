@@ -271,6 +271,9 @@ type ChapterView struct {
 		Prev  *int `json:"prev,omitempty"`
 		Next  *int `json:"next,omitempty"`
 		Total int  `json:"total"`
+		// Titles holds every chapter's source title (empty when untitled) so
+		// the reader's table of contents can list them without N requests.
+		Titles []string `json:"titles"`
 	} `json:"nav"`
 }
 

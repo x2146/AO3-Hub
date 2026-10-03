@@ -958,6 +958,10 @@ func (a *App) handleChapter(w http.ResponseWriter, r *http.Request) {
 		view.Nav.Next = &next
 	}
 	view.Nav.Total = len(original.Chapters)
+	view.Nav.Titles = make([]string, len(original.Chapters))
+	for i, ch := range original.Chapters {
+		view.Nav.Titles[i] = ch.Title
+	}
 	writeJSON(w, http.StatusOK, view)
 }
 

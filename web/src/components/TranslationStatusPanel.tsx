@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Sheet,
@@ -53,11 +54,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { api, subscribeStream } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -65,6 +61,8 @@ import { STAGE_LABEL } from "../lib/status";
 
 type Props = {
   storyID: string;
+  /** Shown under the sheet title; falls back to the story ID. */
+  title?: string;
   open: boolean;
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLButtonElement>;
@@ -79,6 +77,7 @@ const STAGE_VARIANT: Record<LlmCallStage, "accent" | "success"> = {
 
 export function TranslationStatusPanel({
   storyID,
+  title,
   open,
   onClose,
   returnFocusRef,
@@ -156,29 +155,25 @@ export function TranslationStatusPanel({
                   {data.mode === "refined" ? "精翻" : "普通"}
                 </Badge>
               )}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="ml-auto"
-                    onClick={() => setAutoRefresh((v) => !v)}
-                    aria-pressed={autoRefresh}
-                  >
-                    <RefreshCw
-                      data-icon="inline-start"
-                      className={cn(autoRefresh && isFetching && "animate-spin")}
-                    />
-                    {autoRefresh ? "Live" : "已暂停"}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {autoRefresh ? "暂停自动刷新" : "恢复自动刷新"}
-                </TooltipContent>
-              </Tooltip>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto"
+                onClick={() => setAutoRefresh((v) => !v)}
+                aria-pressed={autoRefresh}
+                title={autoRefresh ? "暂停自动刷新" : "恢复自动刷新"}
+              >
+                <RefreshCw
+                  data-icon="inline-start"
+                  className={cn(autoRefresh && isFetching && "animate-spin")}
+                />
+                {autoRefresh ? "实时" : "已暂停"}
+              </Button>
             </div>
-            <SheetDescription className="truncate font-mono text-xs">
-              {storyID}
+            <SheetDescription
+              className={cn("truncate", !title && "font-mono text-xs")}
+            >
+              {title || storyID}
             </SheetDescription>
           </SheetHeader>
 
@@ -269,7 +264,7 @@ export function TranslationStatusPanel({
                 setConfirmAction(null);
               }}
             >
-              确认
+              {confirmAction === "reset" ? "确认重置" : "重新预读"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -368,8 +363,12 @@ function OverviewTab({
               disabled={actionPending}
               onClick={onReanalyze}
             >
-              <Sparkles data-icon="inline-start" />
-              {reanalyzing ? "重新入队…" : "重新预读 + 翻译"}
+              {reanalyzing ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Sparkles data-icon="inline-start" />
+              )}
+              {reanalyzing ? "入队中" : "重新预读并翻译"}
             </Button>
             <Button
               variant="destructive"
@@ -377,8 +376,12 @@ function OverviewTab({
               disabled={actionPending}
               onClick={onReset}
             >
-              <Trash2 data-icon="inline-start" />
-              {resetting ? "重置中…" : "重置统计"}
+              {resetting ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Trash2 data-icon="inline-start" />
+              )}
+              {resetting ? "重置中" : "重置统计"}
             </Button>
           </div>
         </>
@@ -418,7 +421,8 @@ function StageRow({ stage, stats }: { stage: LlmCallStage; stats: StageStats }) 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Badge variant={STAGE_VARIANT[stage]}>{STAGE_LABEL[stage]}</Badge>
         <span className="tabular-nums text-muted-foreground">
-          {stats.calls} 次 · {successRate}% · {stats.totalTokens.toLocaleString()} tok
+          {stats.calls} 次 · 成功率 {successRate}% ·{" "}
+          {stats.totalTokens.toLocaleString()} token
         </span>
       </div>
       {(stats.failures > 0 || stats.retries > 0) && (
@@ -515,8 +519,8 @@ function ContextTab({ data }: { data: TranslationStatusView }) {
             {ctx.chapterSummaries.map((c) => (
               <li key={c.index} className="rounded-lg border px-3 py-2 text-xs">
                 <div className="flex items-baseline gap-2">
-                  <span className="font-mono text-muted-foreground">
-                    CH {String(c.index + 1).padStart(2, "0")}
+                  <span className="shrink-0 tabular-nums text-muted-foreground">
+                    {chapterLabel(c.index)}
                   </span>
                   {c.title && <span className="truncate font-medium">{c.title}</span>}
                 </div>
@@ -582,13 +586,13 @@ function SampleCard({
         <div className="flex items-center gap-2">
           <Badge variant={STAGE_VARIANT[stage]}>{STAGE_LABEL[stage]}</Badge>
           {sample.chapterIndex !== undefined && (
-            <span className="font-mono text-muted-foreground">
-              CH {String(sample.chapterIndex + 1).padStart(2, "0")}
+            <span className="tabular-nums text-muted-foreground">
+              {chapterLabel(sample.chapterIndex)}
             </span>
           )}
           {sample.blockIds && sample.blockIds.length > 0 && (
-            <span className="font-mono text-muted-foreground">
-              {sample.blockIds.length} blocks
+            <span className="tabular-nums text-muted-foreground">
+              {sample.blockIds.length} 段
             </span>
           )}
         </div>
@@ -604,7 +608,7 @@ function SampleCard({
           }
         >
           <summary className="flex cursor-pointer items-center justify-between text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            <span>System Prompt</span>
+            <span>系统提示词</span>
             <ChevronDown
               className={cn("size-3 transition-transform", showSystem && "rotate-180")}
             />
@@ -613,13 +617,13 @@ function SampleCard({
         </details>
 
         <div>
-          <PreLabel>User Payload</PreLabel>
+          <PreLabel>请求内容</PreLabel>
           <Pre className="max-h-[280px]">{sample.userPayload || "(空)"}</Pre>
         </div>
 
         {sample.responsePreview && (
           <div>
-            <PreLabel>Response</PreLabel>
+            <PreLabel>响应预览</PreLabel>
             <Pre className="max-h-[200px]">{sample.responsePreview}</Pre>
           </div>
         )}
@@ -687,10 +691,14 @@ function EventsTab({ events }: { events: LlmCallEvent[] }) {
               </Badge>
               {e.chapterIndex !== undefined && (
                 <span className="text-muted-foreground">
-                  CH{String(e.chapterIndex + 1).padStart(2, "0")}
+                  {chapterLabel(e.chapterIndex)}
                 </span>
               )}
-              {e.attempt > 0 && <span className="text-primary">retry #{e.attempt}</span>}
+              {e.attempt > 0 && (
+                <span className="text-muted-foreground">
+                  重试 #{e.attempt}
+                </span>
+              )}
             </div>
             <span className="tabular-nums text-muted-foreground">
               {formatDuration(e.durationMs)}
@@ -723,11 +731,11 @@ function ErrorsTab({ events }: { events: LlmCallEvent[] }) {
   );
   if (errors.length === 0) {
     return (
-      <Alert>
-        <CheckCircle2 />
-        <AlertTitle>无错误记录</AlertTitle>
-        <AlertDescription>最近的翻译调用均未记录错误。</AlertDescription>
-      </Alert>
+      <PanelEmpty
+        icon={CheckCircle2}
+        title="没有错误记录"
+        description="最近的翻译调用均未出错。"
+      />
     );
   }
   return (
@@ -743,10 +751,14 @@ function ErrorsTab({ events }: { events: LlmCallEvent[] }) {
               <span className="font-medium">{STAGE_LABEL[e.stage]}</span>
               {e.chapterIndex !== undefined && (
                 <span className="text-muted-foreground">
-                  CH {String(e.chapterIndex + 1).padStart(2, "0")}
+                  {chapterLabel(e.chapterIndex)}
                 </span>
               )}
-              {e.attempt > 0 && <span className="text-primary">retry #{e.attempt}</span>}
+              {e.attempt > 0 && (
+                <span className="text-muted-foreground">
+                  重试 #{e.attempt}
+                </span>
+              )}
             </div>
             <span className="tabular-nums text-muted-foreground">
               {formatTime(e.startedAt)}
@@ -754,7 +766,7 @@ function ErrorsTab({ events }: { events: LlmCallEvent[] }) {
           </div>
           {e.blockIds && e.blockIds.length > 0 && (
             <p className="mt-1 font-mono text-xs text-muted-foreground">
-              blocks: {e.blockIds.join(", ")}
+              段落：{e.blockIds.join(", ")}
             </p>
           )}
           <p className="mt-1 text-sm break-words whitespace-pre-wrap">
@@ -810,6 +822,10 @@ function PanelEmpty({
   );
 }
 
+function chapterLabel(index: number): string {
+  return `第 ${index + 1} 章`;
+}
+
 function formatDuration(ms: number): string {
   if (!ms || ms <= 0) return "—";
   if (ms < 1000) return `${ms}ms`;
@@ -831,10 +847,12 @@ function formatTime(iso: string | undefined): string {
 
 export function TranslationStatusButton({
   storyID,
+  title,
   className,
   label,
 }: {
   storyID: string;
+  title?: string;
   className?: string;
   label?: string;
 }) {
@@ -858,6 +876,7 @@ export function TranslationStatusButton({
       </Button>
       <TranslationStatusPanel
         storyID={storyID}
+        title={title}
         open={open}
         onClose={() => setOpen(false)}
         returnFocusRef={triggerRef}

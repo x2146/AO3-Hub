@@ -383,6 +383,7 @@ export const ChapterView = z.object({
     prev: z.number().int().nonnegative().optional(),
     next: z.number().int().nonnegative().optional(),
     total: z.number().int().nonnegative(),
+    titles: z.array(z.string()).default([]),
   }),
 });
 export type ChapterView = z.infer<typeof ChapterView>;
