@@ -102,7 +102,7 @@ func (a *App) persistParseResult(html string, parsed parseResult, source storySo
 	if translatedMatchesOriginal(translated, parsed.Original) {
 		nextTranslated = *translated
 	} else {
-		nextTranslated = makeBlankTranslated(parsed.Original)
+		nextTranslated = carryOverTranslated(translated, parsed.Original)
 	}
 	if err := a.store.SaveTranslated(id, nextTranslated); err != nil {
 		return Meta{}, ChapterFile{}, false, err
@@ -230,6 +230,71 @@ func translatedMatchesOriginal(translated *ChapterFile, original ChapterFile) bo
 		}
 	}
 	return true
+}
+
+// carryOverTranslated builds a blank translation for original and keeps every
+// finished block whose ID and type still exist, so re-parsing a story only
+// re-translates the blocks that actually changed.
+func carryOverTranslated(previous *ChapterFile, original ChapterFile) ChapterFile {
+	next := makeBlankTranslated(original)
+	if previous == nil {
+		return next
+	}
+	done := map[string]Block{}
+	for _, chapter := range previous.Chapters {
+		for _, block := range chapter.Blocks {
+			if block.Status == BlockDone {
+				done[block.ID] = block
+			}
+		}
+	}
+	for ci, chapter := range original.Chapters {
+		for bi, block := range chapter.Blocks {
+			if !isTranslatable(block) {
+				continue
+			}
+			if prev, ok := done[block.ID]; ok && prev.Type == block.Type {
+				next.Chapters[ci].Blocks[bi] = prev
+			}
+		}
+	}
+	return next
+}
+
+func hasOversizedBlock(file ChapterFile) bool {
+	for _, chapter := range file.Chapters {
+		for _, block := range chapter.Blocks {
+			if isTranslatable(block) && len(htmlToPlainText(block.HTML)) > maxBlockTextBytes {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// repairOversizedOriginal re-parses the saved source of a story imported before
+// oversized blocks were split, carrying finished translations over by block ID.
+// It reports whether the stored original was replaced.
+func (a *App) repairOversizedOriginal(id string, original ChapterFile, translated *ChapterFile) (*ChapterFile, *ChapterFile, bool, error) {
+	if !hasOversizedBlock(original) {
+		return &original, translated, false, nil
+	}
+	source, ok, err := a.store.LoadSource(id)
+	if err != nil || !ok {
+		return &original, translated, false, err
+	}
+	parsed, err := parseAO3HTML(source)
+	if err != nil || len(parsed.Original.Chapters) != len(original.Chapters) {
+		return &original, translated, false, nil
+	}
+	next := carryOverTranslated(translated, parsed.Original)
+	if err := a.store.SaveOriginal(id, parsed.Original); err != nil {
+		return nil, nil, false, err
+	}
+	if err := a.store.SaveTranslated(id, next); err != nil {
+		return nil, nil, false, err
+	}
+	return &parsed.Original, &next, true, nil
 }
 
 func (a *App) prepareEntry(id, title, author string, status StoryStatus) error {
@@ -395,6 +460,15 @@ func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode T
 		idSet := map[string]bool{}
 		for _, blockID := range blockIDs {
 			idSet[blockID] = true
+		}
+		original, translated, repaired, err := a.repairOversizedOriginal(id, *original, translated)
+		if err != nil {
+			return err
+		}
+		if repaired {
+			// The selected blocks may have been split into new ones; the next
+			// pass translates every unfinished block anyway.
+			idSet = map[string]bool{}
 		}
 		if len(idSet) > 0 {
 			matchedIDs := map[string]bool{}

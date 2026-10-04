@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -426,6 +427,11 @@ func retryableLLMError(err error) (time.Duration, bool) {
 	}
 	var networkError net.Error
 	if errors.As(err, &networkError) {
+		return 0, true
+	}
+	// net/http's bundled HTTP/2 client does not export its stream errors; a
+	// reset stream (e.g. a proxy cutting a long response) surfaces only as text.
+	if errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "stream error:") {
 		return 0, true
 	}
 	return 0, false

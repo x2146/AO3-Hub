@@ -634,36 +634,46 @@ func pickBlockType(tag string) BlockType {
 
 func extractBlocks(root *goquery.Selection, chapterIndex int) []Block {
 	blocks := []Block{}
-	root.Children().Each(func(_ int, el *goquery.Selection) {
-		node := goquery.NodeName(el)
-		tag := strings.ToLower(node)
-		if tag == "" || tag == "#text" {
-			return
-		}
-		if tag == "hr" {
-			html := "<hr/>"
-			blocks = append(blocks, Block{
-				ID:     blockID(chapterIndex, "hr-"+strconv.Itoa(len(blocks))),
-				Type:   BlockHR,
-				HTML:   html,
-				Status: BlockPending,
-			})
-			return
-		}
-		if !blockTagRE.MatchString(tag) {
-			tag = "p"
-		}
-		html := strings.TrimSpace(sanitizeBlock(el))
-		if html == "" {
-			return
-		}
-		blocks = append(blocks, Block{
-			ID:     blockID(chapterIndex, html),
-			Type:   pickBlockType(tag),
-			HTML:   html,
-			Status: BlockPending,
+	var walk func(*goquery.Selection)
+	walk = func(parent *goquery.Selection) {
+		parent.Children().Each(func(_ int, el *goquery.Selection) {
+			node := goquery.NodeName(el)
+			tag := strings.ToLower(node)
+			if tag == "" || tag == "#text" {
+				return
+			}
+			if tag == "hr" {
+				html := "<hr/>"
+				blocks = append(blocks, Block{
+					ID:     blockID(chapterIndex, "hr-"+strconv.Itoa(len(blocks))),
+					Type:   BlockHR,
+					HTML:   html,
+					Status: BlockPending,
+				})
+				return
+			}
+			if isFlattenableWrapper(el) {
+				walk(el)
+				return
+			}
+			if !blockTagRE.MatchString(tag) {
+				tag = "p"
+			}
+			html := strings.TrimSpace(sanitizeBlock(el))
+			if html == "" {
+				return
+			}
+			for _, piece := range splitOversizedBlockHTML(html) {
+				blocks = append(blocks, Block{
+					ID:     blockID(chapterIndex, piece),
+					Type:   pickBlockType(tag),
+					HTML:   piece,
+					Status: BlockPending,
+				})
+			}
 		})
-	})
+	}
+	walk(root)
 	return blocks
 }
 
