@@ -9,34 +9,56 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	xhtml "golang.org/x/net/html"
 )
 
 const (
 	maxProgressErrors = 100
-	retryBaseDelay    = 600 * time.Millisecond
 	retryMaxDelay     = 5 * time.Minute
 )
 
-const systemPrompt = `你是文学翻译。把英文文学作品翻译为中文，要求：
-1) 输入不含 HTML 或格式标签；程序会保留 AO3 原始富文本结构，你只负责翻译纯文本
-2) 每个 block 的 text 是整段上下文，runs 是需要翻译的文本片段；结合 text 让 runs 的译文自然连贯
-3) 输出 blocks 必须与输入 blocks 数量、id、顺序一致；每个 block.runs 必须与输入 runs 数量、id、顺序一致
-4) 仅翻译 runs[].text，不增删 run，不输出 HTML、Markdown 或格式标注
-5) 译文自然流畅，符合中文小说语感；角色名、地名等专有名词在同一作品内保持一致
-6) 仅输出 JSON 对象 { "blocks": [{ "id": "...", "runs": [{ "id": "...", "text": "..." }] }] }，不要任何解释`
+// retryBaseDelay is a variable so tests can run retry paths without sleeping.
+var retryBaseDelay = 600 * time.Millisecond
 
-const refinedSystemPrompt = `你是 AO3 同人文翻译专家，专精英文同人作品的中文本地化。要求：
-1) 输入不含 HTML 或格式标签；程序会保留 AO3 原始富文本结构，你只负责翻译纯文本
-2) 每个 block 的 text 是整段上下文，runs 是需要翻译的文本片段；结合 text、context、glossary 让 runs 的译文自然连贯
-3) 输出 blocks 必须与输入 blocks 数量、id、顺序一致；每个 block.runs 必须与输入 runs 数量、id、顺序一致
-4) 仅翻译 runs[].text，不增删 run，不输出 HTML、Markdown 或格式标注
-5) 译文符合中文同人圈语感，保留作者语气与节奏；严格遵守 context 中 glossary 的译名
-6) 仅输出 JSON 对象 { "blocks": [{ "id": "...", "runs": [{ "id": "...", "text": "..." }] }] }，不要任何解释`
+// The translation reply is plain text with one <seg> tag per unit instead of
+// JSON: prose full of quotes and line breaks needs no escaping, a truncated or
+// garbled reply still yields every segment that closed properly, and the
+// model spends its attention on the translation rather than on syntax. Ids
+// are short batch-local aliases ("3", "3.2") mapped back to block ids in code.
+const translateIOSpec = `输入是 JSON：context 是作品资料，blocks 是按顺序排列的待译段落。
+- 段落只有 text：整段翻译，输出一个 <seg id="段 id">
+- 段落带 runs：原文被斜体、加粗等格式切成了几个片段；text 是整段原文，仅供理解上下文。为每个 run 各输出一个 <seg id="run id">，写该片段对应的译文。措辞可按中文语序调整，但每个片段都要有非空译文，程序才能把原文格式套回去
+
+输出格式（程序按此解析，务必严格遵守）：
+- 按输入顺序逐个输出 <seg id="…">译文</seg>，每个 seg 单独一行，不遗漏、不合并、不新增
+- seg 里只写译文纯文本：不要 HTML、Markdown 或转义符，引号、撇号照常书写
+- seg 之外不要输出任何内容：不要 JSON、代码围栏、标题或解释
+
+示例
+输入 blocks：[{"id":"1","text":"He smiled."},{"id":"2","text":"I can't leave.","runs":[{"id":"2.1","text":"I "},{"id":"2.2","text":"can't"},{"id":"2.3","text":" leave."}]}]
+输出：
+<seg id="1">他笑了。</seg>
+<seg id="2.1">我</seg>
+<seg id="2.2">不能</seg>
+<seg id="2.3">离开。</seg>`
+
+const systemPrompt = `你是文学翻译，把英文文学作品翻译为中文。
+译文自然流畅，符合中文小说语感；角色名、地名等专有名词在同一作品内保持一致。
+
+` + translateIOSpec
+
+const refinedSystemPrompt = `你是 AO3 同人文翻译专家，专精英文同人作品的中文本地化。
+译文符合中文同人圈语感，保留作者语气与节奏；结合 context 中的摘要、基调与当前章节摘要理解情节，严格遵守 characters 与 glossary 中的译名。
+
+` + translateIOSpec
 
 type translateRun struct {
 	ID   string `json:"id"`
@@ -284,7 +306,7 @@ func buildUserPayload(meta Meta, blocks []translateInput, transCtx *TranslationC
 	}
 	payload := map[string]any{
 		"context": contextPayload,
-		"blocks":  blocks,
+		"blocks":  promptBlocks(blocks),
 	}
 	buf, err := json.Marshal(payload)
 	if err != nil {
@@ -293,38 +315,180 @@ func buildUserPayload(meta Meta, blocks []translateInput, transCtx *TranslationC
 	return string(buf), nil
 }
 
-func parseJSONResponse(content string) ([]translateOutput, error) {
-	s := strings.TrimSpace(content)
-	if strings.HasPrefix(s, "```") {
-		s = strings.TrimSpace(strings.TrimPrefix(s, "```json"))
-		s = strings.TrimSpace(strings.TrimPrefix(s, "```"))
-		s = strings.TrimSpace(strings.TrimSuffix(s, "```"))
-	}
-	var raw struct {
-		Blocks  []translateOutput `json:"blocks"`
-		Data    []translateOutput `json:"data"`
-		Results []translateOutput `json:"results"`
-	}
-	if err := json.Unmarshal([]byte(s), &raw); err != nil {
-		return nil, err
-	}
-	out := raw.Blocks
-	if out == nil {
-		out = raw.Data
-	}
-	if out == nil {
-		out = raw.Results
-	}
-	if out == nil {
-		return nil, errors.New("LLM response missing 'blocks' array")
-	}
-	return out, nil
+type promptRun struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
 }
 
-func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []translateInput, transCtx *TranslationContext, chapterIndex int, tracker *statsTracker, attempt int) ([]translateOutput, error) {
+type promptBlock struct {
+	ID   string      `json:"id"`
+	Text string      `json:"text"`
+	Runs []promptRun `json:"runs,omitempty"`
+}
+
+func blockAlias(position int) string { return strconv.Itoa(position + 1) }
+
+func runAlias(position, run int) string { return blockAlias(position) + "." + strconv.Itoa(run+1) }
+
+// promptBlocks is what the model sees: batch-local ids instead of 32-char
+// hashes, and runs only where formatting actually splits the paragraph, so a
+// plain paragraph is sent once rather than twice.
+func promptBlocks(inputs []translateInput) []promptBlock {
+	out := make([]promptBlock, len(inputs))
+	for i, input := range inputs {
+		block := promptBlock{ID: blockAlias(i), Text: input.Text}
+		if len(input.Runs) > 1 {
+			block.Runs = make([]promptRun, len(input.Runs))
+			for j, run := range input.Runs {
+				block.Runs[j] = promptRun{ID: runAlias(i, j), Text: run.Text}
+			}
+		}
+		out[i] = block
+	}
+	return out
+}
+
+var (
+	segOpenRE  = regexp.MustCompile(`(?i)<seg\s+id\s*=\s*\\?["'“”]?\s*([0-9]+(?:\.[0-9]+)?)\s*\\?["'“”]?\s*>`)
+	segCloseRE = regexp.MustCompile(`(?i)<\\?/seg\s*>`)
+	segEntity  = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&quot;", `"`, "&#39;", "'", "&apos;", "'", "&amp;", "&")
+)
+
+// extractSegments collects every properly closed <seg> in a reply. A segment
+// whose closing tag is missing before the next opening tag (or the end of a
+// truncated reply) is dropped rather than guessed at; the first occurrence of
+// a repeated id wins.
+func extractSegments(content string) map[string]string {
+	out := map[string]string{}
+	opens := segOpenRE.FindAllStringSubmatchIndex(content, -1)
+	for k, m := range opens {
+		end := len(content)
+		if k+1 < len(opens) {
+			end = opens[k+1][0]
+		}
+		region := content[m[1]:end]
+		closeAt := segCloseRE.FindStringIndex(region)
+		if closeAt == nil {
+			continue
+		}
+		id := content[m[2]:m[3]]
+		if _, seen := out[id]; seen {
+			continue
+		}
+		out[id] = strings.TrimSpace(segEntity.Replace(region[:closeAt[0]]))
+	}
+	return out
+}
+
+type blockFailure struct {
+	ID  string
+	Err error
+}
+
+// keepEdgeSpace restores a run's leading/trailing ASCII space that trimming
+// removed, but only where the translation still has Latin text at that edge:
+// "<em>Draco</em> Malfoy" must not become "DracoMalfoy", while Chinese text
+// needs no spaces between runs.
+func keepEdgeSpace(source, translated string) string {
+	if translated == "" {
+		return translated
+	}
+	isLatin := func(r rune) bool { return r < utf8.RuneSelf && (unicode.IsLetter(r) || unicode.IsDigit(r)) }
+	first, _ := utf8.DecodeRuneInString(translated)
+	last, _ := utf8.DecodeLastRuneInString(translated)
+	if strings.TrimLeft(source, " \t\n") != source && isLatin(first) {
+		translated = " " + translated
+	}
+	if strings.TrimRight(source, " \t\n") != source && isLatin(last) {
+		translated += " "
+	}
+	return translated
+}
+
+// parseSegmentResponse maps a reply back onto the batch. Each block stands on
+// its own: blocks whose segments all arrived are rendered, the rest come back
+// as failures to be retried without re-translating their neighbours. With
+// flatten set (the last attempt), a formatted block answered with a single
+// whole-block segment is accepted as plain text, losing its inline formatting
+// rather than the translation.
+func parseSegmentResponse(content string, inputs []translateInput, flatten bool) ([]translateOutput, []blockFailure) {
+	segs := extractSegments(content)
+	outs := make([]translateOutput, 0, len(inputs))
+	failures := []blockFailure{}
+	for i, input := range inputs {
+		runs := make([]translateRun, 0, len(input.Runs))
+		var missing error
+		if len(input.Runs) == 1 {
+			text, ok := segs[blockAlias(i)]
+			if !ok {
+				text, ok = segs[runAlias(i, 0)]
+			}
+			if !ok {
+				missing = errors.New("模型输出缺少该段译文")
+			}
+			runs = append(runs, translateRun{ID: input.Runs[0].ID, Text: text})
+		} else {
+			for j, run := range input.Runs {
+				text, ok := segs[runAlias(i, j)]
+				if !ok {
+					missing = fmt.Errorf("模型输出缺少第 %d/%d 个格式片段的译文", j+1, len(input.Runs))
+					break
+				}
+				runs = append(runs, translateRun{ID: run.ID, Text: keepEdgeSpace(run.Text, text)})
+			}
+			if whole, ok := segs[blockAlias(i)]; missing != nil && flatten && ok && whole != "" {
+				html, err := flattenedHTML(input, whole)
+				if err == nil {
+					outs = append(outs, translateOutput{ID: input.ID, HTML: html})
+					continue
+				}
+			}
+		}
+		if missing != nil {
+			failures = append(failures, blockFailure{ID: input.ID, Err: missing})
+			continue
+		}
+		html, err := translatedHTMLFromRuns(input, translateOutput{ID: input.ID, Runs: runs})
+		if err != nil {
+			failures = append(failures, blockFailure{ID: input.ID, Err: err})
+			continue
+		}
+		outs = append(outs, translateOutput{ID: input.ID, HTML: html})
+	}
+	return outs, failures
+}
+
+// flattenedHTML puts a whole-block translation into the first text node of
+// the original block and empties the rest, keeping the block element and its
+// attributes but dropping inline formatting.
+func flattenedHTML(input translateInput, text string) (string, error) {
+	body, err := parseHTMLBody(input.HTML)
+	if err != nil {
+		return "", err
+	}
+	first := true
+	eachTranslatableTextNode(body, func(n *xhtml.Node) {
+		if first {
+			n.Data = text
+			first = false
+			return
+		}
+		n.Data = ""
+	})
+	rendered, err := renderHTMLBodyContents(body)
+	if err != nil {
+		return "", err
+	}
+	return sanitizeHTMLFragment(rendered), nil
+}
+
+// translateBatch makes one provider call for inputs. A reply that yields at
+// least one usable block is a success with per-block failures for the rest;
+// only a reply with nothing usable is an error.
+func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []translateInput, transCtx *TranslationContext, chapterIndex int, tracker *statsTracker, attempt int, final bool) ([]translateOutput, []blockFailure, error) {
 	userPayload, err := buildUserPayload(meta, inputs, transCtx, chapterIndex)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	prompt := systemPrompt
 	if transCtx != nil {
@@ -334,42 +498,34 @@ func translateBatch(ctx context.Context, cfg Config, meta Meta, inputs []transla
 	for i, input := range inputs {
 		ids[i] = input.ID
 	}
-	result, err := tracker.trackedChat(ctx, cfg.LLM, []ChatMessage{
+	var outs []translateOutput
+	var failures []blockFailure
+	_, err = tracker.trackedChat(ctx, cfg.LLM, []ChatMessage{
 		{Role: "system", Content: prompt},
 		{Role: "user", Content: userPayload},
-	}, true, trackedCallContext{
+	}, false, trackedCallContext{
 		stage:        StageTranslateBatch,
 		chapterIndex: intPtr(chapterIndex),
 		blockIDs:     ids,
 		attempt:      attempt,
+	}, func(content string) error {
+		outs, failures = parseSegmentResponse(content, inputs, final)
+		if len(outs) == 0 && len(failures) > 0 {
+			return fmt.Errorf("%d 段均无可用译文（%s）", len(failures), failures[0].Err)
+		}
+		if len(failures) > 0 {
+			next := "将单独重试"
+			if final {
+				next = "重试次数已用尽"
+			}
+			return &outputWarning{msg: fmt.Sprintf("%d/%d 段无可用译文（%s），%s", len(failures), len(inputs), failures[0].Err, next)}
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	out, err := parseJSONResponse(result.Content)
-	if err != nil {
-		return nil, err
-	}
-	if len(out) != len(inputs) {
-		return nil, fmt.Errorf("段数不匹配: 输入 %d，输出 %d", len(inputs), len(out))
-	}
-	byID := map[string]translateOutput{}
-	for _, item := range out {
-		byID[item.ID] = item
-	}
-	ordered := make([]translateOutput, 0, len(inputs))
-	for _, input := range inputs {
-		found, ok := byID[input.ID]
-		if !ok {
-			return nil, fmt.Errorf("缺少段 id=%s 的译文", input.ID)
-		}
-		html, err := translatedHTMLFromRuns(input, found)
-		if err != nil {
-			return nil, err
-		}
-		ordered = append(ordered, translateOutput{ID: input.ID, HTML: html})
-	}
-	return ordered, nil
+	return outs, failures, nil
 }
 
 func withRetry[T any](ctx context.Context, fn func(attempt int) (T, error), retries int) (T, error) {
@@ -393,29 +549,38 @@ func withRetrySleep[T any](ctx context.Context, fn func(attempt int) (T, error),
 		if !retryable || i == retries {
 			return zero, err
 		}
-		delay := retryBaseDelay
-		for n := 0; n < i && delay < retryMaxDelay; n++ {
-			delay *= 2
-			if delay > retryMaxDelay {
-				delay = retryMaxDelay
-			}
-		}
-		if retryAfter > delay {
-			delay = retryAfter
-		}
-		if delay > retryMaxDelay {
-			delay = retryMaxDelay
-		}
-		if err := sleep(ctx, delay); err != nil {
+		if err := sleep(ctx, retryDelay(i, retryAfter)); err != nil {
 			return zero, err
 		}
 	}
 	return zero, errors.New("retry loop exhausted")
 }
 
+// retryDelay is the exponential backoff before retry attempt+1, stretched to
+// honor a provider's Retry-After and capped at retryMaxDelay.
+func retryDelay(attempt int, retryAfter time.Duration) time.Duration {
+	delay := retryBaseDelay
+	for n := 0; n < attempt && delay < retryMaxDelay; n++ {
+		delay *= 2
+		if delay > retryMaxDelay {
+			delay = retryMaxDelay
+		}
+	}
+	if retryAfter > delay {
+		delay = retryAfter
+	}
+	if delay > retryMaxDelay {
+		delay = retryMaxDelay
+	}
+	return delay
+}
+
 func retryableLLMError(err error) (time.Duration, bool) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return 0, false
+	}
+	if isOutputFormatError(err) {
+		return 0, true
 	}
 	var llmErr LLMError
 	if errors.As(err, &llmErr) {
@@ -856,33 +1021,26 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 					}
 					stateMu.Unlock()
 
-					outs, callErr := withRetry(passCtx, func(attempt int) ([]translateOutput, error) {
-						return translateBatch(passCtx, cfg, meta, inputs, transCtx, chIdx, tracker, attempt)
-					}, cfg.LLM.MaxAutoRetries)
-
-					stateMu.Lock()
-					a.clearInflight(storyID, ids)
-					if firstErr != nil || (callErr != nil && passCtx.Err() != nil) {
-						stateMu.Unlock()
-						return
-					}
-					events := make([]StreamEvent, 0, len(inputs))
-					progressErrors := make([]ProgressError, 0)
-					if callErr != nil {
-						msg := callErr.Error()
-						for _, input := range inputs {
-							bi := findBlockIndex(transCh.Blocks, input.ID)
-							if bi < 0 {
-								continue
-							}
-							block := transCh.Blocks[bi]
-							block.Status = BlockError
-							block.Error = msg
-							transCh.Blocks[bi] = block
-							progressErrors = append(progressErrors, ProgressError{ChapterIndex: chIdx, BlockID: input.ID, Message: msg, At: nowISO()})
-							events = append(events, StreamEvent{Type: "block-error", ChapterIndex: chIdx, BlockID: input.ID, Message: msg})
+					// Each attempt commits what it got: finished blocks are saved
+					// and shown right away, and only blocks the reply left
+					// unusable go into the next attempt, so one bad paragraph
+					// never costs its neighbours a re-translation.
+					commit := func(outs []translateOutput, failed []blockFailure) bool {
+						stateMu.Lock()
+						defer stateMu.Unlock()
+						settled := make([]string, 0, len(outs)+len(failed))
+						for _, out := range outs {
+							settled = append(settled, out.ID)
 						}
-					} else {
+						for _, failure := range failed {
+							settled = append(settled, failure.ID)
+						}
+						a.clearInflight(storyID, settled)
+						if firstErr != nil {
+							return false
+						}
+						events := make([]StreamEvent, 0, len(settled))
+						progressErrors := make([]ProgressError, 0, len(failed))
 						for _, out := range outs {
 							bi := findBlockIndex(transCh.Blocks, out.ID)
 							if bi < 0 {
@@ -895,20 +1053,76 @@ func (a *App) translatePass(ctx context.Context, storyID string, cfg Config, met
 							transCh.Blocks[bi] = block
 							events = append(events, StreamEvent{Type: "block-done", ChapterIndex: chIdx, BlockID: out.ID})
 						}
+						for _, failure := range failed {
+							bi := findBlockIndex(transCh.Blocks, failure.ID)
+							if bi < 0 {
+								continue
+							}
+							msg := failure.Err.Error()
+							block := transCh.Blocks[bi]
+							block.Status = BlockError
+							block.Error = msg
+							transCh.Blocks[bi] = block
+							progressErrors = append(progressErrors, ProgressError{ChapterIndex: chIdx, BlockID: failure.ID, Message: msg, At: nowISO()})
+							events = append(events, StreamEvent{Type: "block-error", ChapterIndex: chIdx, BlockID: failure.ID, Message: msg})
+						}
+						if err := a.store.SaveTranslated(storyID, *translated); err != nil {
+							setFirstErrorLocked(err)
+							return false
+						}
+						if err := a.emitProgress(storyID, *translated, *original, progressErrors...); err != nil {
+							setFirstErrorLocked(err)
+							return false
+						}
+						for _, event := range events {
+							a.bus.Emit(storyID, event)
+						}
+						return true
 					}
-					if err := a.store.SaveTranslated(storyID, *translated); err != nil {
-						setFirstErrorLocked(err)
-						stateMu.Unlock()
-						return
+
+					remaining := inputs
+					retries := cfg.LLM.MaxAutoRetries
+					if retries < 0 {
+						retries = 0
 					}
-					if err := a.emitProgress(storyID, *translated, *original, progressErrors...); err != nil {
-						setFirstErrorLocked(err)
-						stateMu.Unlock()
-						return
-					}
-					stateMu.Unlock()
-					for _, event := range events {
-						a.bus.Emit(storyID, event)
+					for attempt := 0; len(remaining) > 0; attempt++ {
+						outs, failed, callErr := translateBatch(passCtx, cfg, meta, remaining, transCtx, chIdx, tracker, attempt, attempt >= retries)
+						if callErr != nil {
+							if passCtx.Err() != nil {
+								a.clearInflight(storyID, ids)
+								return
+							}
+							retryAfter, retryable := retryableLLMError(callErr)
+							if retryable && attempt < retries {
+								if sleepWithContext(passCtx, retryDelay(attempt, retryAfter)) != nil {
+									a.clearInflight(storyID, ids)
+									return
+								}
+								continue
+							}
+							failed = make([]blockFailure, len(remaining))
+							for i, input := range remaining {
+								failed[i] = blockFailure{ID: input.ID, Err: callErr}
+							}
+							remaining = nil
+						} else if len(failed) > 0 && attempt < retries {
+							byID := make(map[string]translateInput, len(remaining))
+							for _, input := range remaining {
+								byID[input.ID] = input
+							}
+							next := make([]translateInput, 0, len(failed))
+							for _, failure := range failed {
+								next = append(next, byID[failure.ID])
+							}
+							remaining = next
+							failed = nil
+						} else {
+							remaining = nil
+						}
+						if !commit(outs, failed) {
+							a.clearInflight(storyID, ids)
+							return
+						}
 					}
 				}
 			}()

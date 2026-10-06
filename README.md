@@ -330,8 +330,10 @@ Release workflow 会自动用 Go 生成 `manifest.json`，里面记录每个平�
 
 - 段落（`<p>`/`<blockquote>` 等 `.userstuff` 直接子节点）= 翻译最小单元，id = `sha1(chapterIndex + html).slice(0,8)`
 - 默认每批 8 段（约 3–4k tokens），并发 3
-- system prompt 强制保留内联标签 / 段数 / 顺序；OpenAI 兼容接口使用 `response_format: json_object`，Claude Messages 使用 system JSON 指令
-- 单段失败 → 标记 status=error，可在阅读器里逐段重试
+- 输入是 JSON：每段只发纯文本，段 id 用批内短编号（`1`、`2`…）；带斜体/加粗等内联格式的段额外发 runs（`2.1`、`2.2`…），HTML 骨架留在服务端，译文按 run 回填
+- 输出是逐行 `<seg id="…">译文</seg>` 标签而非 JSON：译文里的引号、换行无需转义，回复被截断时已闭合的段照常可用
+- 逐段验收：一批里解析成功的段立即落盘，只把缺失/无效的段重新请求；格式错误与 408/429/5xx/网络错误一样计入 `maxAutoRetries`（指数退避，遵守 Retry-After）
+- 重试用尽仍失败 → 标记 status=error，可在阅读器里逐段重试；统计页的请求样本会保留模型原始输出，便于排查
 - 整体进程崩溃 → 启动时扫 `progress.json` 非 ready/error 的故事重新入队，从首个 pending 段续跑
 
 ### 翻译模式（normal / refined）
@@ -341,7 +343,9 @@ Release workflow 会自动用 Go 生成 `manifest.json`，里面记录每个平�
 - **normal**：直接分块翻译，速度最快、token 成本最低。system prompt 是「文学翻译」。
 - **refined（精翻）**：translating 之前先跑一遍 **analyzing** 阶段
   - 让 LLM 通读全文，生成 `context.json`：全文摘要 / 基调 / ship 关系 / 角色术语表 / 分章摘要
-  - 长文兜底：若 `approxTokens(全文) > llm.analysisMaxInputTokens`（默认 60000），自动降级为「分章并发摘要 → 一次归并调用」
+  - 长文兜底：若 `approxTokens(全文) > llm.analysisMaxInputTokens`（默认 60000），或整篇分析失败（鉴权错误除外），自动降级为「分章并发摘要 → 一次归并调用」；分章摘要由程序直接拼进结果，归并只产出全文摘要/基调/术语
+  - 分析输出仍是 JSON（OpenAI 兼容接口用 `response_format: json_object`）：解析时容忍围栏、前后缀、多余字段，并自动修复未转义的内引号和尾随逗号；仍无法解析时把原输出和错误反馈给模型重试
+  - 分章结果逐章写入 `analysis-partials.json`，某章失败后重跑只补缺失章节；整篇分析成功或手动「重新分析」时删除
   - translating 阶段切到「AO3 同人翻译专家」system prompt，并把 context.json 的摘要/术语表/基调 + 当前章节摘要塞进 user payload
   - `context.json` 与 `original.json` 同级落盘；retry / 进程重启不会重算；只有原文增章时才整篇重生成
 

@@ -107,21 +107,34 @@ func TestParseAnalysisFullResponseStripsFences(t *testing.T) {
 	}
 }
 
-func TestParseAnalysisResponsesRejectInvalidSchemaAndEmptySummaries(t *testing.T) {
-	tests := map[string]string{
-		"empty full summary": `{"summary":"  ","chapterSummaries":[]}`,
-		"unknown field":      `{"summary":"ok","chapterSummaries":[],"unexpected":true}`,
-		"trailing value":     `{"summary":"ok","chapterSummaries":[]} {}`,
-	}
-	for name, content := range tests {
-		t.Run(name, func(t *testing.T) {
-			if _, err := parseAnalysisFullResponse(content); err == nil {
-				t.Fatal("expected invalid full analysis response to fail")
-			}
-		})
+func TestParseAnalysisResponsesRejectEmptySummaries(t *testing.T) {
+	if _, err := parseAnalysisFullResponse(`{"summary":"  ","chapterSummaries":[]}`); err == nil {
+		t.Fatal("expected empty full summary to fail")
 	}
 	if _, err := parseChapterPartial(`{"summary":" \t"}`, 3, "C3"); err == nil {
 		t.Fatal("expected empty chapter summary to fail")
+	}
+}
+
+func TestParseAnalysisResponsesTolerateCommonModelNoise(t *testing.T) {
+	tests := map[string]string{
+		"unknown field":   `{"summary":"ok","chapterSummaries":[],"unexpected":true}`,
+		"trailing value":  `{"summary":"ok","chapterSummaries":[]} {}`,
+		"lead-in":         "好的，以下是分析：\n{\"summary\":\"ok\",\"chapterSummaries\":[]}\n希望有帮助",
+		"inner quotes":    `{"summary":"他叫他"甜心"，然后离开","chapterSummaries":[]}`,
+		"trailing comma":  `{"summary":"ok","ships":["A/B",],"chapterSummaries":[],}`,
+		"fenced, unknown": "```json\n{\"summary\":\"ok\",\"extra\":{\"a\":1}}\n```",
+	}
+	for name, content := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseAnalysisFullResponse(content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(got.Summary, "ok") && !strings.Contains(got.Summary, "甜心") {
+				t.Fatalf("summary = %q", got.Summary)
+			}
+		})
 	}
 }
 

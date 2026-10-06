@@ -237,9 +237,22 @@ type trackedCallContext struct {
 	attempt      int
 }
 
-func (t *statsTracker) trackedChat(ctx context.Context, cfg LLMConfig, messages []ChatMessage, jsonMode bool, callCtx trackedCallContext) (ChatResult, error) {
+// trackedChat runs one provider call and records it. accept, when non-nil,
+// validates the reply; a rejected reply is returned as an outputFormatError
+// and recorded as a failed call with the raw reply kept in the sample, so
+// format problems show up in stats instead of hiding behind a 200.
+func (t *statsTracker) trackedChat(ctx context.Context, cfg LLMConfig, messages []ChatMessage, jsonMode bool, callCtx trackedCallContext, accept func(content string) error) (ChatResult, error) {
 	startedAt := nowISO()
 	result, err := chat(ctx, cfg, messages, jsonMode)
+	transportOK := err == nil
+	var warning *outputWarning
+	if transportOK && accept != nil {
+		if acceptErr := accept(result.Content); errors.As(acceptErr, &warning) {
+			err = nil
+		} else {
+			err = asOutputFormatError(acceptErr)
+		}
+	}
 	event := LLMCallEvent{
 		Stage:        callCtx.stage,
 		Model:        cfg.Model,
@@ -248,6 +261,12 @@ func (t *statsTracker) trackedChat(ctx context.Context, cfg LLMConfig, messages 
 		Attempt:      callCtx.attempt,
 		ChapterIndex: callCtx.chapterIndex,
 		BlockIDs:     callCtx.blockIDs,
+	}
+	if transportOK {
+		prompt, completion, total := extractUsage(result.Usage)
+		event.PromptTokens = prompt
+		event.CompletionTokens = completion
+		event.TotalTokens = total
 	}
 	if err != nil {
 		event.Status = LLMCallError
@@ -258,10 +277,6 @@ func (t *statsTracker) trackedChat(ctx context.Context, cfg LLMConfig, messages 
 		}
 	} else {
 		event.Status = LLMCallSuccess
-		prompt, completion, total := extractUsage(result.Usage)
-		event.PromptTokens = prompt
-		event.CompletionTokens = completion
-		event.TotalTokens = total
 	}
 	if t != nil {
 		t.record(event)
@@ -275,9 +290,14 @@ func (t *statsTracker) trackedChat(ctx context.Context, cfg LLMConfig, messages 
 				ChapterIndex: callCtx.chapterIndex,
 				BlockIDs:     callCtx.blockIDs,
 			}
-			if err == nil {
+			switch {
+			case err == nil && warning != nil:
+				sample.ResponsePreview = "警告: " + warning.Error() + "\n\n--- 原始输出 ---\n" + result.Content
+			case err == nil:
 				sample.ResponsePreview = result.Content
-			} else {
+			case transportOK:
+				sample.ResponsePreview = err.Error() + "\n\n--- 原始输出 ---\n" + result.Content
+			default:
 				sample.ResponsePreview = err.Error()
 			}
 			t.saveSample(sample)

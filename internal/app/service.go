@@ -567,6 +567,9 @@ func (a *App) ReanalyzeStory(id string) error {
 		if err := a.store.DeleteContext(id); err != nil {
 			return err
 		}
+		if err := a.store.DeleteAnalysisPartials(id); err != nil {
+			return err
+		}
 		meta.TranslationMode = TranslationModeRefined
 		if err := a.store.SaveMeta(id, *meta); err != nil {
 			return err

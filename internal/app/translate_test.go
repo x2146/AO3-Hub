@@ -22,34 +22,59 @@ func (temporaryTranslationError) Error() string   { return "temporary network er
 func (temporaryTranslationError) Timeout() bool   { return false }
 func (temporaryTranslationError) Temporary() bool { return true }
 
-func translationTestResponse(r *http.Request) (string, error) {
+type translationTestBlock struct {
+	ID   string         `json:"id"`
+	Text string         `json:"text"`
+	Runs []translateRun `json:"runs"`
+}
+
+func translationTestPayload(r *http.Request) ([]translationTestBlock, error) {
 	var request struct {
 		Messages []ChatMessage `json:"messages"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(request.Messages) == 0 {
-		return "", errors.New("missing messages")
+		return nil, errors.New("missing messages")
 	}
 	var payload struct {
-		Blocks []translateInput `json:"blocks"`
+		Blocks []translationTestBlock `json:"blocks"`
 	}
 	if err := json.Unmarshal([]byte(request.Messages[len(request.Messages)-1].Content), &payload); err != nil {
+		return nil, err
+	}
+	return payload.Blocks, nil
+}
+
+// translationTestSegments answers like a well-behaved model: one <seg> per
+// plain block, one per run for formatted blocks.
+func translationTestSegments(blocks []translationTestBlock) string {
+	var b strings.Builder
+	for _, block := range blocks {
+		if len(block.Runs) == 0 {
+			fmt.Fprintf(&b, "<seg id=\"%s\">译:%s</seg>\n", block.ID, block.Text)
+			continue
+		}
+		for _, run := range block.Runs {
+			fmt.Fprintf(&b, "<seg id=\"%s\">译:%s</seg>\n", run.ID, run.Text)
+		}
+	}
+	return b.String()
+}
+
+func translationTestResponse(r *http.Request) (string, error) {
+	blocks, err := translationTestPayload(r)
+	if err != nil {
 		return "", err
 	}
-	outputs := make([]translateOutput, len(payload.Blocks))
-	for i, block := range payload.Blocks {
-		runs := make([]translateRun, len(block.Runs))
-		for j, run := range block.Runs {
-			runs[j] = translateRun{ID: run.ID, Text: "译:" + run.Text}
-		}
-		outputs[i] = translateOutput{ID: block.ID, Runs: runs}
-	}
-	response, err := json.Marshal(struct {
-		Blocks []translateOutput `json:"blocks"`
-	}{Blocks: outputs})
-	return string(response), err
+	return translationTestSegments(blocks), nil
+}
+
+func writeChatContent(w http.ResponseWriter, content string) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"choices": []map[string]any{{"message": map[string]string{"content": content}}},
+	})
 }
 
 func serveTranslationTestResponse(w http.ResponseWriter, r *http.Request) {

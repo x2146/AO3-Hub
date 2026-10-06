@@ -593,6 +593,57 @@ func (s *Store) DeleteContext(id string) error {
 	return err
 }
 
+// analysisPartials holds the chapter analyses of an unfinished chaptered
+// analysis, so a rerun after one bad chapter only redoes that chapter. It is
+// tied to the fingerprint of the analysis it belongs to and removed once the
+// final context.json is written.
+type analysisPartials struct {
+	Fingerprint string           `json:"fingerprint"`
+	Chapters    []chapterPartial `json:"chapters"`
+}
+
+func (s *Store) LoadAnalysisPartials(id string) (*analysisPartials, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, err := s.storyPath(id, "analysis-partials.json")
+	if err != nil {
+		return nil, err
+	}
+	var partials analysisPartials
+	ok, err := s.readJSON(path, &partials)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return &partials, nil
+}
+
+func (s *Store) SaveAnalysisPartials(id string, partials analysisPartials) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, err := s.storyPath(id, "analysis-partials.json")
+	if err != nil {
+		return err
+	}
+	if partials.Chapters == nil {
+		partials.Chapters = []chapterPartial{}
+	}
+	return s.writeJSON(path, partials)
+}
+
+func (s *Store) DeleteAnalysisPartials(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, err := s.storyPath(id, "analysis-partials.json")
+	if err != nil {
+		return err
+	}
+	err = os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func (s *Store) RemoveStory(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
