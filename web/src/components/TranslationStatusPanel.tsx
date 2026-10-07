@@ -5,7 +5,6 @@ import {
   Activity,
   AlertCircle,
   CheckCircle2,
-  ChevronDown,
   Clock,
   Cpu,
   FileText,
@@ -22,7 +21,12 @@ import type {
   StageStats,
   TranslationStatusView,
 } from "@ao3hub/shared";
-import { Badge } from "@/components/ui/badge";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,7 +39,24 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Empty,
   EmptyDescription,
@@ -43,17 +64,18 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Toggle } from "@/components/ui/toggle";
 import { cn } from "@/lib/utils";
 import { api, subscribeStream } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -61,7 +83,7 @@ import { STAGE_LABEL } from "../lib/status";
 
 type Props = {
   storyID: string;
-  /** Shown under the sheet title; falls back to the story ID. */
+  /** Shown under the dialog title; falls back to the story ID. */
   title?: string;
   open: boolean;
   onClose: () => void;
@@ -134,60 +156,49 @@ export function TranslationStatusPanel({
     reanalyze.reset();
   }, [open]);
 
+  const errorCount = data?.events.filter((e) => e.status === "error").length ?? 0;
+
   return (
     <>
-      <Sheet open={open} onOpenChange={(next) => !next && onClose()}>
-        <SheetContent
-          side="right"
+      <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+        <DialogContent
           onCloseAutoFocus={(event) => {
             if (!returnFocusRef?.current) return;
             event.preventDefault();
             returnFocusRef.current.focus();
           }}
-          className="w-full gap-0 overflow-y-auto sm:max-w-2xl"
+          className="flex h-[min(46rem,calc(100svh-2rem))] flex-col gap-0 p-0 sm:max-w-3xl"
         >
-          <SheetHeader className="sticky top-0 z-10 gap-2 border-b bg-popover/95 pr-14 backdrop-blur-md">
+          <DialogHeader className="border-b p-4 pr-12">
             <div className="flex items-center gap-2">
-              <Activity className="size-4 shrink-0 text-primary" />
-              <SheetTitle>翻译状态</SheetTitle>
+              <DialogTitle>翻译状态</DialogTitle>
               {data?.mode && (
                 <Badge variant={data.mode === "refined" ? "accent" : "secondary"}>
                   {data.mode === "refined" ? "精翻" : "普通"}
                 </Badge>
               )}
-              <Button
-                variant="ghost"
+              <Toggle
+                variant="outline"
                 size="sm"
                 className="ml-auto"
-                onClick={() => setAutoRefresh((v) => !v)}
-                aria-pressed={autoRefresh}
-                title={autoRefresh ? "暂停自动刷新" : "恢复自动刷新"}
+                pressed={autoRefresh}
+                onPressedChange={setAutoRefresh}
               >
                 <RefreshCw
                   data-icon="inline-start"
                   className={cn(autoRefresh && isFetching && "animate-spin")}
                 />
                 {autoRefresh ? "实时" : "已暂停"}
-              </Button>
+              </Toggle>
             </div>
-            <SheetDescription
-              className={cn("truncate", !title && "font-mono text-xs")}
-            >
+            <DialogDescription className={cn("truncate", !title && "font-mono")}>
               {title || storyID}
-            </SheetDescription>
-          </SheetHeader>
+            </DialogDescription>
+          </DialogHeader>
 
-          <div className="flex flex-col gap-4 p-4">
-            {isLoading && <Skeleton className="h-40 w-full" />}
-            {error && (
-              <Alert variant="destructive">
-                <AlertCircle />
-                <AlertTitle>状态加载失败</AlertTitle>
-                <AlertDescription>{error.message}</AlertDescription>
-              </Alert>
-            )}
-            {data && (
-              <Tabs defaultValue="overview">
+          {data ? (
+            <Tabs defaultValue="overview" className="min-h-0 flex-1 gap-0">
+              <div className="px-4 pt-4">
                 <TabsList className="w-full">
                   <TabsTrigger value="overview">概览</TabsTrigger>
                   <TabsTrigger value="context">预读</TabsTrigger>
@@ -195,46 +206,86 @@ export function TranslationStatusPanel({
                   <TabsTrigger value="events">调用</TabsTrigger>
                   <TabsTrigger value="errors">
                     错误
-                    {data.events.some((e) => e.status === "error") && (
-                      <Badge variant="destructive">
-                        {data.events.filter((e) => e.status === "error").length}
-                      </Badge>
+                    {errorCount > 0 && (
+                      <Badge variant="destructive">{errorCount}</Badge>
                     )}
                   </TabsTrigger>
                 </TabsList>
+              </div>
 
-                <TabsContent value="overview" className="mt-4">
-                  <OverviewTab
-                    data={data}
-                    canManage={!!user}
-                    actionPending={actionPending}
-                    onReset={() => setConfirmAction("reset")}
-                    resetting={resetStats.isPending}
-                    onReanalyze={() => setConfirmAction("reanalyze")}
-                    reanalyzing={reanalyze.isPending}
-                  />
-                </TabsContent>
+              <TabsContent value="overview" className="min-h-0 overflow-y-auto p-4">
+                <OverviewTab data={data} />
+              </TabsContent>
 
-                <TabsContent value="context" className="mt-4">
-                  <ContextTab data={data} />
-                </TabsContent>
+              <TabsContent value="context" className="min-h-0 overflow-y-auto p-4">
+                <ContextTab data={data} />
+              </TabsContent>
 
-                <TabsContent value="samples" className="mt-4">
-                  <SamplesTab samples={data.samples} canSeeRaw={!!user} />
-                </TabsContent>
+              <TabsContent value="samples" className="min-h-0 overflow-y-auto p-4">
+                <SamplesTab samples={data.samples} canSeeRaw={!!user} />
+              </TabsContent>
 
-                <TabsContent value="events" className="mt-4">
-                  <EventsTab events={data.events} />
-                </TabsContent>
+              <TabsContent value="events" className="min-h-0 overflow-y-auto p-4">
+                <EventsTab events={data.events} />
+              </TabsContent>
 
-                <TabsContent value="errors" className="mt-4">
-                  <ErrorsTab events={data.events} />
-                </TabsContent>
-              </Tabs>
-            )}
-          </div>
-        </SheetContent>
-      </Sheet>
+              <TabsContent value="errors" className="min-h-0 overflow-y-auto p-4">
+                <ErrorsTab events={data.events} />
+              </TabsContent>
+            </Tabs>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
+              {isLoading && (
+                <>
+                  <Skeleton className="h-8 w-full" />
+                  <div className="grid grid-cols-2 gap-4">
+                    <Skeleton className="h-24" />
+                    <Skeleton className="h-24" />
+                    <Skeleton className="h-24" />
+                    <Skeleton className="h-24" />
+                  </div>
+                </>
+              )}
+              {error && (
+                <Alert variant="destructive">
+                  <AlertCircle />
+                  <AlertTitle>状态加载失败</AlertTitle>
+                  <AlertDescription>{error.message}</AlertDescription>
+                </Alert>
+              )}
+            </div>
+          )}
+
+          {data && user && (
+            <DialogFooter className="m-0">
+              <Button
+                variant="destructive"
+                disabled={actionPending}
+                onClick={() => setConfirmAction("reset")}
+              >
+                {resetStats.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <Trash2 data-icon="inline-start" />
+                )}
+                {resetStats.isPending ? "重置中" : "重置统计"}
+              </Button>
+              <Button
+                variant="outline"
+                disabled={actionPending}
+                onClick={() => setConfirmAction("reanalyze")}
+              >
+                {reanalyze.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <Sparkles data-icon="inline-start" />
+                )}
+                {reanalyze.isPending ? "入队中" : "重新预读并翻译"}
+              </Button>
+            </DialogFooter>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={!!confirmAction}
@@ -273,38 +324,26 @@ export function TranslationStatusPanel({
   );
 }
 
-function OverviewTab({
-  data,
-  canManage,
-  actionPending,
-  onReset,
-  resetting,
-  onReanalyze,
-  reanalyzing,
-}: {
-  data: TranslationStatusView;
-  canManage: boolean;
-  actionPending: boolean;
-  onReset: () => void;
-  resetting: boolean;
-  onReanalyze: () => void;
-  reanalyzing: boolean;
-}) {
+function OverviewTab({ data }: { data: TranslationStatusView }) {
   const total = data.stats.total;
-  const successRate =
-    total.calls > 0 ? Math.round((total.successes / total.calls) * 100) : 0;
+  const successRate = rate(total.successes, total.calls);
   const avgTokens =
     total.calls > 0 ? Math.round(total.totalTokens / total.calls) : 0;
   const avgDuration =
     total.calls > 0 ? Math.round(total.durationMs / total.calls) : 0;
-  const stages = Object.entries(data.stats.byStage) as [
-    LlmCallStage,
-    StageStats,
-  ][];
+  const stages = (
+    Object.entries(data.stats.byStage) as [LlmCallStage, StageStats][]
+  ).sort((a, b) => b[1].calls - a[1].calls);
+  const timeline = [
+    data.stats.startedAt && `首次 ${formatTime(data.stats.startedAt)}`,
+    data.stats.lastCallAt && `最近 ${formatTime(data.stats.lastCallAt)}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-2">
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-4">
         <StatCard
           icon={Cpu}
           label="API 调用"
@@ -331,61 +370,61 @@ function OverviewTab({
         />
       </div>
 
-      <Section title="按阶段">
-        {stages.length === 0 ? (
-          <p className="text-xs text-muted-foreground">暂无调用记录</p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {stages
-              .sort((a, b) => b[1].calls - a[1].calls)
-              .map(([stage, stats]) => (
-                <StageRow key={stage} stage={stage} stats={stats} />
-              ))}
-          </div>
-        )}
-      </Section>
-
-      {(data.stats.startedAt || data.stats.lastCallAt) && (
-        <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          {data.stats.startedAt && <span>首次 {formatTime(data.stats.startedAt)}</span>}
-          {data.stats.startedAt && data.stats.lastCallAt && <span>·</span>}
-          {data.stats.lastCallAt && <span>最近 {formatTime(data.stats.lastCallAt)}</span>}
-        </p>
-      )}
-
-      {canManage && (
-        <>
-          <Separator />
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={actionPending}
-              onClick={onReanalyze}
-            >
-              {reanalyzing ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <Sparkles data-icon="inline-start" />
-              )}
-              {reanalyzing ? "入队中" : "重新预读并翻译"}
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={actionPending}
-              onClick={onReset}
-            >
-              {resetting ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <Trash2 data-icon="inline-start" />
-              )}
-              {resetting ? "重置中" : "重置统计"}
-            </Button>
-          </div>
-        </>
-      )}
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle>按阶段</CardTitle>
+          {timeline && <CardDescription>{timeline}</CardDescription>}
+        </CardHeader>
+        <CardContent>
+          {stages.length === 0 ? (
+            <p className="text-muted-foreground">暂无调用记录</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>阶段</TableHead>
+                  <TableHead className="text-right">调用</TableHead>
+                  <TableHead className="text-right">成功率</TableHead>
+                  <TableHead className="text-right">失败</TableHead>
+                  <TableHead className="hidden text-right sm:table-cell">重试</TableHead>
+                  <TableHead className="text-right">Token</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {stages.map(([stage, stats]) => (
+                  <TableRow key={stage}>
+                    <TableCell>
+                      <Badge variant={STAGE_VARIANT[stage]}>
+                        {STAGE_LABEL[stage]}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {stats.calls}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {rate(stats.successes, stats.calls)}%
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        "text-right tabular-nums",
+                        stats.failures > 0 && "text-destructive",
+                      )}
+                    >
+                      {stats.failures}
+                    </TableCell>
+                    <TableCell className="hidden text-right tabular-nums sm:table-cell">
+                      {stats.retries}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {stats.totalTokens.toLocaleString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -399,41 +438,19 @@ function StatCard({
   icon: LucideIcon;
   label: string;
   value: string;
-  sub?: string;
+  sub: string;
 }) {
   return (
-    <div className="flex flex-col gap-1 rounded-lg border bg-card p-3">
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Icon className="size-3.5 text-primary" />
-        {label}
-      </div>
-      <p className="text-lg font-semibold tabular-nums">{value}</p>
-      {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
-    </div>
-  );
-}
-
-function StageRow({ stage, stats }: { stage: LlmCallStage; stats: StageStats }) {
-  const successRate =
-    stats.calls > 0 ? Math.round((stats.successes / stats.calls) * 100) : 0;
-  return (
-    <div className="rounded-lg border px-3 py-2 text-xs">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Badge variant={STAGE_VARIANT[stage]}>{STAGE_LABEL[stage]}</Badge>
-        <span className="tabular-nums text-muted-foreground">
-          {stats.calls} 次 · 成功率 {successRate}% ·{" "}
-          {stats.totalTokens.toLocaleString()} token
-        </span>
-      </div>
-      {(stats.failures > 0 || stats.retries > 0) && (
-        <p className="mt-1 flex gap-3 text-muted-foreground">
-          {stats.failures > 0 && (
-            <span className="text-destructive">失败 {stats.failures}</span>
-          )}
-          {stats.retries > 0 && <span>重试 {stats.retries}</span>}
-        </p>
-      )}
-    </div>
+    <Card size="sm">
+      <CardHeader>
+        <CardDescription>{label}</CardDescription>
+        <CardTitle className="text-xl tabular-nums">{value}</CardTitle>
+        <CardAction>
+          <Icon className="size-4 text-muted-foreground" />
+        </CardAction>
+      </CardHeader>
+      <CardContent className="text-xs text-muted-foreground">{sub}</CardContent>
+    </Card>
   );
 }
 
@@ -452,87 +469,140 @@ function ContextTab({ data }: { data: TranslationStatusView }) {
       />
     );
   }
+  const glossary = Object.entries(ctx.glossary);
   return (
     <div className="flex flex-col gap-4">
       {ctx.summary && (
-        <Section title="全文摘要">
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">
-            {ctx.summary}
-          </p>
-        </Section>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>全文摘要</CardTitle>
+            <CardDescription>
+              生成于 {formatTime(ctx.generatedAt)} · {ctx.chapterCount ?? "?"} 章
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="leading-relaxed whitespace-pre-wrap">{ctx.summary}</p>
+          </CardContent>
+        </Card>
       )}
       {ctx.tone && (
-        <Section title="风格基调">
-          <p className="text-sm leading-relaxed">{ctx.tone}</p>
-        </Section>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>风格基调</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="leading-relaxed">{ctx.tone}</p>
+          </CardContent>
+        </Card>
       )}
       {ctx.ships.length > 0 && (
-        <Section title={`Ships (${ctx.ships.length})`}>
-          <div className="flex flex-wrap gap-1.5">
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Ships</CardTitle>
+            <CardAction>
+              <Badge variant="secondary">{ctx.ships.length}</Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-1.5">
             {ctx.ships.map((s) => (
               <Badge key={s} variant="accent">
                 {s}
               </Badge>
             ))}
-          </div>
-        </Section>
+          </CardContent>
+        </Card>
       )}
       {ctx.characters.length > 0 && (
-        <Section title={`角色 (${ctx.characters.length})`}>
-          <ul className="flex flex-col gap-1.5">
-            {ctx.characters.map((c) => (
-              <li key={c.name} className="rounded-lg border px-3 py-2 text-xs">
-                <p className="font-medium">
-                  {c.name}
-                  {c.zh && (
-                    <span className="ml-2 font-normal text-muted-foreground">
-                      · {c.zh}
-                    </span>
-                  )}
-                </p>
-                {c.role && (
-                  <p className="mt-0.5 text-muted-foreground">{c.role}</p>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Section>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>角色</CardTitle>
+            <CardAction>
+              <Badge variant="secondary">{ctx.characters.length}</Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-1/4">原名</TableHead>
+                  <TableHead className="w-1/4">译名</TableHead>
+                  <TableHead>定位</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ctx.characters.map((c) => (
+                  <TableRow key={c.name}>
+                    <TableCell className="whitespace-normal font-medium">
+                      {c.name}
+                    </TableCell>
+                    <TableCell className="whitespace-normal">{c.zh || "—"}</TableCell>
+                    <TableCell className="whitespace-normal text-muted-foreground">
+                      {c.role || "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
-      {Object.keys(ctx.glossary).length > 0 && (
-        <Section title={`术语表 (${Object.keys(ctx.glossary).length})`}>
-          <div className="flex flex-col gap-1 font-mono text-xs">
-            {Object.entries(ctx.glossary).map(([k, v]) => (
-              <div
-                key={k}
-                className="flex items-center justify-between gap-3 rounded-md border px-2 py-1"
-              >
-                <span className="truncate">{k}</span>
-                <span className="truncate text-muted-foreground">{v}</span>
-              </div>
-            ))}
-          </div>
-        </Section>
+      {glossary.length > 0 && (
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>术语表</CardTitle>
+            <CardAction>
+              <Badge variant="secondary">{glossary.length}</Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>原文</TableHead>
+                  <TableHead>译名</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {glossary.map(([k, v]) => (
+                  <TableRow key={k}>
+                    <TableCell className="whitespace-normal">{k}</TableCell>
+                    <TableCell className="whitespace-normal">{v}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
       {ctx.chapterSummaries.length > 0 && (
-        <Section title={`分章摘要 (${ctx.chapterSummaries.length})`}>
-          <ol className="flex flex-col gap-2">
-            {ctx.chapterSummaries.map((c) => (
-              <li key={c.index} className="rounded-lg border px-3 py-2 text-xs">
-                <div className="flex items-baseline gap-2">
-                  <span className="shrink-0 tabular-nums text-muted-foreground">
-                    {chapterLabel(c.index)}
-                  </span>
-                  {c.title && <span className="truncate font-medium">{c.title}</span>}
-                </div>
-                <p className="mt-1 leading-relaxed">{c.summary}</p>
-              </li>
-            ))}
-          </ol>
-        </Section>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>分章摘要</CardTitle>
+            <CardAction>
+              <Badge variant="secondary">{ctx.chapterSummaries.length}</Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            <Accordion type="multiple">
+              {ctx.chapterSummaries.map((c) => (
+                <AccordionItem key={c.index} value={String(c.index)}>
+                  <AccordionTrigger>
+                    <span className="flex min-w-0 gap-2">
+                      <span className="shrink-0 tabular-nums text-muted-foreground">
+                        {chapterLabel(c.index)}
+                      </span>
+                      {c.title && <span className="truncate">{c.title}</span>}
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent className="leading-relaxed">
+                    {c.summary}
+                  </AccordionContent>
+                </AccordionItem>
+              ))}
+            </Accordion>
+          </CardContent>
+        </Card>
       )}
-      <p className="text-xs text-muted-foreground">
-        生成于 {formatTime(ctx.generatedAt)} · {ctx.chapterCount ?? "?"} 章
-      </p>
     </div>
   );
 }
@@ -564,7 +634,7 @@ function SamplesTab({
     );
   }
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {entries.map(([stage, sample]) => (
         <SampleCard key={stage} stage={stage} sample={sample} />
       ))}
@@ -579,81 +649,51 @@ function SampleCard({
   stage: LlmCallStage;
   sample: RequestSample;
 }) {
-  const [showSystem, setShowSystem] = useState(false);
+  const meta = [
+    sample.chapterIndex !== undefined && chapterLabel(sample.chapterIndex),
+    sample.blockIds?.length && `${sample.blockIds.length} 段`,
+    formatTime(sample.capturedAt),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <div className="overflow-hidden rounded-lg border">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/50 px-3 py-2 text-xs">
-        <div className="flex items-center gap-2">
-          <Badge variant={STAGE_VARIANT[stage]}>{STAGE_LABEL[stage]}</Badge>
-          {sample.chapterIndex !== undefined && (
-            <span className="tabular-nums text-muted-foreground">
-              {chapterLabel(sample.chapterIndex)}
-            </span>
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>{STAGE_LABEL[stage]}</CardTitle>
+        <CardDescription>{meta}</CardDescription>
+        <CardAction>
+          <Badge variant={STAGE_VARIANT[stage]}>最新样本</Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <Tabs defaultValue="payload">
+          <TabsList variant="line">
+            <TabsTrigger value="payload">请求内容</TabsTrigger>
+            <TabsTrigger value="system">系统提示词</TabsTrigger>
+            {sample.responsePreview && (
+              <TabsTrigger value="response">响应预览</TabsTrigger>
+            )}
+          </TabsList>
+          <TabsContent value="payload">
+            <CodeBlock>{sample.userPayload || "(空)"}</CodeBlock>
+          </TabsContent>
+          <TabsContent value="system">
+            <CodeBlock>{sample.systemPrompt || "(空)"}</CodeBlock>
+          </TabsContent>
+          {sample.responsePreview && (
+            <TabsContent value="response">
+              <CodeBlock>{sample.responsePreview}</CodeBlock>
+            </TabsContent>
           )}
-          {sample.blockIds && sample.blockIds.length > 0 && (
-            <span className="tabular-nums text-muted-foreground">
-              {sample.blockIds.length} 段
-            </span>
-          )}
-        </div>
-        <span className="text-muted-foreground">
-          {formatTime(sample.capturedAt)}
-        </span>
-      </div>
-      <div className="flex flex-col gap-3 px-3 py-3">
-        <details
-          open={showSystem}
-          onToggle={(e) =>
-            setShowSystem((e.currentTarget as HTMLDetailsElement).open)
-          }
-        >
-          <summary className="flex cursor-pointer items-center justify-between text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            <span>系统提示词</span>
-            <ChevronDown
-              className={cn("size-3 transition-transform", showSystem && "rotate-180")}
-            />
-          </summary>
-          <Pre className="mt-2 max-h-[200px]">{sample.systemPrompt || "(空)"}</Pre>
-        </details>
-
-        <div>
-          <PreLabel>请求内容</PreLabel>
-          <Pre className="max-h-[280px]">{sample.userPayload || "(空)"}</Pre>
-        </div>
-
-        {sample.responsePreview && (
-          <div>
-            <PreLabel>响应预览</PreLabel>
-            <Pre className="max-h-[200px]">{sample.responsePreview}</Pre>
-          </div>
-        )}
-      </div>
-    </div>
+        </Tabs>
+      </CardContent>
+    </Card>
   );
 }
 
-function PreLabel({ children }: { children: React.ReactNode }) {
+function CodeBlock({ children }: { children: React.ReactNode }) {
   return (
-    <p className="mb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-      {children}
-    </p>
-  );
-}
-
-function Pre({
-  className,
-  children,
-}: {
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <pre
-      className={cn(
-        "overflow-auto rounded-md bg-muted p-2 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap",
-        className,
-      )}
-    >
+    <pre className="max-h-72 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap">
       {children}
     </pre>
   );
@@ -671,56 +711,66 @@ function EventsTab({ events }: { events: LlmCallEvent[] }) {
     );
   }
   return (
-    <ul className="flex flex-col gap-1.5">
-      {recent.map((e) => (
-        <li
-          key={e.id}
-          className={cn(
-            "rounded-lg border px-3 py-2 font-mono text-xs",
-            e.status === "error" && "border-destructive/40 bg-destructive/5",
-          )}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <Badge
-                variant={
-                  e.status === "error" ? "destructive" : STAGE_VARIANT[e.stage]
-                }
-              >
-                {STAGE_LABEL[e.stage]}
-              </Badge>
-              {e.chapterIndex !== undefined && (
-                <span className="text-muted-foreground">
-                  {chapterLabel(e.chapterIndex)}
-                </span>
-              )}
-              {e.attempt > 0 && (
-                <span className="text-muted-foreground">
-                  重试 #{e.attempt}
-                </span>
-              )}
-            </div>
-            <span className="tabular-nums text-muted-foreground">
-              {formatDuration(e.durationMs)}
-            </span>
-          </div>
-          <div className="mt-1 flex items-center justify-between gap-2 text-muted-foreground">
-            <span className="truncate">{formatTime(e.startedAt)}</span>
-            <span className="shrink-0 tabular-nums">
-              {e.totalTokens > 0
-                ? `${e.promptTokens}↗${e.completionTokens} = ${e.totalTokens}`
-                : "—"}
-            </span>
-          </div>
-          {e.status === "error" && e.errorMessage && (
-            <p className="mt-1 break-words whitespace-pre-wrap text-destructive">
-              {e.errorStatus ? `[${e.errorStatus}] ` : ""}
-              {e.errorMessage}
-            </p>
-          )}
-        </li>
-      ))}
-    </ul>
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>最近调用</CardTitle>
+        <CardDescription>按时间倒序，Token 为输入 / 输出</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>阶段</TableHead>
+              <TableHead className="hidden sm:table-cell">章节</TableHead>
+              <TableHead className="text-right">Token</TableHead>
+              <TableHead className="text-right">耗时</TableHead>
+              <TableHead className="hidden text-right sm:table-cell">时间</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {recent.map((e) => (
+              <TableRow key={e.id}>
+                <TableCell>
+                  <div className="flex items-center gap-1.5">
+                    <Badge
+                      variant={
+                        e.status === "error" ? "destructive" : STAGE_VARIANT[e.stage]
+                      }
+                    >
+                      {e.status === "error" && <AlertCircle />}
+                      {STAGE_LABEL[e.stage]}
+                    </Badge>
+                    {e.attempt > 0 && (
+                      <Badge variant="outline">重试 #{e.attempt}</Badge>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell className="hidden text-muted-foreground sm:table-cell">
+                  {e.chapterIndex !== undefined ? chapterLabel(e.chapterIndex) : "—"}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {e.totalTokens > 0 ? (
+                    <>
+                      {e.promptTokens.toLocaleString()}
+                      <span className="text-muted-foreground"> / </span>
+                      {e.completionTokens.toLocaleString()}
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatDuration(e.durationMs)}
+                </TableCell>
+                <TableCell className="hidden text-right text-muted-foreground sm:table-cell">
+                  {formatTime(e.startedAt)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -739,64 +789,35 @@ function ErrorsTab({ events }: { events: LlmCallEvent[] }) {
     );
   }
   return (
-    <ul className="flex flex-col gap-2">
-      {errors.map((e) => (
-        <li
-          key={e.id}
-          className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2"
-        >
-          <div className="flex items-center justify-between gap-2 font-mono text-xs">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="size-3.5 text-destructive" />
-              <span className="font-medium">{STAGE_LABEL[e.stage]}</span>
-              {e.chapterIndex !== undefined && (
-                <span className="text-muted-foreground">
-                  {chapterLabel(e.chapterIndex)}
-                </span>
-              )}
-              {e.attempt > 0 && (
-                <span className="text-muted-foreground">
-                  重试 #{e.attempt}
-                </span>
-              )}
-            </div>
-            <span className="tabular-nums text-muted-foreground">
-              {formatTime(e.startedAt)}
-            </span>
-          </div>
-          {e.blockIds && e.blockIds.length > 0 && (
-            <p className="mt-1 font-mono text-xs text-muted-foreground">
-              段落：{e.blockIds.join(", ")}
-            </p>
-          )}
-          <p className="mt-1 text-sm break-words whitespace-pre-wrap">
-            {e.errorStatus ? (
-              <span className="mr-1 font-mono text-destructive">
-                [{e.errorStatus}]
-              </span>
-            ) : null}
-            {e.errorMessage}
-          </p>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="flex flex-col gap-2">
-      <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-        {title}
-      </h3>
-      <div>{children}</div>
-    </section>
+    <div className="flex flex-col gap-2">
+      {errors.map((e) => {
+        const heading = [
+          STAGE_LABEL[e.stage],
+          e.chapterIndex !== undefined && chapterLabel(e.chapterIndex),
+          e.attempt > 0 && `重试 #${e.attempt}`,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        return (
+          <Alert key={e.id} variant="destructive">
+            <AlertCircle />
+            <AlertTitle>{heading}</AlertTitle>
+            <AlertDescription>
+              <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+                {e.errorStatus ? `[${e.errorStatus}] ` : ""}
+                {e.errorMessage}
+              </p>
+              <p className="text-muted-foreground [overflow-wrap:anywhere]">
+                {formatTime(e.startedAt)}
+                {e.blockIds && e.blockIds.length > 0 && (
+                  <> · {formatBlockIds(e.blockIds)}</>
+                )}
+              </p>
+            </AlertDescription>
+          </Alert>
+        );
+      })}
+    </div>
   );
 }
 
@@ -820,6 +841,16 @@ function PanelEmpty({
       </EmptyHeader>
     </Empty>
   );
+}
+
+function rate(part: number, whole: number): number {
+  return whole > 0 ? Math.round((part / whole) * 100) : 0;
+}
+
+/** Batches can span dozens of hash ids; the first few are enough to locate it. */
+function formatBlockIds(ids: string[]): string {
+  const shown = ids.slice(0, 3).join(", ");
+  return ids.length > 3 ? `段落 ${shown} 等 ${ids.length} 段` : `段落 ${shown}`;
 }
 
 function chapterLabel(index: number): string {

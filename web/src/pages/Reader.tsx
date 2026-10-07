@@ -26,6 +26,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
   Field,
   FieldContent,
   FieldDescription,
@@ -73,7 +82,7 @@ import {
   breakdownOf,
 } from "../components/TranslateProgress";
 import { TranslationStatusPanel } from "../components/TranslationStatusPanel";
-import { PHASE_LABEL } from "../lib/status";
+import { StatusPill } from "../components/StatusPill";
 
 const BLOCK_ROOT_RE =
   /^\s*<(?:p|div|blockquote|pre|h[1-6]|ul|ol|li|center|figure|figcaption|table|hr)(?:\s|>|\/)/i;
@@ -773,7 +782,7 @@ function SettingsDrawer({
     <SheetContent
       side="right"
       onCloseAutoFocus={onCloseAutoFocus}
-      className="w-full gap-0 overflow-y-auto sm:max-w-sm"
+      className="gap-0 data-[side=right]:w-full overflow-y-auto sm:max-w-sm"
     >
       <SheetHeader>
         <SheetTitle>阅读设置</SheetTitle>
@@ -969,7 +978,7 @@ function TocDrawer({
     <SheetContent
       side="left"
       onCloseAutoFocus={onCloseAutoFocus}
-      className="w-full gap-0 overflow-y-auto sm:max-w-sm"
+      className="gap-0 data-[side=left]:w-full overflow-y-auto sm:max-w-sm"
     >
       <SheetHeader>
         <SheetTitle>章节目录</SheetTitle>
@@ -1083,22 +1092,25 @@ function ChapterProgress({
     (failed || (total > 0 && (showChapterRetry || hasGlobalErrors)));
 
   return (
-    <div className="mt-6 flex flex-col gap-2.5 rounded-xl bg-card p-3 ring-1 ring-foreground/10">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span
-          className={cn(
-            "text-xs",
-            failed ? "text-destructive" : "text-muted-foreground",
-          )}
-        >
-          {PHASE_LABEL[progress.phase]}
-          {progress.message ? ` · ${progress.message}` : null}
-        </span>
-        <TranslateProgressLegend progress={progress} />
-      </div>
-      <TranslateProgressBar progress={progress} />
+    <Card size="sm" className="mt-6">
+      <CardHeader>
+        <CardTitle>
+          <StatusPill status={progress.phase} />
+        </CardTitle>
+        {progress.message && (
+          <CardDescription className={cn(failed && "text-destructive")}>
+            {progress.message}
+          </CardDescription>
+        )}
+        <CardAction>
+          <TranslateProgressLegend progress={progress} />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <TranslateProgressBar progress={progress} />
+      </CardContent>
       {showRetryRow && (
-        <div className="flex flex-wrap items-center gap-2 pt-1">
+        <CardFooter className="flex-wrap gap-2">
           {showChapterRetry && (
             <Button
               variant="outline"
@@ -1124,9 +1136,9 @@ function ChapterProgress({
                 : `重试全部失败 (${error})`}
             </Button>
           )}
-        </div>
+        </CardFooter>
       )}
-    </div>
+    </Card>
   );
 }
 
