@@ -97,12 +97,28 @@ const (
 	BlockError   BlockStatus = "error"
 )
 
+// BlockSection marks the author-written text around a chapter body. Body
+// blocks leave it empty so their JSON (and therefore every id and analysis
+// fingerprint derived from it) is unchanged from before sections existed.
+type BlockSection string
+
+const (
+	SectionBody         BlockSection = ""
+	SectionWorkSummary  BlockSection = "workSummary"
+	SectionWorkNotes    BlockSection = "workNotes"
+	SectionSummary      BlockSection = "summary"
+	SectionNotes        BlockSection = "notes"
+	SectionEndnotes     BlockSection = "endnotes"
+	SectionWorkEndnotes BlockSection = "workEndnotes"
+)
+
 type Block struct {
-	ID     string      `json:"id"`
-	Type   BlockType   `json:"type"`
-	HTML   string      `json:"html"`
-	Status BlockStatus `json:"status,omitempty"`
-	Error  string      `json:"error,omitempty"`
+	ID      string       `json:"id"`
+	Type    BlockType    `json:"type"`
+	HTML    string       `json:"html"`
+	Section BlockSection `json:"section,omitempty"`
+	Status  BlockStatus  `json:"status,omitempty"`
+	Error   string       `json:"error,omitempty"`
 }
 
 type Chapter struct {
@@ -111,8 +127,14 @@ type Chapter struct {
 	Blocks []Block `json:"blocks"`
 }
 
+// currentParserVersion is bumped whenever parseAO3HTML starts extracting
+// something new, so stories imported earlier can be re-parsed from their
+// saved source. Version 2 added the work and chapter notes as sections.
+const currentParserVersion = 2
+
 type ChapterFile struct {
-	Chapters []Chapter `json:"chapters"`
+	ParserVersion int       `json:"parserVersion,omitempty"`
+	Chapters      []Chapter `json:"chapters"`
 }
 
 type ProgressPhase string
@@ -250,18 +272,22 @@ type VersionInfo struct {
 }
 
 type ChapterPair struct {
-	ID     string      `json:"id"`
-	Type   BlockType   `json:"type"`
-	En     string      `json:"en"`
-	ZH     string      `json:"zh,omitempty"`
-	Status BlockStatus `json:"status"`
-	Error  string      `json:"error,omitempty"`
+	ID      string       `json:"id"`
+	Type    BlockType    `json:"type"`
+	Section BlockSection `json:"section,omitempty"`
+	En      string       `json:"en"`
+	ZH      string       `json:"zh,omitempty"`
+	Status  BlockStatus  `json:"status"`
+	Error   string       `json:"error,omitempty"`
 }
 
 type ChapterView struct {
 	Meta     Meta     `json:"meta"`
 	Progress Progress `json:"progress"`
-	Chapter  struct {
+	// Reparsable is set when the story predates the current parser and its
+	// saved source can be re-parsed (by a retry) to pick up what was missed.
+	Reparsable bool `json:"reparsable,omitempty"`
+	Chapter    struct {
 		Index   int           `json:"index"`
 		TitleEn string        `json:"titleEn,omitempty"`
 		TitleZH string        `json:"titleZh,omitempty"`

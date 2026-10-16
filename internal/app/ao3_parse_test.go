@@ -55,10 +55,14 @@ func TestParseAO3HTML(t *testing.T) {
 		t.Fatalf("chapters = %d", len(parsed.Original.Chapters))
 	}
 	blocks := parsed.Original.Chapters[0].Blocks
-	if len(blocks) != 3 {
+	if len(blocks) != 4 {
 		t.Fatalf("blocks = %d", len(blocks))
 	}
-	if blocks[0].Type != BlockP || blocks[0].HTML != "<p>Hello <em>world</em>.</p>" {
+	if blocks[0].Section != SectionWorkSummary || blocks[0].HTML != "<p>Summary <em>text</em>.</p>" {
+		t.Fatalf("summary block = %#v", blocks[0])
+	}
+	blocks = blocks[1:]
+	if blocks[0].Section != SectionBody || blocks[0].Type != BlockP || blocks[0].HTML != "<p>Hello <em>world</em>.</p>" {
 		t.Fatalf("first block = %#v", blocks[0])
 	}
 	if blocks[1].Type != BlockHR || blocks[1].HTML != "<hr/>" {
@@ -66,6 +70,91 @@ func TestParseAO3HTML(t *testing.T) {
 	}
 	if blocks[2].Type != BlockBlockquote || blocks[2].HTML != "<blockquote><p>Quoted.</p></blockquote>" {
 		t.Fatalf("blockquote block = %#v", blocks[2])
+	}
+}
+
+func TestParseAO3HTMLExtractsAuthorNotes(t *testing.T) {
+	html := `<!doctype html><html><head><title>Notes - Archive of Our Own</title></head><body>
+<div id="preface">
+  <div class="meta">
+    <h1>Notes</h1>
+    <p>Notes</p>
+    <blockquote class="userstuff"><p>Work note.</p></blockquote>
+  </div>
+</div>
+<div id="chapters" class="userstuff">
+  <div class="meta group">
+    <h2 class="heading">Chapter 1</h2>
+    <p>Chapter Summary</p>
+    <blockquote class="userstuff"><p>First summary.</p></blockquote>
+    <p>Chapter Notes</p>
+    <blockquote class="userstuff"><details><summary><b>disclaimer</b></summary><p>Fiction.</p></details></blockquote>
+    <div class="endnote-link">See the end of the chapter for <a href="#endnotes1">more notes</a></div>
+  </div>
+  <div class="userstuff"><p>Shared.</p><p>Body one.</p></div>
+  <div class="meta" id="endnotes1">
+    <p>Chapter End Notes</p>
+    <blockquote class="userstuff">Bare thanks, <em>no</em> paragraph.</blockquote>
+  </div>
+  <div class="meta group"><h2 class="heading">Chapter 2</h2></div>
+  <div class="userstuff"><p>Body two.</p></div>
+</div>
+<div id="afterword">
+  <div id="endnotes"><p>End Notes</p><blockquote class="userstuff"><p>Shared.</p></blockquote></div>
+</div>
+</body></html>`
+
+	parsed, err := parseAO3HTML(html)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Meta.Summary != "" || parsed.Meta.Notes != "<p>Work note.</p>" || parsed.Meta.Endnotes != "<p>Shared.</p>" {
+		t.Fatalf("meta notes = %q / %q / %q", parsed.Meta.Summary, parsed.Meta.Notes, parsed.Meta.Endnotes)
+	}
+	if parsed.Original.ParserVersion != currentParserVersion {
+		t.Fatalf("parser version = %d", parsed.Original.ParserVersion)
+	}
+	type want struct {
+		section BlockSection
+		html    string
+	}
+	check := func(chapter Chapter, wants []want) {
+		t.Helper()
+		if len(chapter.Blocks) != len(wants) {
+			t.Fatalf("chapter %d blocks = %#v", chapter.Index, chapter.Blocks)
+		}
+		for i, w := range wants {
+			if got := chapter.Blocks[i]; got.Section != w.section || got.HTML != w.html {
+				t.Fatalf("chapter %d block %d = %#v, want %#v", chapter.Index, i, got, w)
+			}
+		}
+	}
+	check(parsed.Original.Chapters[0], []want{
+		{SectionWorkNotes, "<p>Work note.</p>"},
+		{SectionSummary, "<p>First summary.</p>"},
+		{SectionNotes, "<p><b>disclaimer</b></p>"},
+		{SectionNotes, "<p>Fiction.</p>"},
+		{SectionBody, "<p>Shared.</p>"},
+		{SectionBody, "<p>Body one.</p>"},
+		{SectionEndnotes, "<div>Bare thanks, <em>no</em> paragraph.</div>"},
+	})
+	check(parsed.Original.Chapters[1], []want{
+		{SectionBody, "<p>Body two.</p>"},
+		{SectionWorkEndnotes, "<p>Shared.</p>"},
+	})
+
+	// Body ids are exactly what the parser produced before notes existed, so
+	// re-parsing an old import keeps every finished translation.
+	body := parsed.Original.Chapters[0].Blocks[4]
+	if body.ID != blockID(0, "<p>Shared.</p>") {
+		t.Fatalf("body id = %q", body.ID)
+	}
+	if note := parsed.Original.Chapters[1].Blocks[1]; note.ID == blockID(1, "<p>Shared.</p>") {
+		t.Fatal("note id collides with the body id scheme")
+	}
+	fingerprintInput := storyBody(parsed.Original)
+	if fingerprintInput.ParserVersion != 0 || len(fingerprintInput.Chapters[0].Blocks) != 2 || len(fingerprintInput.Chapters[1].Blocks) != 1 {
+		t.Fatalf("story body = %#v", fingerprintInput)
 	}
 }
 

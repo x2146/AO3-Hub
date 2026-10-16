@@ -98,6 +98,9 @@ func htmlToPlainText(s string) string {
 func chapterPlainText(chapter Chapter) string {
 	parts := []string{}
 	for _, block := range chapter.Blocks {
+		if block.Section != SectionBody {
+			continue
+		}
 		if block.Type == BlockHR {
 			parts = append(parts, "---")
 			continue
@@ -560,6 +563,24 @@ func normalizedAnalysisBaseURL(raw string) (string, error) {
 	return parsed.String(), nil
 }
 
+// storyBody strips the author notes and the parser version from original.
+// Analysis only reads the story itself, so re-parsing an old import to pick up
+// its notes must not invalidate the cached analysis.
+func storyBody(original ChapterFile) ChapterFile {
+	out := ChapterFile{Chapters: make([]Chapter, len(original.Chapters))}
+	for i, chapter := range original.Chapters {
+		blocks := make([]Block, 0, len(chapter.Blocks))
+		for _, block := range chapter.Blocks {
+			if block.Section == SectionBody {
+				blocks = append(blocks, block)
+			}
+		}
+		chapter.Blocks = blocks
+		out.Chapters[i] = chapter
+	}
+	return out
+}
+
 func analysisFingerprint(meta Meta, original ChapterFile, cfg Config) (string, error) {
 	baseURL, err := normalizedAnalysisBaseURL(cfg.LLM.BaseURL)
 	if err != nil {
@@ -590,7 +611,7 @@ func analysisFingerprint(meta Meta, original ChapterFile, cfg Config) (string, e
 		ResultSchemaVersion: analysisResultSchemaVersion,
 		Prompts:             [3]string{analysisSystemPromptFull, analysisSystemPromptChapter, analysisSystemPromptMerge},
 		Meta:                metaSeed(meta),
-		Original:            original,
+		Original:            storyBody(original),
 	}
 	payload.Provider.APIType = normalizeLLMAPIType(cfg.LLM.APIType)
 	payload.Provider.BaseURL = baseURL
@@ -610,6 +631,9 @@ func estimateAnalysisInputTokens(meta Meta, original ChapterFile) int {
 	for _, chapter := range original.Chapters {
 		total += approxTokens(chapter.Title)
 		for _, block := range chapter.Blocks {
+			if block.Section != SectionBody {
+				continue
+			}
 			total += approxTokens(block.HTML)
 		}
 	}

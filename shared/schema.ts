@@ -98,6 +98,17 @@ export type BlockType = z.infer<typeof BlockType>;
 export const BlockStatus = z.enum(["pending", "done", "error"]);
 export type BlockStatus = z.infer<typeof BlockStatus>;
 
+/** Author-written text around a chapter body; body blocks carry no section. */
+export const BlockSection = z.enum([
+  "workSummary",
+  "workNotes",
+  "summary",
+  "notes",
+  "endnotes",
+  "workEndnotes",
+]);
+export type BlockSection = z.infer<typeof BlockSection>;
+
 export const Block = z.object({
   id: z.string(),
   type: BlockType,
@@ -364,6 +375,8 @@ export type CreateStoryRequest = z.infer<typeof CreateStoryRequest>;
 export const ChapterView = z.object({
   meta: Meta,
   progress: Progress,
+  /** Imported by an older parser; a retry re-reads the source for its notes. */
+  reparsable: z.boolean().optional(),
   chapter: z.object({
     index: z.number().int().nonnegative(),
     titleEn: z.string().optional(),
@@ -372,6 +385,7 @@ export const ChapterView = z.object({
       z.object({
         id: z.string(),
         type: BlockType,
+        section: BlockSection.optional(),
         en: z.string(),
         zh: z.string().optional(),
         status: BlockStatus,

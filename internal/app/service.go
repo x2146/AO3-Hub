@@ -272,29 +272,72 @@ func hasOversizedBlock(file ChapterFile) bool {
 	return false
 }
 
-// repairOversizedOriginal re-parses the saved source of a story imported before
-// oversized blocks were split, carrying finished translations over by block ID.
-// It reports whether the stored original was replaced.
-func (a *App) repairOversizedOriginal(id string, original ChapterFile, translated *ChapterFile) (*ChapterFile, *ChapterFile, bool, error) {
-	if !hasOversizedBlock(original) {
+// repairStaleOriginal re-parses the saved source of a story imported by an
+// older parser (one that kept oversized blocks whole or skipped the author's
+// notes), carrying finished translations over by block ID. It reports whether
+// the stored original was replaced.
+func (a *App) repairStaleOriginal(id string, original ChapterFile, translated *ChapterFile) (*ChapterFile, *ChapterFile, bool, error) {
+	oversized := hasOversizedBlock(original)
+	if original.ParserVersion >= currentParserVersion && !oversized {
 		return &original, translated, false, nil
 	}
 	source, ok, err := a.store.LoadSource(id)
-	if err != nil || !ok {
+	if err != nil {
 		return &original, translated, false, err
 	}
-	parsed, err := parseAO3HTML(source)
-	if err != nil || len(parsed.Original.Chapters) != len(original.Chapters) {
+	parsed, parseErr := parseAO3HTML(source)
+	if !ok || parseErr != nil || len(parsed.Original.Chapters) != len(original.Chapters) {
+		// Nothing better can be had from this source; stamp the stored
+		// original as current so the reader stops offering the upgrade.
+		if original.ParserVersion < currentParserVersion {
+			original.ParserVersion = currentParserVersion
+			if err := a.store.SaveOriginal(id, original); err != nil {
+				return nil, nil, false, err
+			}
+		}
 		return &original, translated, false, nil
 	}
-	next := carryOverTranslated(translated, parsed.Original)
-	if err := a.store.SaveOriginal(id, parsed.Original); err != nil {
+	repaired := parsed.Original
+	if !oversized {
+		// Only the notes are new. Older parsers may have cut or sanitized
+		// the body differently, so it is kept exactly as stored, along with
+		// every block id its translations hang on.
+		repaired = graftNotes(original, parsed.Original)
+	}
+	next := carryOverTranslated(translated, repaired)
+	if err := a.store.SaveOriginal(id, repaired); err != nil {
 		return nil, nil, false, err
 	}
 	if err := a.store.SaveTranslated(id, next); err != nil {
 		return nil, nil, false, err
 	}
-	return &parsed.Original, &next, true, nil
+	return &repaired, &next, true, nil
+}
+
+// graftNotes places the author notes parsed from a fresh parse around each
+// chapter body of stale, whose body blocks are left untouched.
+func graftNotes(stale, parsed ChapterFile) ChapterFile {
+	out := ChapterFile{ParserVersion: parsed.ParserVersion, Chapters: make([]Chapter, len(stale.Chapters))}
+	for i, chapter := range stale.Chapters {
+		var lead, body, tail []Block
+		for _, block := range chapter.Blocks {
+			if block.Section == SectionBody {
+				body = append(body, block)
+			}
+		}
+		for _, block := range parsed.Chapters[i].Blocks {
+			switch block.Section {
+			case SectionBody:
+			case SectionEndnotes, SectionWorkEndnotes:
+				tail = append(tail, block)
+			default:
+				lead = append(lead, block)
+			}
+		}
+		chapter.Blocks = append(append(lead, body...), tail...)
+		out.Chapters[i] = chapter
+	}
+	return out
 }
 
 func (a *App) prepareEntry(id, title, author string, status StoryStatus) error {
@@ -461,7 +504,7 @@ func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode T
 		for _, blockID := range blockIDs {
 			idSet[blockID] = true
 		}
-		original, translated, repaired, err := a.repairOversizedOriginal(id, *original, translated)
+		original, translated, repaired, err := a.repairStaleOriginal(id, *original, translated)
 		if err != nil {
 			return err
 		}
@@ -534,6 +577,15 @@ func (a *App) RetryStory(id string, blockIDs []string, chapterIndex *int, mode T
 			}
 		}
 		if err := a.store.SaveTranslated(id, *translated); err != nil {
+			return err
+		}
+		// Reset blocks and newly parsed notes change the tallies before the
+		// queued run gets to report them.
+		total, done, errs := blockCounts(*original, *translated)
+		if err := a.setProgress(id, func(p Progress) Progress {
+			p.TotalBlocks, p.DoneBlocks, p.ErrorBlocks = total, done, errs
+			return p
+		}); err != nil {
 			return err
 		}
 		if err := a.store.QueueStory(id); err != nil {

@@ -520,6 +520,15 @@ func (s *Store) SaveSource(id string, html string) error {
 	return s.writeText(path, html)
 }
 
+func (s *Store) HasSource(id string) bool {
+	path, err := s.storyPath(id, "source.html")
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
 func (s *Store) LoadSource(id string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

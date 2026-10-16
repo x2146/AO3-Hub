@@ -490,3 +490,21 @@ func TestRunTranslationPersistenceFailureNeverPublishesReady(t *testing.T) {
 		})
 	}
 }
+
+func TestPromptMarksAuthorNotes(t *testing.T) {
+	note, err := makeTranslateInput(Block{ID: "n", Type: BlockP, HTML: "<p>thank y'all!!</p>", Section: SectionEndnotes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := makeTranslateInput(Block{ID: "b", Type: BlockP, HTML: "<p>He smiled.</p>"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := buildUserPayload(Meta{Title: "T"}, []translateInput{note, body}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload, `{"id":"1","note":true,"text":"thank y'all!!"}`) || !strings.Contains(payload, `{"id":"2","text":"He smiled."}`) {
+		t.Fatalf("payload = %s", payload)
+	}
+}

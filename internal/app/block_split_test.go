@@ -195,7 +195,7 @@ func TestRepairOversizedOriginalReparsesSourceAndKeepsTranslations(t *testing.T)
 		t.Fatal(err)
 	}
 
-	original, next, repaired, err := app.repairOversizedOriginal(storyID, stale, &translated)
+	original, next, repaired, err := app.repairStaleOriginal(storyID, stale, &translated)
 	if err != nil || !repaired {
 		t.Fatalf("repaired = %v, err = %v", repaired, err)
 	}
@@ -214,7 +214,7 @@ func TestRepairOversizedOriginalReparsesSourceAndKeepsTranslations(t *testing.T)
 		t.Fatalf("stored original not replaced: %v", err)
 	}
 
-	_, _, repairedAgain, err := app.repairOversizedOriginal(storyID, *original, next)
+	_, _, repairedAgain, err := app.repairStaleOriginal(storyID, *original, next)
 	if err != nil || repairedAgain {
 		t.Fatalf("second repair = %v, err = %v", repairedAgain, err)
 	}
@@ -237,5 +237,65 @@ func TestExtractBlocksSplitsCJKTextWithoutSpaces(t *testing.T) {
 		if text := htmlToPlainText(block.HTML); !strings.HasSuffix(strings.TrimSpace(text), "。") {
 			t.Fatalf("piece %d does not end at a sentence", i)
 		}
+	}
+}
+
+func TestRepairStaleOriginalAddsNotesWithoutLosingWork(t *testing.T) {
+	source := `<!doctype html><html><head><title>Notes - Archive of Our Own</title></head><body>
+<div id="preface"><div class="meta"><h1>Notes</h1><p>Summary</p><blockquote class="userstuff"><p>A summary.</p></blockquote></div></div>
+<div id="chapters"><div class="userstuff"><p>Body.</p></div></div>
+</body></html>`
+	app, storyID, _, _ := newTranslationTestState(t, nil)
+	if err := app.store.SaveSource(storyID, source); err != nil {
+		t.Fatal(err)
+	}
+	// What the previous parser stored: the body alone, no parser version.
+	bodyHTML := "<p>Body.</p>"
+	stale := ChapterFile{Chapters: []Chapter{{Index: 0, Title: "Notes", Blocks: []Block{
+		{ID: blockID(0, bodyHTML), Type: BlockP, HTML: bodyHTML, Status: BlockPending},
+	}}}}
+	translated := makeBlankTranslated(stale)
+	translated.Chapters[0].Blocks[0].Status = BlockDone
+	translated.Chapters[0].Blocks[0].HTML = "<p>正文。</p>"
+
+	original, next, repaired, err := app.repairStaleOriginal(storyID, stale, &translated)
+	if err != nil || !repaired {
+		t.Fatalf("repaired = %v, err = %v", repaired, err)
+	}
+	if original.ParserVersion != currentParserVersion || len(original.Chapters[0].Blocks) != 2 || original.Chapters[0].Blocks[0].Section != SectionWorkSummary {
+		t.Fatalf("original = %#v", original)
+	}
+	if got := next.Chapters[0].Blocks; got[0].Status != BlockPending || got[1].Status != BlockDone || got[1].HTML != "<p>正文。</p>" {
+		t.Fatalf("translated = %#v", got)
+	}
+
+	cfg := defaultConfig()
+	meta := Meta{Title: "Notes"}
+	before, err := analysisFingerprint(meta, stale, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := analysisFingerprint(meta, *original, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatal("picking up notes invalidated the cached analysis")
+	}
+
+	if _, _, again, err := app.repairStaleOriginal(storyID, *original, next); err != nil || again {
+		t.Fatalf("second repair = %v, err = %v", again, err)
+	}
+}
+
+func TestRepairStaleOriginalStampsUnusableSource(t *testing.T) {
+	app, storyID, _, _ := newTranslationTestState(t, nil)
+	stale := ChapterFile{Chapters: []Chapter{{Index: 0, Blocks: []Block{{ID: "a", Type: BlockP, HTML: "<p>A.</p>"}}}}}
+	if _, _, repaired, err := app.repairStaleOriginal(storyID, stale, nil); err != nil || repaired {
+		t.Fatalf("repaired = %v, err = %v", repaired, err)
+	}
+	stored, err := app.store.LoadOriginal(storyID)
+	if err != nil || stored == nil || stored.ParserVersion != currentParserVersion || len(stored.Chapters[0].Blocks) != 1 {
+		t.Fatalf("stored = %#v, err = %v", stored, err)
 	}
 }

@@ -933,12 +933,13 @@ func (a *App) handleChapter(w http.ResponseWriter, r *http.Request) {
 		tCh = translated.Chapters[n]
 	}
 	view := ChapterView{Meta: *meta, Progress: *progress}
+	view.Reparsable = original.ParserVersion < currentParserVersion && a.store.HasSource(id)
 	view.Chapter.Index = n
 	view.Chapter.TitleEn = oCh.Title
 	view.Chapter.TitleZH = tCh.Title
 	view.Chapter.Pairs = []ChapterPair{}
 	for i, block := range oCh.Blocks {
-		pair := ChapterPair{ID: block.ID, Type: block.Type, En: block.HTML, Status: BlockPending}
+		pair := ChapterPair{ID: block.ID, Type: block.Type, Section: block.Section, En: block.HTML, Status: BlockPending}
 		if i < len(tCh.Blocks) {
 			tb := tCh.Blocks[i]
 			pair.ZH = tb.HTML

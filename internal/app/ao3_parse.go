@@ -13,6 +13,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 type parsedMeta struct {
@@ -633,7 +634,20 @@ func pickBlockType(tag string) BlockType {
 }
 
 func extractBlocks(root *goquery.Selection, chapterIndex int) []Block {
+	return extractSectionBlocks(root, chapterIndex, SectionBody)
+}
+
+// extractSectionBlocks splits root into blocks tagged with section. Ids of
+// non-body blocks are salted with the section, so an author note that repeats
+// a body paragraph can never take over the body block's id.
+func extractSectionBlocks(root *goquery.Selection, chapterIndex int, section BlockSection) []Block {
 	blocks := []Block{}
+	id := func(html string) string {
+		if section == SectionBody {
+			return blockID(chapterIndex, html)
+		}
+		return stableID(strconv.Itoa(chapterIndex) + ":" + string(section) + "::" + html)
+	}
 	var walk func(*goquery.Selection)
 	walk = func(parent *goquery.Selection) {
 		parent.Children().Each(func(_ int, el *goquery.Selection) {
@@ -645,10 +659,11 @@ func extractBlocks(root *goquery.Selection, chapterIndex int) []Block {
 			if tag == "hr" {
 				html := "<hr/>"
 				blocks = append(blocks, Block{
-					ID:     blockID(chapterIndex, "hr-"+strconv.Itoa(len(blocks))),
-					Type:   BlockHR,
-					HTML:   html,
-					Status: BlockPending,
+					ID:      id("hr-" + strconv.Itoa(len(blocks))),
+					Type:    BlockHR,
+					HTML:    html,
+					Section: section,
+					Status:  BlockPending,
 				})
 				return
 			}
@@ -665,10 +680,11 @@ func extractBlocks(root *goquery.Selection, chapterIndex int) []Block {
 			}
 			for _, piece := range splitOversizedBlockHTML(html) {
 				blocks = append(blocks, Block{
-					ID:     blockID(chapterIndex, piece),
-					Type:   pickBlockType(tag),
-					HTML:   piece,
-					Status: BlockPending,
+					ID:      id(piece),
+					Type:    pickBlockType(tag),
+					HTML:    piece,
+					Section: section,
+					Status:  BlockPending,
 				})
 			}
 		})
@@ -909,37 +925,57 @@ func parseAO3HTML(html string) (parseResult, error) {
 	}
 
 	userstuffs := preface.Find("blockquote.userstuff")
-	summary := strings.TrimSpace(sanitizeHTMLFragment(htmlOf(userstuffs.Eq(0))))
-	notes := ""
-	if userstuffs.Length() > 1 {
-		notes = strings.TrimSpace(sanitizeHTMLFragment(htmlOf(userstuffs.Eq(1))))
+	prefaceNotes := labelledNotes(userstuffs)
+	summaryEl, notesEl := prefaceNotes["summary"], prefaceNotes["notes"]
+	if len(prefaceNotes) == 0 {
+		// Uncaptioned exports keep AO3's order: summary first, then notes.
+		summaryEl = userstuffs.Eq(0)
+		if userstuffs.Length() > 1 {
+			notesEl = userstuffs.Eq(1)
+		}
 	}
-	endnotes := strings.TrimSpace(sanitizeHTMLFragment(htmlOf(afterword.Find("blockquote").First())))
+	endnotesEl := labelledNotes(afterword.Find("blockquote.userstuff"))["end notes"]
+	if endnotesEl == nil {
+		endnotesEl = afterword.Find("blockquote").First()
+	}
+	summary := strings.TrimSpace(sanitizeHTMLFragment(htmlOf(summaryEl)))
+	notes := strings.TrimSpace(sanitizeHTMLFragment(htmlOf(notesEl)))
+	endnotes := strings.TrimSpace(sanitizeHTMLFragment(htmlOf(endnotesEl)))
 
 	tags := parseTags(preface)
 
 	workURLGuess, workIDGuess := findAO3WorkURL(doc, preface)
 
 	chapters := []Chapter{}
-	groups := chaptersEl.ChildrenFiltered(".meta.group, .userstuff")
+	groups := chaptersEl.ChildrenFiltered(".meta, .userstuff")
 	hasMetaGroup := groups.Filter(".meta.group").Length() > 0
 	if hasMetaGroup {
 		currentTitle := ""
+		// The chapter summary and notes sit in the heading group, ahead of
+		// the body they introduce.
+		var lead []Block
 		idx := 0
 		groups.Each(func(_ int, el *goquery.Selection) {
-			if el.Is(".meta.group") {
+			switch {
+			case el.Is(".meta.group"):
 				currentTitle = selectionText(el.Find(".heading").First())
-				return
-			}
-			if el.Is(".userstuff") {
-				blocks := ensureUniqueIDs(extractBlocks(el, idx))
+				notes := labelledNotes(el.ChildrenFiltered("blockquote.userstuff"))
+				lead = append(noteBlocks(notes["chapter summary"], idx, SectionSummary), noteBlocks(notes["chapter notes"], idx, SectionNotes)...)
+			case el.Is(".userstuff"):
+				blocks := ensureUniqueIDs(append(lead, extractBlocks(el, idx)...))
 				chapters = append(chapters, Chapter{
 					Index:  idx,
 					Title:  currentTitle,
 					Blocks: blocks,
 				})
 				currentTitle = ""
+				lead = nil
 				idx++
+			case len(chapters) > 0:
+				// A plain .meta after a body holds that chapter's end notes.
+				last := &chapters[len(chapters)-1]
+				notes := labelledNotes(el.ChildrenFiltered("blockquote.userstuff"))
+				last.Blocks = ensureUniqueIDs(append(last.Blocks, noteBlocks(notes["chapter end notes"], last.Index, SectionEndnotes)...))
 			}
 		})
 	} else if chaptersEl.Length() > 0 {
@@ -957,11 +993,20 @@ func parseAO3HTML(html string) (parseResult, error) {
 		}
 	}
 
+	// The work's own summary and notes open the first chapter and its end
+	// notes close the last one, which is where AO3 shows them too.
+	if len(chapters) > 0 {
+		first := &chapters[0]
+		first.Blocks = ensureUniqueIDs(append(append(noteBlocks(summaryEl, first.Index, SectionWorkSummary), noteBlocks(notesEl, first.Index, SectionWorkNotes)...), first.Blocks...))
+		last := &chapters[len(chapters)-1]
+		last.Blocks = ensureUniqueIDs(append(last.Blocks, noteBlocks(endnotesEl, last.Index, SectionWorkEndnotes)...))
+	}
+
 	chapterCount := len(chapters)
 	meaningfulChapters := 0
 	for _, chapter := range chapters {
 		for _, block := range chapter.Blocks {
-			if meaningfulBlock(block) {
+			if block.Section == SectionBody && meaningfulBlock(block) {
 				meaningfulChapters++
 				break
 			}
@@ -996,7 +1041,63 @@ func parseAO3HTML(html string) (parseResult, error) {
 		WorkURLGuess: workURLGuess,
 	}
 
-	return parseResult{Meta: meta, Original: ChapterFile{Chapters: chapters}}, nil
+	return parseResult{Meta: meta, Original: ChapterFile{ParserVersion: currentParserVersion, Chapters: chapters}}, nil
+}
+
+// labelledNotes keys each author-written blockquote by the caption AO3 puts in
+// the <p> right before it ("summary", "chapter notes", "end notes" …).
+func labelledNotes(blockquotes *goquery.Selection) map[string]*goquery.Selection {
+	out := map[string]*goquery.Selection{}
+	blockquotes.Each(func(_ int, bq *goquery.Selection) {
+		prev := bq.Prev()
+		if prev.Length() == 0 || goquery.NodeName(prev) != "p" {
+			return
+		}
+		label := strings.ToLower(strings.TrimSuffix(selectionText(prev), ":"))
+		if _, seen := out[label]; label != "" && !seen {
+			out[label] = bq
+		}
+	})
+	return out
+}
+
+// noteBlocks splits one author note into blocks of the given section.
+func noteBlocks(note *goquery.Selection, chapterIndex int, section BlockSection) []Block {
+	if note == nil || note.Length() == 0 {
+		return nil
+	}
+	note = note.First().Clone()
+	// Collapsible <details> disclaimers are read inline: the caption becomes
+	// a paragraph of its own and the body follows it.
+	note.Find("summary").Each(func(_ int, caption *goquery.Selection) {
+		caption.Nodes[0].Data = "p"
+		caption.Nodes[0].DataAtom = atom.P
+	})
+	note.Find("details").Each(func(_ int, details *goquery.Selection) {
+		if details.Contents().Length() == 0 {
+			details.Remove()
+			return
+		}
+		details.Contents().Unwrap()
+	})
+	// A note typed without paragraphs is bare text the block walk would skip;
+	// keep it as one block instead.
+	bare := false
+	note.Contents().Each(func(_ int, c *goquery.Selection) {
+		if c.Nodes[0].Type == html.TextNode && meaningfulText(c.Nodes[0].Data) {
+			bare = true
+		}
+	})
+	if bare {
+		note.WrapInnerHtml("<div></div>")
+	}
+	blocks := []Block{}
+	for _, block := range extractSectionBlocks(note, chapterIndex, section) {
+		if meaningfulBlock(block) {
+			blocks = append(blocks, block)
+		}
+	}
+	return blocks
 }
 
 func htmlOf(sel *goquery.Selection) string {

@@ -36,6 +36,7 @@ var retryBaseDelay = 600 * time.Millisecond
 const translateIOSpec = `输入是 JSON：context 是作品资料，blocks 是按顺序排列的待译段落。
 - 段落只有 text：整段翻译，输出一个 <seg id="段 id">
 - 段落带 runs：原文被斜体、加粗等格式切成了几个片段；text 是整段原文，仅供理解上下文。为每个 run 各输出一个 <seg id="run id">，写该片段对应的译文。措辞可按中文语序调整，但每个片段都要有非空译文，程序才能把原文格式套回去
+- 段落带 "note": true：这是作者写给读者的话（简介、前言、后记），不是正文叙述，按作者本人的口吻自然翻译，网络用语、颜文字和表情照常保留
 
 输出格式（程序按此解析，务必严格遵守）：
 - 按输入顺序逐个输出 <seg id="…">译文</seg>，每个 seg 单独一行，不遗漏、不合并、不新增
@@ -69,6 +70,7 @@ type translateInput struct {
 	ID   string         `json:"id"`
 	Text string         `json:"text"`
 	Runs []translateRun `json:"runs"`
+	Note bool           `json:"-"`
 	HTML string         `json:"-"`
 }
 
@@ -163,6 +165,7 @@ func makeTranslateInput(block Block) (translateInput, error) {
 		ID:   block.ID,
 		Text: plainTextFromRuns(runs),
 		Runs: runs,
+		Note: block.Section != SectionBody,
 		HTML: block.HTML,
 	}, nil
 }
@@ -322,6 +325,7 @@ type promptRun struct {
 
 type promptBlock struct {
 	ID   string      `json:"id"`
+	Note bool        `json:"note,omitempty"`
 	Text string      `json:"text"`
 	Runs []promptRun `json:"runs,omitempty"`
 }
@@ -336,7 +340,7 @@ func runAlias(position, run int) string { return blockAlias(position) + "." + st
 func promptBlocks(inputs []translateInput) []promptBlock {
 	out := make([]promptBlock, len(inputs))
 	for i, input := range inputs {
-		block := promptBlock{ID: blockAlias(i), Text: input.Text}
+		block := promptBlock{ID: blockAlias(i), Note: input.Note, Text: input.Text}
 		if len(input.Runs) > 1 {
 			block.Runs = make([]promptRun, len(input.Runs))
 			for j, run := range input.Runs {
@@ -680,10 +684,9 @@ func (a *App) inflightCount(storyID string) int {
 	return len(a.inflight[storyID])
 }
 
-func (a *App) emitProgress(storyID string, translated ChapterFile, original ChapterFile, progressErrors ...ProgressError) error {
-	total := 0
-	done := 0
-	errs := 0
+// blockCounts tallies the translatable blocks of original and how many of
+// them translated has finished or failed.
+func blockCounts(original, translated ChapterFile) (total, done, errs int) {
 	for i := range original.Chapters {
 		for j := range original.Chapters[i].Blocks {
 			if !isTranslatable(original.Chapters[i].Blocks[j]) {
@@ -701,6 +704,11 @@ func (a *App) emitProgress(storyID string, translated ChapterFile, original Chap
 			}
 		}
 	}
+	return total, done, errs
+}
+
+func (a *App) emitProgress(storyID string, translated ChapterFile, original ChapterFile, progressErrors ...ProgressError) error {
+	total, done, errs := blockCounts(original, translated)
 	inflight := a.inflightCount(storyID)
 	if err := a.setProgress(storyID, func(p Progress) Progress {
 		p.TotalBlocks = total
