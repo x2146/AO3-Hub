@@ -1,25 +1,15 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  Activity,
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
-  Keyboard,
-  Languages,
-  ListOrdered,
+  LibraryBig,
+  MessageCircleHeart,
   RotateCcw,
-  Settings as SettingsIcon,
-  Type,
+  Sparkles,
 } from "lucide-react";
 import type { ChapterView, Progress } from "@ao3hub/shared";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -34,47 +24,22 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldLabel,
-  FieldLegend,
-  FieldSet,
-  FieldTitle,
-} from "@/components/ui/field";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { Sheet } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { api, subscribeStream } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { applyTheme, getTheme } from "../lib/theme";
 import {
   applyReaderSettings,
   DEFAULT_READER_SETTINGS,
   loadReaderSettings,
   loadReadingPosition,
-  READER_LIMITS,
+  READER_PAPERS,
   saveReaderSettings,
   saveReadingPosition,
   type ReaderDefaults,
   type ReaderSettings,
-  type ReaderView,
 } from "../lib/reader-settings";
 import {
   TranslateProgressBar,
@@ -83,24 +48,16 @@ import {
 } from "../components/TranslateProgress";
 import { TranslationStatusPanel } from "../components/TranslationStatusPanel";
 import { StatusPill } from "../components/StatusPill";
+import { ReaderDock, ReaderTopbar } from "../components/reader/ReaderChrome";
+import { SettingsSheet, TocSheet } from "../components/reader/ReaderSheets";
+import {
+  AuthorNote,
+  groupSections,
+  Pair,
+} from "../components/reader/ReaderText";
+import { chapterHeading } from "../components/reader/chapter-title";
 
-const BLOCK_ROOT_RE =
-  /^\s*<(?:p|div|blockquote|pre|h[1-6]|ul|ol|li|center|figure|figcaption|table|hr)(?:\s|>|\/)/i;
-
-const VIEW_OPTIONS: { value: ReaderView; label: string; hint: string }[] = [
-  { value: "bilingual", label: "双语", hint: "原文在上，译文在下" },
-  { value: "zh", label: "仅中文", hint: "只显示译文" },
-  { value: "en", label: "仅原文", hint: "只显示英文原文" },
-];
-
-const SHORTCUTS: { keys: string[]; label: string }[] = [
-  { keys: ["←"], label: "上一章" },
-  { keys: ["→"], label: "下一章" },
-  { keys: ["T"], label: "章节目录" },
-  { keys: ["S"], label: "阅读设置" },
-  { keys: ["E"], label: "切换双语 / 仅中文" },
-  { keys: ["Esc"], label: "关闭当前面板" },
-];
+const AO3_WORK_URL_RE = /^https:\/\/archiveofourown\.org\/works\/\d+$/;
 
 export function Reader() {
   const { id, chapter } = useParams({ from: "/r/$id/$chapter" });
@@ -122,10 +79,13 @@ export function Reader() {
   const [statusOpen, setStatusOpen] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   const [chromeVisible, setChromeVisible] = useState(true);
+  const [scrolled, setScrolled] = useState(false);
+  const [titleAway, setTitleAway] = useState(false);
   const [liveProgress, setLiveProgress] = useState<Progress | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const tocTriggerRef = useRef<HTMLButtonElement>(null);
   const statusTriggerRef = useRef<HTMLButtonElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
   const restoredForRef = useRef<string | null>(null);
 
   const { data: config, isFetched: configFetched } = useQuery({
@@ -155,6 +115,27 @@ export function Reader() {
     applyReaderSettings(settings);
     if (settingsInitialized) saveReaderSettings(settings);
   }, [settings, settingsInitialized]);
+
+  // A fixed paper recolours the whole document — including the portalled
+  // sheets — and the browser chrome, for as long as the reader is open.
+  useEffect(() => {
+    const root = document.documentElement;
+    const paper = READER_PAPERS.find((p) => p.value === settings.paper);
+    if (paper?.background) root.dataset.readerPaper = paper.value;
+    applyTheme(getTheme());
+    const metas = Array.from(
+      document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'),
+    );
+    const saved = metas.map((meta) => meta.content);
+    if (paper?.background) {
+      for (const meta of metas) meta.content = paper.background;
+    }
+    return () => {
+      delete root.dataset.readerPaper;
+      applyTheme(getTheme());
+      metas.forEach((meta, i) => (meta.content = saved[i]));
+    };
+  }, [settings.paper]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["chapter", id, chapterIndex],
@@ -195,8 +176,16 @@ export function Reader() {
       const ratio =
         scrollable > 0 ? Math.min(1, Math.max(0, y / scrollable)) : 0;
       setScrollProgress(ratio);
-      setChromeVisible(y < 96 || y < lastY);
-      lastY = y;
+      // Small jitters (and iOS rubber-banding) must not flap the chrome.
+      if (Math.abs(y - lastY) > 6 || y < 96) {
+        setChromeVisible(y < 96 || y < lastY);
+        lastY = y;
+      }
+      setScrolled(y > 8);
+      const header = headerRef.current;
+      setTitleAway(
+        header ? header.getBoundingClientRect().bottom < 56 : y > 200,
+      );
       latestRatio = ratio;
       persist(ratio);
     };
@@ -206,10 +195,15 @@ export function Reader() {
       frame = window.requestAnimationFrame(measure);
     };
 
+    // A reload or closed tab never runs the cleanup below.
+    const onPageHide = () => persist(latestRatio, true);
+
     measure();
     window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("pagehide", onPageHide);
     return () => {
       window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("pagehide", onPageHide);
       if (frame) window.cancelAnimationFrame(frame);
       persist(latestRatio, true);
     };
@@ -245,12 +239,6 @@ export function Reader() {
   useEffect(() => {
     setLiveProgress(data?.progress ?? null);
   }, [id, data?.progress]);
-
-  const total = data?.nav.total;
-  const totalDigits = useMemo(
-    () => (total != null ? String(total).length : 1),
-    [total],
-  );
 
   useEffect(() => {
     if (!data) return;
@@ -292,11 +280,26 @@ export function Reader() {
       api.retry(id, body),
     onSuccess: () => {
       toast.success("已重新入队");
-      qc.invalidateQueries({ queryKey: ["chapter", id, chapterIndex] });
+      qc.invalidateQueries({ queryKey: ["chapter", id] });
       qc.invalidateQueries({ queryKey: ["stories"] });
     },
     onError: (retryError) =>
       toast.error("重试失败", { description: retryError.message }),
+  });
+
+  // A plain retry re-reads the saved source when the story predates the
+  // current parser, which is what picks up the author's notes.
+  const reparse = useMutation({
+    mutationFn: () => api.retry(id, {}),
+    onSuccess: () => {
+      toast.success("正在补全作者的话", {
+        description: "已有译文保持不变，只翻译新增的段落。",
+      });
+      qc.invalidateQueries({ queryKey: ["chapter", id] });
+      qc.invalidateQueries({ queryKey: ["stories"] });
+    },
+    onError: (reparseError) =>
+      toast.error("补全失败", { description: reparseError.message }),
   });
 
   const goToChapter = useCallback(
@@ -341,8 +344,10 @@ export function Reader() {
           break;
         case "t":
         case "T":
-          event.preventDefault();
-          setTocOpen(true);
+          if ((data?.nav.total ?? 0) > 1) {
+            event.preventDefault();
+            setTocOpen(true);
+          }
           break;
         case "s":
         case "S":
@@ -363,7 +368,18 @@ export function Reader() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [anyPanelOpen, data?.nav.prev, data?.nav.next, goToChapter]);
+  }, [
+    anyPanelOpen,
+    data?.nav.prev,
+    data?.nav.next,
+    data?.nav.total,
+    goToChapter,
+  ]);
+
+  const sections = useMemo(
+    () => groupSections(data?.chapter.pairs ?? []),
+    [data?.chapter.pairs],
+  );
 
   if (chapterIndex === null) {
     return (
@@ -377,19 +393,21 @@ export function Reader() {
   if (isLoading) {
     return (
       <div
-        className="mx-auto flex flex-col gap-6 pt-32"
-        style={{ width: "min(var(--reader-measure), calc(100vw - 32px))" }}
+        className="mx-auto flex flex-col gap-5 pt-[calc(env(safe-area-inset-top)+6rem)]"
+        style={{ width: "min(var(--reader-measure), calc(100vw - 40px))" }}
       >
-        <Skeleton className="h-14 w-3/4" />
-        <Skeleton className="h-5 w-1/3" />
-        <Separator className="my-4" />
-        {Array.from({ length: 10 }).map((_, index) => (
-          <Skeleton
-            key={index}
-            className="h-5"
-            style={{ width: `${72 + ((index * 13) % 28)}%` }}
-          />
-        ))}
+        <Skeleton className="h-3 w-28 rounded-full" />
+        <Skeleton className="h-12 w-3/4" />
+        <Skeleton className="h-4 w-1/3 rounded-full" />
+        <div className="mt-10 flex flex-col gap-4">
+          {Array.from({ length: 10 }).map((_, index) => (
+            <Skeleton
+              key={index}
+              className="h-4 rounded-full"
+              style={{ width: `${72 + ((index * 13) % 28)}%` }}
+            />
+          ))}
+        </div>
       </div>
     );
   }
@@ -403,15 +421,20 @@ export function Reader() {
     );
   }
 
-  const titleEn = data.chapter.titleEn ?? data.meta.title;
+  const workTitle = data.meta.title;
   const rawChineseTitle =
     data.meta.chineseTitle ?? data.chapter.titleZh ?? undefined;
   // Some imports carry an untranslated `titleZh` that just repeats the English
   // title; echoing it under the heading reads like a rendering bug.
   const chineseTitle =
-    rawChineseTitle && rawChineseTitle !== titleEn
+    rawChineseTitle &&
+    rawChineseTitle !== workTitle &&
+    rawChineseTitle !== data.chapter.titleEn
       ? rawChineseTitle
       : undefined;
+  const total = data.nav.total;
+  const multiChapter = total > 1;
+  const heading = chapterHeading(data.chapter.titleEn, chapterIndex);
   const progressForBar = liveProgress ?? data.progress;
   const chapterErrorPairs = data.chapter.pairs.filter(
     (p) => p.status === "error",
@@ -420,27 +443,54 @@ export function Reader() {
     !!user &&
     chapterErrorPairs.length > 0 &&
     data.progress.phase !== "translating";
+  const pairHandlers = {
+    view: settings.view,
+    canRetry: !!user,
+    onRetry: (blockId: string) =>
+      retryFailed.mutate({ blockIds: [blockId], chapterIndex }),
+  };
+  const phase = progressForBar.phase;
+  const showReparse =
+    !!user && !!data.reparsable && (phase === "ready" || phase === "error");
+
+  // On phones a tap on the text toggles the chrome, as in any e-reader.
+  const onArticleClick = (event: React.MouseEvent) => {
+    if (!window.matchMedia("(pointer: coarse)").matches) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("a, button, summary, input, label, [role=button]")) {
+      return;
+    }
+    if (window.getSelection()?.toString()) return;
+    setChromeVisible((visible) => !visible);
+  };
 
   return (
     <>
       <div
-        className="pointer-events-none fixed inset-x-0 top-0 z-50 h-0.5"
+        className="pointer-events-none fixed inset-x-0 top-[env(safe-area-inset-top)] z-50 h-0.5"
         aria-hidden
       >
         <div
-          className="h-full bg-primary transition-[width] duration-150"
+          className="h-full bg-primary/80 transition-[width] duration-150"
           style={{ width: `${scrollProgress * 100}%` }}
         />
       </div>
 
       <ReaderTopbar
         visible={chromeVisible || anyPanelOpen}
-        title={titleEn}
-        subtitle={[chineseTitle, data.meta.author].filter(Boolean).join(" · ")}
-        progress={scrollProgress}
-        chapterIndex={chapterIndex}
-        total={total ?? 1}
-        totalDigits={totalDigits}
+        scrolled={scrolled}
+        showTitle={titleAway}
+        title={workTitle}
+        subtitle={[
+          multiChapter ? `${heading.label} / ${total}` : data.meta.author,
+          `${Math.round(scrollProgress * 100)}%`,
+        ].join(" · ")}
+        onOpenStatus={() => setStatusOpen(true)}
+        statusTriggerRef={statusTriggerRef}
+      />
+
+      <ReaderDock
+        visible={chromeVisible || anyPanelOpen}
         onPrev={
           data.nav.prev !== undefined
             ? () => goToChapter(data.nav.prev)
@@ -453,18 +503,17 @@ export function Reader() {
         }
         view={settings.view}
         onViewChange={(view) => setSettings((cur) => ({ ...cur, view }))}
-        settingsOpen={settingsOpen}
-        settingsTriggerRef={settingsTriggerRef}
-        onToggleSettings={() => setSettingsOpen((v) => !v)}
+        showToc={multiChapter}
         tocOpen={tocOpen}
         tocTriggerRef={tocTriggerRef}
         onToggleToc={() => setTocOpen((v) => !v)}
-        onOpenStatus={() => setStatusOpen(true)}
-        statusTriggerRef={statusTriggerRef}
+        settingsOpen={settingsOpen}
+        settingsTriggerRef={settingsTriggerRef}
+        onToggleSettings={() => setSettingsOpen((v) => !v)}
       />
 
       <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <SettingsDrawer
+        <SettingsSheet
           settings={settings}
           setSettings={setSettings}
           defaults={serverDefaults}
@@ -476,7 +525,7 @@ export function Reader() {
       </Sheet>
 
       <Sheet open={tocOpen} onOpenChange={setTocOpen}>
-        <TocDrawer
+        <TocSheet
           data={data}
           chapterIndex={chapterIndex}
           onClose={() => setTocOpen(false)}
@@ -489,53 +538,109 @@ export function Reader() {
 
       <TranslationStatusPanel
         storyID={id}
-        title={data.meta.title}
+        title={workTitle}
         open={statusOpen}
         onClose={() => setStatusOpen(false)}
         returnFocusRef={statusTriggerRef}
       />
 
       <article
-        className="mx-auto pb-32 pt-28 sm:pt-24"
-        style={{ width: "min(var(--reader-measure), calc(100vw - 32px))" }}
+        onClick={onArticleClick}
+        className="mx-auto flex flex-col gap-10 pt-[calc(env(safe-area-inset-top)+5.5rem)] pb-40 sm:pt-28"
+        style={{ width: "min(var(--reader-measure), calc(100vw - 40px))" }}
       >
-        <header className="mb-12 border-b pb-8">
-          <h1 className="cn-font-heading text-[clamp(2rem,6vw,3.4rem)] leading-[1.02] font-semibold tracking-tight break-words [overflow-wrap:anywhere]">
-            {titleEn}
-          </h1>
-          {chineseTitle && (
-            <p className="mt-4 text-base text-muted-foreground">
-              {chineseTitle}
-            </p>
-          )}
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            {data.meta.author && (
-              <Badge variant="outline">{data.meta.author}</Badge>
-            )}
-            {data.nav.total > 1 && (
-              <Badge variant="outline">
-                第 {chapterIndex + 1} / {data.nav.total} 章
-              </Badge>
-            )}
-            {data.chapter.titleEn && data.nav.total > 1 && (
-              <span className="truncate">{data.chapter.titleEn}</span>
-            )}
-          </div>
-          <ChapterProgress
-            progress={progressForBar}
-            chapterErrorCount={chapterErrorPairs.length}
-            showChapterRetry={showChapterRetry}
-            onRetryChapter={() =>
-              retryFailed.mutate({
-                blockIds: chapterErrorPairs.map((p) => p.id),
-                chapterIndex,
-              })
-            }
-            onRetryAll={() => retryFailed.mutate({})}
-            retrying={retryFailed.isPending}
-            canRetryAll={!!user}
+        {chapterIndex === 0 ? (
+          <TitlePage
+            headerRef={headerRef}
+            meta={data.meta}
+            chineseTitle={chineseTitle}
+            total={total}
           />
-        </header>
+        ) : (
+          <ChapterOpener
+            headerRef={headerRef}
+            id={id}
+            workTitle={workTitle}
+            heading={heading}
+            total={total}
+          />
+        )}
+
+        {showReparse && (
+          <Alert className="bg-card/60">
+            <Sparkles />
+            <AlertTitle>可以补上作者的话了</AlertTitle>
+            <AlertDescription className="flex flex-col items-start gap-3">
+              这部作品导入时还没有提取简介、前言和后记。重新解析一次就能补上，已有译文保持不变，只翻译新增的段落。
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={reparse.isPending}
+                onClick={() => reparse.mutate()}
+              >
+                <Sparkles data-icon="inline-start" />
+                补全作者的话
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        <ChapterProgress
+          progress={progressForBar}
+          chapterErrorCount={chapterErrorPairs.length}
+          showChapterRetry={showChapterRetry}
+          onRetryChapter={() =>
+            retryFailed.mutate({
+              blockIds: chapterErrorPairs.map((p) => p.id),
+              chapterIndex,
+            })
+          }
+          onRetryAll={() => retryFailed.mutate({})}
+          retrying={retryFailed.isPending}
+          canRetryAll={!!user}
+        />
+
+        <AuthorNote
+          section="workSummary"
+          pairs={sections.workSummary}
+          {...pairHandlers}
+        />
+        {settings.notes && (
+          <AuthorNote
+            key={`${chapterIndex}-workNotes`}
+            section="workNotes"
+            pairs={sections.workNotes}
+            {...pairHandlers}
+          />
+        )}
+
+        {chapterIndex === 0 && multiChapter && (
+          <div className="flex items-center gap-3 pt-6" role="presentation">
+            <span className="shrink-0 text-xs font-medium tracking-[0.14em] text-muted-foreground">
+              {heading.label}
+            </span>
+            {heading.subtitle && (
+              <span className="reader-display min-w-0 truncate text-lg">
+                {heading.subtitle}
+              </span>
+            )}
+            <span className="h-px flex-1 bg-border" />
+          </div>
+        )}
+
+        <AuthorNote
+          section="summary"
+          pairs={sections.summary}
+          {...pairHandlers}
+        />
+        {settings.notes && (
+          <AuthorNote
+            key={`${chapterIndex}-notes`}
+            section="notes"
+            pairs={sections.notes}
+            {...pairHandlers}
+          />
+        )}
 
         <div
           className={cn(
@@ -543,20 +648,29 @@ export function Reader() {
             settings.focus && "reader-focus",
           )}
         >
-          {data.chapter.pairs.map((p) => (
-            <Pair
-              key={p.id}
-              pair={p}
-              view={settings.view}
-              canRetry={!!user}
-              onRetry={(blockId) =>
-                retryFailed.mutate({ blockIds: [blockId], chapterIndex })
-              }
-            />
+          {sections.body.map((p) => (
+            <Pair key={p.id} pair={p} {...pairHandlers} />
           ))}
         </div>
 
-        <ChapterNav data={data} id={id} chapterIndex={chapterIndex} />
+        {settings.notes && (
+          <>
+            <AuthorNote
+              key={`${chapterIndex}-endnotes`}
+              section="endnotes"
+              pairs={sections.endnotes}
+              {...pairHandlers}
+            />
+            <AuthorNote
+              key={`${chapterIndex}-workEndnotes`}
+              section="workEndnotes"
+              pairs={sections.workEndnotes}
+              {...pairHandlers}
+            />
+          </>
+        )}
+
+        <ChapterEnd data={data} id={id} />
       </article>
     </>
   );
@@ -586,481 +700,204 @@ function ReaderMessage({
   );
 }
 
-function ReaderTopbar(props: {
-  visible: boolean;
-  title: string;
-  subtitle?: string;
-  progress: number;
-  chapterIndex: number;
+function MetaDot() {
+  return (
+    <span aria-hidden className="size-0.5 rounded-full bg-current opacity-60" />
+  );
+}
+
+/** The first chapter opens on the work itself, like a book's title page. */
+function TitlePage({
+  headerRef,
+  meta,
+  chineseTitle,
+  total,
+}: {
+  headerRef: React.Ref<HTMLElement>;
+  meta: ChapterView["meta"];
+  chineseTitle?: string;
   total: number;
-  totalDigits: number;
-  onPrev?: () => void;
-  onNext?: () => void;
-  view: ReaderView;
-  onViewChange: (view: ReaderView) => void;
-  settingsOpen: boolean;
-  settingsTriggerRef: RefObject<HTMLButtonElement>;
-  onToggleSettings: () => void;
-  tocOpen: boolean;
-  tocTriggerRef: RefObject<HTMLButtonElement>;
-  onToggleToc: () => void;
-  onOpenStatus: () => void;
-  statusTriggerRef: RefObject<HTMLButtonElement>;
+}) {
+  const { tags } = meta;
+  const facts = [
+    meta.wordCount > 0 && `${meta.wordCount.toLocaleString("zh-CN")} 词`,
+    total > 1 && `${total} 章`,
+    tags.rating,
+    meta.publishedAt,
+  ].filter(Boolean) as string[];
+  const otherTags = [
+    ...tags.warnings,
+    ...tags.categories,
+    ...tags.character,
+    ...tags.additional,
+  ];
+  const [allTags, setAllTags] = useState(false);
+
+  return (
+    <header ref={headerRef} className="flex flex-col gap-5">
+      {tags.fandom.length > 0 && (
+        <p className="text-xs font-medium tracking-[0.08em] text-primary">
+          {tags.fandom.join(" · ")}
+        </p>
+      )}
+      <div className="flex flex-col gap-3">
+        <h1 className="reader-display text-[clamp(2.1rem,6.5vw,3.4rem)] leading-[1.06] font-semibold tracking-tight text-balance break-words [overflow-wrap:anywhere]">
+          {meta.title}
+        </h1>
+        {chineseTitle && (
+          <p className="reader-display text-xl text-muted-foreground">
+            {chineseTitle}
+          </p>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-muted-foreground">
+        {meta.author && (
+          <span className="font-medium text-foreground">{meta.author}</span>
+        )}
+        {facts.map((fact) => (
+          <span key={fact} className="contents">
+            <MetaDot />
+            <span className="tabular-nums">{fact}</span>
+          </span>
+        ))}
+      </div>
+      {(tags.relationship.length > 0 || otherTags.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {tags.relationship.map((tag) => (
+            <Badge key={tag} variant="secondary" className="font-normal">
+              {tag}
+            </Badge>
+          ))}
+          {allTags
+            ? otherTags.map((tag) => (
+                <Badge key={tag} variant="outline" className="font-normal">
+                  {tag}
+                </Badge>
+              ))
+            : otherTags.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="rounded-full text-muted-foreground"
+                  onClick={() => setAllTags(true)}
+                >
+                  +{otherTags.length} 个标签
+                </Button>
+              )}
+        </div>
+      )}
+    </header>
+  );
+}
+
+function ChapterOpener({
+  headerRef,
+  id,
+  workTitle,
+  heading,
+  total,
+}: {
+  headerRef: React.Ref<HTMLElement>;
+  id: string;
+  workTitle: string;
+  heading: { label: string; subtitle?: string };
+  total: number;
 }) {
   return (
-    <div
-      className={cn(
-        "fixed inset-x-0 top-0 z-40 border-b bg-background/85 backdrop-blur-md transition-transform duration-200",
-        props.visible ? "translate-y-0" : "-translate-y-full",
-      )}
-    >
-      <div className="mx-auto flex h-14 w-full max-w-5xl items-center gap-2 px-3 sm:px-4">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              asChild
-              aria-label="返回书架"
-            >
+    <header ref={headerRef} className="flex flex-col gap-3">
+      <Link
+        to="/r/$id/$chapter"
+        params={{ id, chapter: "0" }}
+        className="self-start text-xs font-medium tracking-[0.08em] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        {workTitle}
+      </Link>
+      <h1 className="reader-display text-[clamp(1.9rem,5.5vw,3rem)] leading-[1.08] font-semibold tracking-tight text-balance break-words [overflow-wrap:anywhere]">
+        {heading.subtitle ?? heading.label}
+      </h1>
+      <p className="text-sm text-muted-foreground tabular-nums">
+        {heading.subtitle ? `${heading.label} · ` : ""}共 {total} 章
+      </p>
+    </header>
+  );
+}
+
+function ChapterEnd({ data, id }: { data: ChapterView; id: string }) {
+  const { prev, next } = data.nav;
+  const ao3URL = AO3_WORK_URL_RE.test(data.meta.url) ? data.meta.url : null;
+
+  return (
+    <footer className="mt-10 flex flex-col gap-5">
+      {next !== undefined ? (
+        <ChapterLink id={id} index={next} title={data.nav.titles[next]} />
+      ) : (
+        <div className="flex flex-col items-center gap-5 py-8 text-center">
+          <span className="reader-display text-sm tracking-[0.4em] text-muted-foreground">
+            — 全文完 —
+          </span>
+          <div className="flex flex-wrap justify-center gap-2">
+            {ao3URL && (
+              <Button variant="outline" asChild>
+                <a href={ao3URL} target="_blank" rel="noopener noreferrer">
+                  <MessageCircleHeart data-icon="inline-start" />去 AO3
+                  给作者留言
+                </a>
+              </Button>
+            )}
+            <Button variant="ghost" asChild>
               <Link to="/">
-                <ChevronLeft />
+                <LibraryBig data-icon="inline-start" />
+                返回书架
               </Link>
             </Button>
-          </TooltipTrigger>
-          <TooltipContent>返回书架</TooltipContent>
-        </Tooltip>
-
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium leading-tight">
-            {props.title}
-          </p>
-          {props.subtitle && (
-            <p className="truncate text-xs leading-tight text-muted-foreground">
-              {props.subtitle}
-            </p>
-          )}
-        </div>
-
-        <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground sm:inline">
-          {Math.round(props.progress * 100)}%
-        </span>
-
-        <div className="flex shrink-0 items-center gap-0.5">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={props.onPrev}
-                disabled={!props.onPrev}
-                aria-label="上一章"
-              >
-                <ChevronLeft />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent className="flex items-center gap-1.5">
-              上一章 <Kbd>←</Kbd>
-            </TooltipContent>
-          </Tooltip>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {String(props.chapterIndex + 1).padStart(props.totalDigits, "0")}/
-            {props.total}
-          </span>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={props.onNext}
-                disabled={!props.onNext}
-                aria-label="下一章"
-              >
-                <ChevronRight />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent className="flex items-center gap-1.5">
-              下一章 <Kbd>→</Kbd>
-            </TooltipContent>
-          </Tooltip>
-        </div>
-
-        <Separator
-          orientation="vertical"
-          className="mx-1 hidden h-5 self-center sm:block"
-        />
-
-        <ToggleGroup
-          type="single"
-          value={props.view}
-          onValueChange={(value) =>
-            value && props.onViewChange(value as ReaderView)
-          }
-          variant="outline"
-          size="sm"
-          spacing={0}
-          className="hidden md:flex"
-          aria-label="显示语言"
-        >
-          {VIEW_OPTIONS.map((option) => (
-            <ToggleGroupItem key={option.value} value={option.value}>
-              {option.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-
-        <div className="flex shrink-0 items-center gap-0.5">
-          {props.total > 1 && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  ref={props.tocTriggerRef}
-                  variant={props.tocOpen ? "secondary" : "ghost"}
-                  size="icon-sm"
-                  onClick={props.onToggleToc}
-                  aria-label="章节目录"
-                >
-                  <ListOrdered />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent className="flex items-center gap-1.5">
-                章节目录 <Kbd>T</Kbd>
-              </TooltipContent>
-            </Tooltip>
-          )}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                ref={props.statusTriggerRef}
-                variant="ghost"
-                size="icon-sm"
-                onClick={props.onOpenStatus}
-                aria-label="翻译状态"
-              >
-                <Activity />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>翻译状态</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                ref={props.settingsTriggerRef}
-                variant={props.settingsOpen ? "secondary" : "ghost"}
-                size="icon-sm"
-                onClick={props.onToggleSettings}
-                aria-label="阅读设置"
-              >
-                <SettingsIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent className="flex items-center gap-1.5">
-              阅读设置 <Kbd>S</Kbd>
-            </TooltipContent>
-          </Tooltip>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SettingsDrawer({
-  settings,
-  setSettings,
-  defaults,
-  onCloseAutoFocus,
-}: {
-  settings: ReaderSettings;
-  setSettings: (updater: (current: ReaderSettings) => ReaderSettings) => void;
-  defaults: ReaderDefaults;
-  onCloseAutoFocus: (event: Event) => void;
-}) {
-  const patch = (next: Partial<ReaderSettings>) =>
-    setSettings((current) => ({ ...current, ...next }));
-
-  return (
-    <SheetContent
-      side="right"
-      onCloseAutoFocus={onCloseAutoFocus}
-      className="gap-0 data-[side=right]:w-full overflow-y-auto sm:max-w-sm"
-    >
-      <SheetHeader>
-        <SheetTitle>阅读设置</SheetTitle>
-        <SheetDescription>排版偏好保存在这台设备上。</SheetDescription>
-      </SheetHeader>
-
-      <div className="flex flex-col gap-6 px-4 pb-6">
-        <FieldSet>
-          <FieldLegend variant="label" className="flex items-center gap-2">
-            <Languages className="size-4" />
-            显示语言
-          </FieldLegend>
-          <ToggleGroup
-            type="single"
-            value={settings.view}
-            onValueChange={(value) =>
-              value && patch({ view: value as ReaderView })
-            }
-            variant="outline"
-            spacing={0}
-            className="w-full"
-            aria-label="显示语言"
-          >
-            {VIEW_OPTIONS.map((option) => (
-              <ToggleGroupItem
-                key={option.value}
-                value={option.value}
-                className="flex-1"
-              >
-                {option.label}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <FieldDescription>
-            {VIEW_OPTIONS.find((o) => o.value === settings.view)?.hint}
-          </FieldDescription>
-        </FieldSet>
-
-        <Separator />
-
-        <FieldSet>
-          <FieldLegend variant="label" className="flex items-center gap-2">
-            <Type className="size-4" />
-            排版
-          </FieldLegend>
-          <div className="flex flex-col gap-5">
-            <ReaderSlider
-              label="字号"
-              value={settings.font}
-              min={READER_LIMITS.font.min}
-              max={READER_LIMITS.font.max}
-              step={READER_LIMITS.font.step}
-              format={(v) => `${v}px`}
-              onChange={(v) => patch({ font: v })}
-            />
-            <ReaderSlider
-              label="中文比例"
-              value={settings.zh}
-              min={READER_LIMITS.zh.min}
-              max={READER_LIMITS.zh.max}
-              step={READER_LIMITS.zh.step}
-              format={(v) => `${Math.round(v * 100)}%`}
-              onChange={(v) => patch({ zh: Number(v.toFixed(2)) })}
-            />
-            <ReaderSlider
-              label="栏宽"
-              value={settings.measure}
-              min={READER_LIMITS.measure.min}
-              max={READER_LIMITS.measure.max}
-              step={READER_LIMITS.measure.step}
-              format={(v) => `${v}px`}
-              onChange={(v) => patch({ measure: v })}
-            />
           </div>
-        </FieldSet>
-
-        <Separator />
-
-        <FieldLabel htmlFor="reader-focus">
-          <Field orientation="horizontal">
-            <FieldContent>
-              <FieldTitle>专注模式</FieldTitle>
-              <FieldDescription>
-                淡出其他段落，只保留鼠标所在的一段。
-              </FieldDescription>
-            </FieldContent>
-            <Switch
-              id="reader-focus"
-              checked={settings.focus}
-              onCheckedChange={(checked) => patch({ focus: checked })}
-            />
-          </Field>
-        </FieldLabel>
-
-        <Button
-          variant="outline"
-          size="sm"
-          className="self-start"
-          onClick={() =>
-            setSettings((current) => ({ ...current, ...defaults }))
-          }
+        </div>
+      )}
+      {prev !== undefined && (
+        <Link
+          to="/r/$id/$chapter"
+          params={{ id, chapter: String(prev) }}
+          className="inline-flex items-center gap-1 self-start rounded-md text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
         >
-          <RotateCcw data-icon="inline-start" />
-          恢复默认排版
-        </Button>
-
-        <Separator />
-
-        <section className="flex flex-col gap-2">
-          <h3 className="flex items-center gap-2 text-sm font-medium">
-            <Keyboard className="size-4" />
-            键盘快捷键
-          </h3>
-          <dl className="flex flex-col gap-1.5 text-sm">
-            {SHORTCUTS.map((shortcut) => (
-              <div
-                key={shortcut.label}
-                className="flex items-center justify-between gap-4"
-              >
-                <dt className="text-muted-foreground">{shortcut.label}</dt>
-                <dd>
-                  <KbdGroup>
-                    {shortcut.keys.map((key) => (
-                      <Kbd key={key}>{key}</Kbd>
-                    ))}
-                  </KbdGroup>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </section>
-      </div>
-    </SheetContent>
+          <ChevronLeft className="size-4" />
+          上一章 · {headingText(data.nav.titles[prev], prev)}
+        </Link>
+      )}
+    </footer>
   );
 }
 
-function ReaderSlider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  format,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  format: (v: number) => string;
-  onChange: (v: number) => void;
-}) {
-  return (
-    <Field>
-      <div className="flex items-center justify-between gap-4">
-        <FieldLabel>{label}</FieldLabel>
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {format(value)}
-        </span>
-      </div>
-      <Slider
-        aria-label={label}
-        value={[value]}
-        min={min}
-        max={max}
-        step={step}
-        onValueChange={(arr) => arr[0] !== undefined && onChange(arr[0])}
-      />
-    </Field>
-  );
+function headingText(title: string | undefined, index: number) {
+  const heading = chapterHeading(title, index);
+  return heading.subtitle ?? heading.label;
 }
 
-function TocDrawer({
-  data,
-  chapterIndex,
-  onClose,
-  onCloseAutoFocus,
-}: {
-  data: ChapterView;
-  chapterIndex: number;
-  onClose: () => void;
-  onCloseAutoFocus: (event: Event) => void;
-}) {
-  const activeRef = useRef<HTMLAnchorElement>(null);
-
-  useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: "center" });
-  }, []);
-
-  const items = Array.from({ length: data.nav.total }, (_, i) => i);
-  return (
-    <SheetContent
-      side="left"
-      onCloseAutoFocus={onCloseAutoFocus}
-      className="gap-0 data-[side=left]:w-full overflow-y-auto sm:max-w-sm"
-    >
-      <SheetHeader>
-        <SheetTitle>章节目录</SheetTitle>
-        <SheetDescription>
-          共 {data.nav.total} 章 · 当前为第 {chapterIndex + 1} 章
-        </SheetDescription>
-      </SheetHeader>
-      <ul className="flex flex-col gap-0.5 px-2 pb-6">
-        {items.map((i) => {
-          const active = i === chapterIndex;
-          return (
-            <li key={i}>
-              <Link
-                ref={active ? activeRef : undefined}
-                to="/r/$id/$chapter"
-                params={{ id: data.meta.id, chapter: String(i) }}
-                onClick={onClose}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50",
-                  active && "bg-accent font-medium text-accent-foreground",
-                )}
-              >
-                <span className="w-8 shrink-0 text-xs tabular-nums text-muted-foreground">
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-                <span className="flex-1 truncate">
-                  {data.nav.titles[i] || `Chapter ${i + 1}`}
-                </span>
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </SheetContent>
-  );
-}
-
-function ChapterNav({
-  data,
+function ChapterLink({
   id,
-  chapterIndex,
+  index,
+  title,
 }: {
-  data: ChapterView;
   id: string;
-  chapterIndex: number;
+  index: number;
+  title?: string;
 }) {
+  const heading = chapterHeading(title, index);
   return (
-    <>
-      <Separator className="mt-20" />
-      <nav className="flex items-center justify-between gap-4 pt-8">
-        {data.nav.prev !== undefined ? (
-          <Button variant="outline" asChild>
-            <Link
-              to="/r/$id/$chapter"
-              params={{ id, chapter: String(data.nav.prev) }}
-            >
-              <ChevronLeft data-icon="inline-start" />
-              上一章
-            </Link>
-          </Button>
-        ) : (
-          <span />
-        )}
-        <span className="text-sm tabular-nums text-muted-foreground">
-          {chapterIndex + 1} / {data.nav.total}
+    <Link
+      to="/r/$id/$chapter"
+      params={{ id, chapter: String(index) }}
+      className="group flex items-center gap-4 rounded-2xl border bg-card px-5 py-4 text-card-foreground shadow-xs outline-none transition-[border-color,box-shadow] hover:border-primary/40 hover:shadow-md focus-visible:ring-3 focus-visible:ring-ring/50"
+    >
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-xs text-muted-foreground">
+          下一章{heading.subtitle ? ` · ${heading.label}` : ""}
         </span>
-        {data.nav.next !== undefined ? (
-          <Button variant="outline" asChild>
-            <Link
-              to="/r/$id/$chapter"
-              params={{ id, chapter: String(data.nav.next) }}
-            >
-              下一章
-              <ChevronRight data-icon="inline-end" />
-            </Link>
-          </Button>
-        ) : (
-          <span />
-        )}
-      </nav>
-    </>
+        <span className="reader-display truncate text-lg font-medium">
+          {heading.subtitle ?? heading.label}
+        </span>
+      </div>
+      <ChevronRight className="size-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+    </Link>
   );
 }
 
@@ -1092,7 +929,7 @@ function ChapterProgress({
     (failed || (total > 0 && (showChapterRetry || hasGlobalErrors)));
 
   return (
-    <Card size="sm" className="mt-6">
+    <Card size="sm" className="bg-card/60">
       <CardHeader>
         <CardTitle>
           <StatusPill status={progress.phase} />
@@ -1139,116 +976,5 @@ function ChapterProgress({
         </CardFooter>
       )}
     </Card>
-  );
-}
-
-function Pair({
-  pair,
-  view,
-  canRetry,
-  onRetry,
-}: {
-  pair: ChapterView["chapter"]["pairs"][number];
-  view: ReaderView;
-  canRetry: boolean;
-  onRetry: (blockId: string) => void;
-}) {
-  const heading = pair.type === "h2" || pair.type === "h3";
-  if (pair.type === "hr") return <Separator className="my-8" />;
-
-  const translated = pair.status === "done" && pair.zh;
-  // "Chinese only" still falls back to the source while a block is untranslated
-  // — an empty gap reads as a rendering bug.
-  const showEn = view === "en" || view === "bilingual" || !translated;
-  const showZh = view !== "en" && !!translated;
-
-  return (
-    <div
-      data-block-id={pair.id}
-      data-status={pair.status}
-      className={cn("reader-block group", heading && "mt-12 mb-6")}
-    >
-      {showEn && <RichHTML type={pair.type} html={pair.en} />}
-      {showZh && (
-        <RichHTML
-          type={pair.type}
-          html={pair.zh!}
-          className={cn("zh-shadow", showEn && "mt-1.5")}
-        />
-      )}
-      {pair.status === "pending" && view !== "en" && (
-        <Skeleton className="mt-1.5 h-5 w-3/4" />
-      )}
-      {pair.status === "error" && view !== "en" && (
-        <div className="mt-2 flex flex-wrap items-center gap-2 font-sans text-sm">
-          <Badge variant="destructive" title={pair.error ?? ""}>
-            翻译失败
-          </Badge>
-          {canRetry && (
-            <Button variant="ghost" size="xs" onClick={() => onRetry(pair.id)}>
-              <RotateCcw data-icon="inline-start" />
-              重试这一段
-            </Button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-type RichHTMLTag =
-  | "p"
-  | "h2"
-  | "h3"
-  | "blockquote"
-  | "pre"
-  | "div"
-  | "ul"
-  | "ol";
-
-function legacyTagFor(
-  type: ChapterView["chapter"]["pairs"][number]["type"],
-): RichHTMLTag {
-  switch (type) {
-    case "h2":
-      return "h2";
-    case "h3":
-      return "h3";
-    case "blockquote":
-      return "blockquote";
-    case "pre":
-      return "pre";
-    case "ul":
-      return "ul";
-    case "ol":
-      return "ol";
-    default:
-      return "p";
-  }
-}
-
-function RichHTML({
-  type,
-  html,
-  className,
-}: {
-  type: ChapterView["chapter"]["pairs"][number]["type"];
-  html: string;
-  className?: string;
-}) {
-  if (BLOCK_ROOT_RE.test(html)) {
-    return (
-      <div
-        className={cn("rich-html", className)}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    );
-  }
-  const Tag = legacyTagFor(type);
-  return (
-    <Tag
-      className={cn("rich-html", className)}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
   );
 }

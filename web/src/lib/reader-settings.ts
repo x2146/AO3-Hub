@@ -8,11 +8,21 @@ const POSITION_LIMIT = 200;
 /** Which language tracks the reader renders for each paragraph. */
 export type ReaderView = "bilingual" | "zh" | "en";
 
+/** The page colour; "auto" follows the app theme. */
+export type ReaderPaper = "auto" | "paper" | "sepia" | "night";
+
+export type ReaderTypeface = "serif" | "sans";
+
 export type ReaderSettings = {
   font: number;
   zh: number;
   measure: number;
+  leading: number;
+  typeface: ReaderTypeface;
+  paper: ReaderPaper;
   view: ReaderView;
+  /** Show the author's notes around each chapter. */
+  notes: boolean;
   /** Dim every paragraph except the one under the pointer. */
   focus: boolean;
 };
@@ -23,7 +33,11 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   font: 17,
   zh: 0.96,
   measure: 760,
+  leading: 1.78,
+  typeface: "serif",
+  paper: "auto",
   view: "bilingual",
+  notes: true,
   focus: false,
 };
 
@@ -31,7 +45,24 @@ export const READER_LIMITS = {
   font: CONFIG_LIMITS.reader.defaultFont,
   zh: CONFIG_LIMITS.reader.defaultZhScale,
   measure: CONFIG_LIMITS.reader.defaultMeasure,
+  leading: { min: 1.5, max: 2.2, step: 0.02 },
 };
+
+/**
+ * Paper swatches. `background` must match the `--background` each paper sets
+ * in styles.css; it also tints the browser chrome through `theme-color`.
+ */
+export const READER_PAPERS: {
+  value: ReaderPaper;
+  label: string;
+  background?: string;
+  ink?: string;
+}[] = [
+  { value: "auto", label: "跟随系统" },
+  { value: "paper", label: "纸白", background: "#fbfaf7", ink: "#26241f" },
+  { value: "sepia", label: "米黄", background: "#f4ecda", ink: "#3b3024" },
+  { value: "night", label: "夜间", background: "#16171a", ink: "#d6d3cc" },
+];
 
 export function loadReaderSettings(
   defaults: ReaderDefaults = DEFAULT_READER_SETTINGS,
@@ -44,9 +75,24 @@ export function loadReaderSettings(
       defaults.measure,
       READER_LIMITS.measure,
     ),
+    leading: readNumber(
+      KEY_PREFIX + "leading",
+      DEFAULT_READER_SETTINGS.leading,
+      READER_LIMITS.leading,
+    ),
+    typeface: readItem(KEY_PREFIX + "typeface") === "sans" ? "sans" : "serif",
+    paper: readPaper(),
     view: readView(),
+    notes: readItem(KEY_PREFIX + "notes") !== "0",
     focus: readItem(KEY_PREFIX + "focus") === "1",
   };
+}
+
+function readPaper(): ReaderPaper {
+  const raw = readItem(KEY_PREFIX + "paper");
+  return READER_PAPERS.some((paper) => paper.value === raw)
+    ? (raw as ReaderPaper)
+    : DEFAULT_READER_SETTINGS.paper;
 }
 
 function readItem(key: string): string | null {
@@ -90,7 +136,11 @@ export function saveReaderSettings(s: ReaderSettings): void {
   writeItem(KEY_PREFIX + "font", String(s.font));
   writeItem(KEY_PREFIX + "zh", s.zh.toFixed(2));
   writeItem(KEY_PREFIX + "measure", String(s.measure));
+  writeItem(KEY_PREFIX + "leading", s.leading.toFixed(2));
+  writeItem(KEY_PREFIX + "typeface", s.typeface);
+  writeItem(KEY_PREFIX + "paper", s.paper);
   writeItem(KEY_PREFIX + "view", s.view);
+  writeItem(KEY_PREFIX + "notes", s.notes ? "1" : "0");
   writeItem(KEY_PREFIX + "focus", s.focus ? "1" : "0");
 }
 
@@ -99,6 +149,11 @@ export function applyReaderSettings(s: ReaderSettings): void {
   root.style.setProperty("--reader-font-size", `${s.font}px`);
   root.style.setProperty("--reader-zh-scale", s.zh.toFixed(2));
   root.style.setProperty("--reader-measure", `${s.measure}px`);
+  root.style.setProperty("--reader-line", s.leading.toFixed(2));
+  root.style.setProperty(
+    "--reader-font",
+    s.typeface === "sans" ? "var(--font-sans)" : "var(--font-serif)",
+  );
 }
 
 /* -------------------------------------------------------------------------
@@ -155,4 +210,16 @@ export function loadReadingPosition(
 ): number {
   const entry = readPositions()[positionKey(storyID, chapterIndex)];
   return entry && Number.isFinite(entry.ratio) ? entry.ratio : 0;
+}
+
+/** Every saved position of one story, keyed by chapter index. */
+export function loadReadingPositions(storyID: string): Map<number, number> {
+  const out = new Map<number, number>();
+  const prefix = `${storyID}:`;
+  for (const [key, entry] of Object.entries(readPositions())) {
+    if (!key.startsWith(prefix) || !Number.isFinite(entry?.ratio)) continue;
+    const index = Number(key.slice(prefix.length));
+    if (Number.isSafeInteger(index)) out.set(index, entry.ratio);
+  }
+  return out;
 }

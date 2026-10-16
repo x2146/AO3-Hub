@@ -15,7 +15,12 @@ export function applyTheme(t: Theme): void {
   const root = document.documentElement;
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   root.dataset.theme = t;
-  root.classList.toggle("dark", t === "dark" || (t === "auto" && prefersDark));
+  // While the reader shows a fixed paper, that paper decides light or dark.
+  const paper = root.dataset.readerPaper;
+  root.classList.toggle(
+    "dark",
+    paper ? paper === "night" : t === "dark" || (t === "auto" && prefersDark),
+  );
 }
 
 export function setTheme(t: Theme): void {

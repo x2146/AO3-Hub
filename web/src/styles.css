@@ -186,6 +186,7 @@
     --reader-font-size: 17px;
     --reader-zh-scale: 0.96;
     --reader-line: 1.78;
+    --reader-font: var(--font-serif);
   }
 
   .dark {
@@ -229,6 +230,58 @@
     --sidebar-accent-foreground: oklch(0.87 0.08 240);
     --sidebar-border: oklch(1 0 0 / 9%);
     --sidebar-ring: var(--brand);
+  }
+
+  /* Reader papers. The reader sets `data-reader-paper` on <html> while it is
+   * open and drops `.dark` for the light papers (see lib/theme.ts), so these
+   * only retint the neutral surfaces; the brand colours stay as they are.
+   * Backgrounds mirror READER_PAPERS in lib/reader-settings.ts. */
+  html[data-reader-paper="paper"] {
+    color-scheme: light;
+    --background: #fbfaf7;
+    --foreground: #26241f;
+    --card: #fffefb;
+    --card-foreground: #26241f;
+    --popover: #fffefb;
+    --popover-foreground: #26241f;
+    --secondary: #f1eee7;
+    --secondary-foreground: #3d3a33;
+    --muted: #f2efe9;
+    --muted-foreground: #76716a;
+    --border: #e7e2d9;
+    --input: #ddd7cc;
+  }
+
+  html[data-reader-paper="sepia"] {
+    color-scheme: light;
+    --background: #f4ecda;
+    --foreground: #3b3024;
+    --card: #f9f3e5;
+    --card-foreground: #3b3024;
+    --popover: #f9f3e5;
+    --popover-foreground: #3b3024;
+    --secondary: #ebe1cb;
+    --secondary-foreground: #4a3d2e;
+    --muted: #ece2cc;
+    --muted-foreground: #7e6e58;
+    --border: #e0d3b8;
+    --input: #d6c8aa;
+  }
+
+  html[data-reader-paper="night"] {
+    color-scheme: dark;
+    --background: #16171a;
+    --foreground: #d6d3cc;
+    --card: #1d1e22;
+    --card-foreground: #d6d3cc;
+    --popover: #202125;
+    --popover-foreground: #d6d3cc;
+    --secondary: #26272b;
+    --secondary-foreground: #d6d3cc;
+    --muted: #222327;
+    --muted-foreground: #8f8b84;
+    --border: rgb(255 255 255 / 8%);
+    --input: rgb(255 255 255 / 14%);
   }
 
   * {
@@ -318,9 +371,19 @@
  * ------------------------------------------------------------------------- */
 
 .prose-reader {
-  font-family: var(--font-serif);
+  font-family: var(--reader-font);
   font-size: var(--reader-font-size);
   line-height: var(--reader-line);
+}
+
+.prose-reader p {
+  text-wrap: pretty;
+  hanging-punctuation: first;
+}
+
+/* Titles on the reading page follow the chosen reading face. */
+.reader-display {
+  font-family: var(--reader-font);
 }
 
 .prose-reader :where(p, blockquote, pre, ul, ol, h1, h2, h3, h4, h5, h6, figure) {
@@ -492,12 +555,35 @@
   text-align: justify;
 }
 
-/* The Chinese line under each source paragraph. */
+/* The Chinese line under each source paragraph. Sized from its own block so
+ * author notes, set smaller than the story, scale along. */
 .zh-shadow {
-  font-size: calc(var(--reader-font-size) * var(--reader-zh-scale));
+  font-size: calc(1em * var(--reader-zh-scale));
   color: var(--muted-foreground);
-  line-height: 1.72;
-  font-family: var(--font-serif);
+  line-height: calc(var(--reader-line) - 0.06);
+}
+
+/* "Chinese only": the translation is the text, not a gloss under it. */
+.zh-shadow.zh-solo {
+  color: inherit;
+  line-height: inherit;
+}
+
+/* Author notes read as asides: the UI face, a step smaller, a little quieter
+ * than the story they frame. */
+.prose-reader.reader-note {
+  font-family: var(--font-sans);
+  font-size: calc(var(--reader-font-size) * 0.88);
+  line-height: 1.7;
+}
+
+/* A summary is the work's own blurb: the reading face, a touch smaller. */
+.prose-reader.reader-summary {
+  font-size: calc(var(--reader-font-size) * 0.95);
+}
+
+.prose-reader.reader-note .zh-shadow {
+  line-height: 1.7;
 }
 
 /* Reading focus: dim everything but the paragraph under the pointer. */
