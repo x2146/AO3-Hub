@@ -720,7 +720,8 @@ func sanitizeAO3MetadataURL(raw string, kind ao3URLKind) (string, string, bool) 
 	}
 	absolute := parsed.IsAbs()
 	if absolute {
-		if !strings.EqualFold(parsed.Scheme, "https") || !strings.EqualFold(parsed.Hostname(), "archiveofourown.org") || parsed.Port() != "" {
+		// AO3 downloads link back over plain http; accept it but always emit https below.
+		if !strings.EqualFold(parsed.Scheme, "https") && !strings.EqualFold(parsed.Scheme, "http") || !strings.EqualFold(parsed.Hostname(), "archiveofourown.org") || parsed.Port() != "" {
 			return "", "", false
 		}
 	} else if parsed.Scheme != "" || parsed.Host != "" || parsed.Opaque != "" || !strings.HasPrefix(value, "/") {

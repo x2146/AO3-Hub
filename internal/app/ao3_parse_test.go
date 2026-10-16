@@ -245,7 +245,9 @@ func TestSanitizeAO3MetadataURL(t *testing.T) {
 		{name: "host suffix", raw: "https://archiveofourown.org.evil.example/works/123", kind: ao3WorkURL},
 		{name: "userinfo", raw: "https://archiveofourown.org@evil.example/works/123", kind: ao3WorkURL},
 		{name: "network relative", raw: "//evil.example/works/123", kind: ao3WorkURL},
-		{name: "insecure scheme", raw: "http://archiveofourown.org/works/123", kind: ao3WorkURL},
+		{name: "http work upgraded", raw: "http://archiveofourown.org/works/123", kind: ao3WorkURL, want: "https://archiveofourown.org/works/123", id: "123", ok: true},
+		{name: "http author upgraded", raw: "http://archiveofourown.org/users/writer/pseuds/writer", kind: ao3AuthorURL, want: "https://archiveofourown.org/users/writer/pseuds/writer", ok: true},
+		{name: "foreign scheme", raw: "ftp://archiveofourown.org/works/123", kind: ao3WorkURL},
 		{name: "encoded slash", raw: "/users/writer%2fpseuds/fake", kind: ao3AuthorURL},
 	}
 	for _, tt := range tests {
