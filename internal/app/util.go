@@ -206,6 +206,15 @@ func normalizeTranslationMode(mode TranslationMode) TranslationMode {
 	}
 }
 
+// effectiveTranslationMode resolves a story's mode: an explicit per-story
+// choice wins, otherwise the story follows the global default.
+func effectiveTranslationMode(storyMode TranslationMode, cfg Config) TranslationMode {
+	if strings.TrimSpace(string(storyMode)) == "" {
+		return normalizeTranslationMode(cfg.LLM.Mode)
+	}
+	return normalizeTranslationMode(storyMode)
+}
+
 func validTranslationMode(mode TranslationMode) bool {
 	return mode == TranslationModeNormal || mode == TranslationModeRefined
 }

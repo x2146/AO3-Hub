@@ -805,11 +805,7 @@ func (a *App) runTranslation(ctx context.Context, storyID string) error {
 
 	tracker := newStatsTracker(a, storyID)
 
-	effectiveMode := meta.TranslationMode
-	if effectiveMode == "" {
-		effectiveMode = cfg.LLM.Mode
-	}
-	effectiveMode = normalizeTranslationMode(effectiveMode)
+	effectiveMode := effectiveTranslationMode(meta.TranslationMode, cfg)
 
 	var transCtx *TranslationContext
 	if effectiveMode == TranslationModeRefined {

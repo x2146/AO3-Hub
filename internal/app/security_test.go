@@ -849,3 +849,44 @@ func TestReadUploadHTMLBoundsMultipartParts(t *testing.T) {
 		t.Fatalf("multipart error = %v", err)
 	}
 }
+
+func TestTranslationStatusModeFollowsGlobalDefault(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultConfig()
+	cfg.LLM.Mode = TranslationModeRefined
+	if err := store.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{store: store}
+	cases := []struct {
+		id   string
+		mode TranslationMode
+		want TranslationMode
+	}{
+		{"111", "", TranslationModeRefined},
+		{"222", TranslationModeNormal, TranslationModeNormal},
+		{"333", TranslationModeRefined, TranslationModeRefined},
+	}
+	for _, tc := range cases {
+		if err := store.SaveMeta(tc.id, Meta{ID: tc.id, TranslationMode: tc.mode}); err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodGet, "/api/stories/"+tc.id+"/translation-status", nil)
+		request.SetPathValue("id", tc.id)
+		response := httptest.NewRecorder()
+		app.handleTranslationStatus(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d", tc.id, response.Code)
+		}
+		var view TranslationStatusView
+		if err := json.NewDecoder(response.Body).Decode(&view); err != nil {
+			t.Fatal(err)
+		}
+		if view.Mode != tc.want {
+			t.Fatalf("%s: mode = %q, want %q", tc.id, view.Mode, tc.want)
+		}
+	}
+}

@@ -789,10 +789,16 @@ func (a *App) handleTranslationStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	mode := TranslationModeNormal
-	if meta != nil && meta.TranslationMode != "" {
-		mode = meta.TranslationMode
+	cfg, err := a.store.LoadConfig()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
+	var storyMode TranslationMode
+	if meta != nil {
+		storyMode = meta.TranslationMode
+	}
+	mode := effectiveTranslationMode(storyMode, cfg)
 
 	user := currentUser(r)
 	if user == nil {
