@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+// The server's CSP blocks eval, so skip zod's compiled parsers and the
+// new Function() probe that would report a CSP violation. zod reads this as
+// each z.object() is built, so it has to run before the schemas below.
+z.config({ jitless: true });
+
 export const CONFIG_LIMITS = {
   server: { port: { min: 1, max: 65535 } },
   auth: { sessionTtlDays: { min: 1, max: 365 } },
@@ -311,11 +316,13 @@ export const UpdateConfig = z.object({
 export type UpdateConfig = z.infer<typeof UpdateConfig>;
 
 export const Config = z.object({
-  server: ServerConfig.default({}),
-  auth: AuthConfig.default({}),
-  stream: StreamConfig.default({}),
-  import: ImportConfig.default({}),
-  ui: UiConfig.default({}),
+  // prefault runs {} through the section, so a missing section still gets
+  // every field default (a plain default would return the bare {}).
+  server: ServerConfig.prefault({}),
+  auth: AuthConfig.prefault({}),
+  stream: StreamConfig.prefault({}),
+  import: ImportConfig.prefault({}),
+  ui: UiConfig.prefault({}),
   llm: LlmConfig,
   ao3: Ao3Config,
   reader: ReaderConfig,
@@ -490,7 +497,8 @@ export type StageStats = z.infer<typeof StageStats>;
 
 export const TranslationStats = z.object({
   total: StageStats,
-  byStage: z.record(LlmCallStage, StageStats),
+  // Only the stages that have run are present.
+  byStage: z.partialRecord(LlmCallStage, StageStats),
   startedAt: z.string().optional(),
   lastCallAt: z.string().optional(),
 });
@@ -538,7 +546,7 @@ export type TranslationContext = z.infer<typeof TranslationContext>;
 export const TranslationStatusView = z.object({
   stats: TranslationStats,
   events: z.array(LlmCallEvent),
-  samples: z.record(LlmCallStage, RequestSample),
+  samples: z.partialRecord(LlmCallStage, RequestSample),
   context: TranslationContext.nullable().optional(),
   mode: TranslationMode,
 });

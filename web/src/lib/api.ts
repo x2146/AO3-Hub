@@ -122,7 +122,7 @@ function errorMessage(body: unknown, status: number): string {
 async function parseResponse<T>(
   res: Response,
   path: string,
-  schema?: z.ZodType<T, z.ZodTypeDef, unknown>,
+  schema?: z.ZodType<T>,
   requestEpoch = authStateEpoch,
 ): Promise<T> {
   const body = await responseBody(res);
@@ -141,7 +141,7 @@ async function parseResponse<T>(
 async function http<T>(
   path: string,
   init?: RequestInit,
-  schema?: z.ZodType<T, z.ZodTypeDef, unknown>,
+  schema?: z.ZodType<T>,
 ): Promise<T> {
   const requestEpoch = authStateEpoch;
   const res = await fetch(base + path, {
