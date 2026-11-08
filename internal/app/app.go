@@ -6,13 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
-	"mime"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -240,7 +237,7 @@ func (a *App) routes() http.Handler {
 	a.mountUpdate(api)
 
 	mux.Handle("/api/", http.StripPrefix("/api", a.cors(a.attachUser(api))))
-	mux.HandleFunc("/", a.serveAsset)
+	mux.Handle("/", newAssetServer(webassets.FS, webassets.Root))
 	return securityHeaders(mux)
 }
 
@@ -1255,49 +1252,4 @@ func (a *App) mountUpdate(mux *http.ServeMux) {
 		}
 		writeJSON(w, status, result)
 	}))
-}
-
-func (a *App) serveAsset(w http.ResponseWriter, r *http.Request) {
-	clean := path.Clean("/" + r.URL.Path)
-	key := strings.TrimPrefix(clean, "/")
-	if key == "" {
-		key = "index.html"
-	}
-	full := path.Join(webassets.Root, key)
-	if serveEmbeddedFile(w, r, full) {
-		return
-	}
-	if !strings.Contains(path.Base(key), ".") || strings.HasSuffix(key, ".html") {
-		if serveEmbeddedFile(w, r, path.Join(webassets.Root, "index.html")) {
-			return
-		}
-	}
-	if !embeddedHasIndex() {
-		http.Error(w, "AO3-Hub server is running. Web bundle is not embedded; run `npm run dev:web` or build the server.", http.StatusNotFound)
-		return
-	}
-	http.Error(w, "not found", http.StatusNotFound)
-}
-
-func serveEmbeddedFile(w http.ResponseWriter, r *http.Request, name string) bool {
-	file, err := webassets.FS.Open(name)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || info.IsDir() {
-		return false
-	}
-	ext := path.Ext(name)
-	if mt := mime.TypeByExtension(ext); mt != "" {
-		w.Header().Set("content-type", mt)
-	}
-	http.ServeContent(w, r, path.Base(name), info.ModTime(), file.(io.ReadSeeker))
-	return true
-}
-
-func embeddedHasIndex() bool {
-	_, err := fs.Stat(webassets.FS, path.Join(webassets.Root, "index.html"))
-	return err == nil
 }
