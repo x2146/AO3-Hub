@@ -79,7 +79,8 @@ import {
   breakdownOf,
 } from "../components/TranslateProgress";
 import { TranslationStatusButton } from "../components/TranslationStatusPanel";
-import { isInFlight } from "../lib/status";
+import { loadLastRead } from "../lib/reader-settings";
+import { PHASE_HINT, isInFlight } from "../lib/status";
 
 type DeleteTarget = { id: string; title: string };
 
@@ -531,7 +532,15 @@ function StoryCard({
   const subtitle =
     [story.chineseTitle, story.author].filter(Boolean).join(" · ") ||
     "作者信息未提供";
-  const readerParams = { id: story.id, chapter: "0" };
+  const resume = useMemo(
+    () => resumePoint(story.id, story.chapterCount),
+    [story.id, story.chapterCount],
+  );
+  const readerParams = {
+    id: story.id,
+    chapter: String(resume?.chapter ?? 0),
+  };
+  const hint = PHASE_HINT[story.status];
 
   return (
     <Card className="h-full transition-shadow hover:shadow-md">
@@ -559,6 +568,9 @@ function StoryCard({
           <div className="flex flex-col gap-2">
             <TranslateProgressBar progress={story.progress} thin />
             <TranslateProgressLegend progress={story.progress} />
+            {hint && (
+              <p className="text-xs text-muted-foreground">{hint}</p>
+            )}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
@@ -567,11 +579,21 @@ function StoryCard({
         )}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
           <span>{story.chapterCount} 章</span>
-          <span>{story.wordCount.toLocaleString()} 字</span>
+          <span>{story.wordCount.toLocaleString()} 词</span>
+          {resume && (
+            <span className="ml-auto text-foreground">
+              {resume.finished
+                ? "已读完"
+                : story.chapterCount > 1
+                  ? `读到第 ${resume.chapter + 1} 章 · ${Math.round(resume.ratio * 100)}%`
+                  : `读到 ${Math.round(resume.ratio * 100)}%`}
+            </span>
+          )}
         </div>
       </CardContent>
 
-      <CardFooter className="gap-2">
+      {/* Cards in a row share a height; the footer stays on the bottom edge. */}
+      <CardFooter className="mt-auto gap-2">
         <Button
           size="sm"
           variant={story.status === "ready" ? "default" : "outline"}
@@ -579,7 +601,7 @@ function StoryCard({
         >
           <Link to="/r/$id/$chapter" params={readerParams}>
             <BookOpenText data-icon="inline-start" />
-            阅读
+            {resume && !resume.finished ? "继续阅读" : "阅读"}
           </Link>
         </Button>
         <TranslationStatusButton storyID={story.id} title={story.title} />
@@ -624,6 +646,21 @@ function StoryCard({
       </CardFooter>
     </Card>
   );
+}
+
+/**
+ * Where "阅读" should pick up: the chapter read most recently. Opening the
+ * title page without scrolling isn't progress worth announcing, and a finished
+ * work starts over from the top.
+ */
+function resumePoint(storyID: string, chapterCount: number) {
+  const last = loadLastRead(storyID);
+  if (!last || last.chapter >= Math.max(1, chapterCount)) return null;
+  if (last.chapter === 0 && last.ratio < 0.02) return null;
+  const finished = last.chapter === chapterCount - 1 && last.ratio > 0.98;
+  return finished
+    ? { chapter: 0, ratio: 0, finished }
+    : { chapter: last.chapter, ratio: last.ratio, finished };
 }
 
 function LibrarySkeleton() {

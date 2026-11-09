@@ -19,6 +19,17 @@ export const PHASE_LABEL: Record<StoryStatus, string> = {
   error: "出错",
 };
 
+/**
+ * What the run is doing before any paragraph has been translated, for the
+ * phases whose progress bar would otherwise sit empty with no explanation.
+ */
+export const PHASE_HINT: Partial<Record<StoryStatus, string>> = {
+  queued: "等待前面的作品处理完，随后自动开始。",
+  fetching: "正在从 AO3 下载作品。",
+  parsing: "正在拆分章节与段落。",
+  analyzing: "先通读全文、整理人名与术语，译文会更连贯。",
+};
+
 /** A phase is "in flight" while work is ongoing — every state but the two terminal ones. */
 export function isInFlight(phase: StoryStatus): boolean {
   return phase !== "ready" && phase !== "error";

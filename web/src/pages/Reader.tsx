@@ -56,6 +56,7 @@ import {
   Pair,
 } from "../components/reader/ReaderText";
 import { chapterHeading } from "../components/reader/chapter-title";
+import { PHASE_HINT } from "../lib/status";
 
 const AO3_WORK_URL_RE = /^https:\/\/archiveofourown\.org\/works\/\d+$/;
 
@@ -176,9 +177,11 @@ export function Reader() {
       const ratio =
         scrollable > 0 ? Math.min(1, Math.max(0, y / scrollable)) : 0;
       setScrollProgress(ratio);
-      // Small jitters (and iOS rubber-banding) must not flap the chrome.
-      if (Math.abs(y - lastY) > 6 || y < 96) {
-        setChromeVisible(y < 96 || y < lastY);
+      // Small jitters (and iOS rubber-banding) must not flap the chrome. At
+      // the foot of the chapter it comes back, so the way on is always there.
+      const nearEnd = scrollable > 0 && scrollable - y < 120;
+      if (Math.abs(y - lastY) > 6 || y < 96 || nearEnd) {
+        setChromeVisible(y < 96 || y < lastY || nearEnd);
         lastY = y;
       }
       setScrolled(y > 8);
@@ -921,6 +924,7 @@ function ChapterProgress({
   if (!progress || progress.phase === "ready") return null;
   const { total, error } = breakdownOf(progress);
   const hasGlobalErrors = error > chapterErrorCount;
+  const description = progress.message || PHASE_HINT[progress.phase];
   // A failed run can leave every block `pending` (e.g. the LLM key was never
   // configured), so the phase itself has to offer the way out.
   const failed = progress.phase === "error";
@@ -934,9 +938,9 @@ function ChapterProgress({
         <CardTitle>
           <StatusPill status={progress.phase} />
         </CardTitle>
-        {progress.message && (
+        {description && (
           <CardDescription className={cn(failed && "text-destructive")}>
-            {progress.message}
+            {description}
           </CardDescription>
         )}
         <CardAction>

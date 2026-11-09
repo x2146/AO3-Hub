@@ -212,6 +212,22 @@ export function loadReadingPosition(
   return entry && Number.isFinite(entry.ratio) ? entry.ratio : 0;
 }
 
+/** The chapter of one story that was read most recently, if any. */
+export function loadLastRead(
+  storyID: string,
+): { chapter: number; ratio: number } | null {
+  const prefix = `${storyID}:`;
+  let best: { chapter: number; ratio: number; at: number } | null = null;
+  for (const [key, entry] of Object.entries(readPositions())) {
+    if (!key.startsWith(prefix) || !Number.isFinite(entry?.ratio)) continue;
+    const chapter = Number(key.slice(prefix.length));
+    if (!Number.isSafeInteger(chapter)) continue;
+    const at = Number.isFinite(entry.at) ? entry.at : 0;
+    if (!best || at > best.at) best = { chapter, ratio: entry.ratio, at };
+  }
+  return best && { chapter: best.chapter, ratio: best.ratio };
+}
+
 /** Every saved position of one story, keyed by chapter index. */
 export function loadReadingPositions(storyID: string): Map<number, number> {
   const out = new Map<number, number>();
